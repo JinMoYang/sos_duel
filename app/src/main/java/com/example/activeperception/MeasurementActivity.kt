@@ -311,6 +311,11 @@ class MeasurementActivity : AppCompatActivity() {
             findViewById<Button>(R.id.btnIsoDiag).postDelayed(
                 { findViewById<Button>(R.id.btnIsoDiag).performClick() }, 1500)
         }
+        // Stand-alone camera timing probe (IntervalDiag.kt): `--ez interval_diag true`.
+        // It opens camera 0 by itself, so it is only for a launch that starts no run.
+        if (intent.getBooleanExtra("interval_diag", false)) {
+            Thread({ IntervalDiag.run(applicationContext, ::post) }, "interval-diag").start()
+        }
         // General adb runner — the glass touchpad intercepts injected taps (focus-first
         // model), so radio selection is impossible from the host; this starts any method
         // directly: `--es run <method>` with optional `--es period 5|10|20`. Methods:
