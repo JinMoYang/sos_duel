@@ -1634,10 +1634,13 @@ class MeasurementActivity : AppCompatActivity() {
                 // the boost goes back only once no run can still be forming images.
                 if (!runActive) restoreBoostAfterLapSession()
                 lapButton.text = if (completed) "Lap session · done" else "Lap session"
+                // Heard only when the whole plan ran out, never on a stop the operator made.
+                if (completed) playLapSessionDoneSound()
             }
         }, plan, intent.getIntExtra("lap_repeats", LapSession.DEFAULT_REPEATS).coerceAtLeast(1),
             leadInTimeoutS = intent.getIntExtra("lap_leadin_s", 90).coerceAtLeast(1),
-            fallbackLapS = intent.getIntExtra("lap_fallback_s", 15).coerceAtLeast(3))
+            fallbackLapS = intent.getIntExtra("lap_fallback_s", 15).coerceAtLeast(3),
+            startDelayS = intent.getIntExtra("lap_start_delay_s", 5).coerceAtLeast(0))
         lapSession = session
         vibrate(120)
         session.start()
@@ -1646,6 +1649,19 @@ class MeasurementActivity : AppCompatActivity() {
     private fun restoreBoostAfterLapSession() {
         if (boostBeforeLapSession > 0.0) grid.digitalBoost = boostBeforeLapSession
         boostBeforeLapSession = -1.0
+    }
+
+    /** Three long beeps on the ALARM stream, so the end of a session is heard from across
+     *  the room whatever the media volume is and with the phone on silent. */
+    private fun playLapSessionDoneSound() {
+        val tone = runCatching {
+            android.media.ToneGenerator(android.media.AudioManager.STREAM_ALARM, 100)
+        }.getOrNull() ?: return
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        for (i in 0 until 3) handler.postDelayed({
+            runCatching { tone.startTone(android.media.ToneGenerator.TONE_DTMF_D, 450) }
+        }, i * 750L)
+        handler.postDelayed({ runCatching { tone.release() } }, 3_500L)
     }
 
     private fun launchRunnerCommand(cmd: String) {

@@ -40,7 +40,10 @@ class LapSession(
     /** Seconds to wait for the lead-in lap before giving up on lap detection. */
     private val leadInTimeoutS: Int = 90,
     /** Lap length assumed once lap detection has been given up on. */
-    private val fallbackLapS: Int = 15
+    private val fallbackLapS: Int = 15,
+    /** Seconds between the press and the real start, so the operator can let go of the
+     *  phone and step back before any rotation is counted. 0 starts at once. */
+    private val startDelayS: Int = 5
 ) {
     data class Block(val method: String, val laps: Int)
 
@@ -68,7 +71,7 @@ class LapSession(
         }
     }
 
-    private enum class State { IDLE, LEAD_IN, TO_LINE, RUNNING, SWITCHING }
+    private enum class State { IDLE, COUNTDOWN, LEAD_IN, TO_LINE, RUNNING, SWITCHING }
 
     private val handler = Handler(Looper.getMainLooper())
     private val totalBlocks = plan.size * repeats
@@ -88,6 +91,8 @@ class LapSession(
     private var lastLineMs = 0L
     private var typicalLapS = 0.0
     private var switchStartMs = 0L
+    private var countdownEndMs = 0L
+    private var countdownShownS = -1
 
     private val logFile: File = run {
         val public = Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
@@ -119,18 +124,29 @@ class LapSession(
                 "total_yaw_deg,yaw_rate_rad_s,mode,note")
             newLine()
         }
+        timeMode = false
+        blockIdx = 0; lapsInBlock = 0; lapNo = 0; typicalLapS = 0.0
+        if (startDelayS > 0) {
+            state = State.COUNTDOWN
+            countdownEndMs = SystemClock.elapsedRealtime() + startDelayS * 1000L
+            countdownShownS = -1
+            event("countdown", note = "${startDelayS}s")
+        } else beginLeadIn()
+        handler.post(tick)
+    }
+
+    /** The real start: rotation is counted from here, not from the button press. */
+    private fun beginLeadIn() {
         sensors.resetTotalYaw()
         startMs = SystemClock.elapsedRealtime()
         moveStartMs = 0L
         rateEma = 0.0; maxRate = 0.0; phaseAtMax = 0.0
-        timeMode = false
-        blockIdx = 0; lapsInBlock = 0; lapNo = 0; typicalLapS = 0.0
         state = State.LEAD_IN
         event("start", note = "plan=" + plan.joinToString("+") { "${it.method}x${it.laps}" } +
             " repeats=$repeats gravity_locked=${sensors.gravityLocked}")
+        host.buzz(120)
         host.status(if (sensors.gravityLocked) "lead-in lap…"
                     else "lead-in… (hold still once so gravity locks)")
-        handler.post(tick)
     }
 
     /** Stops driving the plan. Does not stop the current run; the caller does that. */
@@ -163,6 +179,17 @@ class LapSession(
         val turned = abs(sensors.totalYawDeg)
         rateEma = 0.8 * rateEma + 0.2 * abs(sensors.currentYawRate)
         when (state) {
+            State.COUNTDOWN -> {
+                val leftMs = countdownEndMs - nowMs
+                if (leftMs <= 0L) beginLeadIn()
+                else {
+                    val s = ((leftMs + 999L) / 1000L).toInt()
+                    if (s != countdownShownS) {
+                        countdownShownS = s
+                        host.status("starting in $s…")
+                    }
+                }
+            }
             State.LEAD_IN -> {
                 if (moveStartMs == 0L && turned > 5.0) moveStartMs = nowMs
                 if (turned < 360.0) {
