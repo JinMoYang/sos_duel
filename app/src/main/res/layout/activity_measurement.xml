@@ -551,6 +551,15 @@
                     android:textSize="13sp" />
             </LinearLayout>
 
+            <!-- Lap-driven collection: one press runs the whole plan while the vehicle
+                 keeps circling (LapSession.kt). The label doubles as its status line. -->
+            <Button android:id="@+id/btnLapSession"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Lap session"
+                android:textSize="13sp" />
+
             <Button android:id="@+id/btnExp21"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

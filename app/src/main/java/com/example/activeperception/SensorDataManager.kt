@@ -62,6 +62,18 @@ class SensorDataManager(
     var currentHeadingAngle: Double = 0.0
         private set
 
+    /** Gravity-axis rotation accumulated since [resetTotalYaw], in degrees, signed. Unlike
+     *  [currentHeadingAngle] it is never wrapped per lap and has no dead zone, so a
+     *  session-level lap tracker can place its own boundaries on it. Stays at 0 until the
+     *  gravity reference has locked. */
+    @Volatile var totalYawDeg: Double = 0.0
+        private set
+    fun resetTotalYaw() { totalYawDeg = 0.0 }
+
+    /** False until the device has been still long enough to learn which way is down;
+     *  no yaw is integrated before that. */
+    val gravityLocked: Boolean get() = isReferenceGravitySet
+
     /** Per-sample hooks, each fired from the sensor thread with that sensor's OWN timestamp.
      *  Whether those timestamps share a clock with the camera's SENSOR_TIMESTAMP is recorded
      *  in the manifest as timestamp_source. */
@@ -243,6 +255,7 @@ class SensorDataManager(
                 z.toDouble()
             }
             currentYawRate = verticalGyroSpeedRad
+            totalYawDeg += Math.toDegrees(verticalGyroSpeedRad) * dt
 
             if (Math.abs(verticalGyroSpeedRad) < GYRO_DEADZONE) {
                 lastGyroTimestamp = timestamp

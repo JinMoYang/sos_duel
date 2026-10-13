@@ -4336,6 +4336,380 @@ class MeasurementController(
         logger.flush()
     }
 
+    // ---------- Collect 5x3: the scheme's one burst plus the real photo of every cell ----------
+
+    /** One shot of a collection frame. [burstK] is 0..3 for the scheme's own burst and -1
+     *  for a shot taken only as the real photo of its cell. */
+    private class CollectShot(val gi: Int, val sj: Int, val burstK: Int)
+
+    /**
+     * Data collection for post-hoc analysis. Nothing is selected here.
+     *
+     * The scheme under test takes ONE burst — four back-to-back 1/60 s frames at a base
+     * ISO — and makes a 5 x 3 grid from it: three shutters by summing 1, 2 and 4 frames
+     * (gap-free, because 1/60 s fills this sensor's 16.67 ms frame interval), and five
+     * brightness levels by multiplying or dividing. This mode captures that burst and,
+     * in the same frame, the REAL photo of each of the same fifteen settings. Every
+     * synthesized cell therefore has a real partner, and nothing is captured that has
+     * none.
+     *
+     * The base ISO rotates through the five levels frame by frame. Over a run that fills
+     * the whole base-versus-target table, which is what says where the base should sit
+     * and how far a digital multiply can be trusted.
+     *
+     * Shot order puts the scheme's burst in the middle with the real photos on both
+     * sides, shortest exposures nearest, so a synthesized cell and its partner are close
+     * in time. Frames are consumed as they arrive: a decoded frame is 12.5 MB and
+     * eighteen of them do not sit comfortably in a 512 MB heap.
+     *
+     * Every COCO class is kept, down to the 0.01 decode floor. Times are on
+     * elapsedRealtimeNanos, the clock SENSOR_TIMESTAMP uses on this device.
+     */
+    fun runCollect53(
+        maxFrames: Int,
+        onStatus: (String) -> Unit,
+        onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }
+    ) {
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+            ?: error("collect requires TfliteYoloDetector")
+        val gains = v2GainRungs.copyOf()
+        val ceil = v2AnalogCeil()
+        val shutters = intArrayOf(16_667, 33_333, 66_667)
+        val nG = gains.size
+        val nS = shutters.size
+        fun captured(gi: Int) = minOf(gains[gi], ceil)
+        startPass("collect_5x3", isGtReference = false, withFrames = false,
+            methodParams = JSONObject()
+                .put("purpose", "post-hoc analysis: every cell the scheme synthesizes from " +
+                    "one burst, paired with the real capture of the same setting")
+                .put("session", v2SessionTag)
+                .put("gain_levels", JSONArray(gains.toList()))
+                .put("gain_captured_at", JSONArray(gains.map { minOf(it, ceil) }))
+                .put("analog_ceiling", ceil)
+                .put("shutters_us", JSONArray(shutters.toList()))
+                .put("scheme_burst", "4 x 1/60 s at the base ISO; shutters are FIRST_N sums " +
+                    "of 1, 2, 4 frames; brightness is a digital ratio to the base")
+                .put("base_iso_rotation", "frame index mod $nG")
+                .put("shots_per_frame", 4 + (nS - 1) + (nG - 1) * nS)
+                .put("cell_id", "gain_idx * $nS + shutter_idx")
+                .put("class_filter", "none: every COCO class, 0.01 decode floor")
+                .put("white_reference", "white level minus black, so a saturated pixel is " +
+                    "full white in a real photo exactly as it is in a summed or multiplied " +
+                    "one; the other modes divide by the white level alone")
+                .put("clock", "elapsedRealtimeNanos, the SENSOR_TIMESTAMP clock"))
+        logger.csv("collect_frames", listOf("frame", "base_gi", "base_iso", "base_iso_captured",
+            "t_request_ns", "t_first_exposure_ns", "t_last_exposure_end_ns", "t_done_ns",
+            "capture_span_ms", "wait_ms", "formation_ms", "infer_ms", "log_ms", "total_ms",
+            "n_shots", "n_images", "yaw_rate", "total_yaw_deg", "lux", "accel",
+            "battery_temp_c", "thermal_status", "cpu_pct", "cpu_mhz", "pss_kb",
+            "java_heap_kb", "batt_charge_uah", "batt_plugged"))
+        logger.csv("collect_shots", listOf("frame", "shot", "role", "gi", "sj", "nominal_iso",
+            "iso_req", "iso_applied", "exp_req_us", "exp_applied_us", "sensor_ts_ns",
+            "frame_duration_ns", "taken_ns", "focus_distance", "af_state", "lens_state",
+            "raw_mean", "raw_clip_frac"))
+        logger.csv("collect_cells", listOf("frame", "kind", "cell", "gi", "sj", "nominal_iso",
+            "exposure_us", "base_gi", "source_iso_captured", "n_frames", "digital_ratio",
+            "shot", "sensor_ts_ns", "mean_luma", "clip_frac", "n_det", "n_det_sel",
+            "sum_conf_vehicle", "sum_conf_all", "img_path"))
+
+        val detsWriter = java.util.concurrent.Executors.newSingleThreadExecutor()
+        fun logCell(frame: Int, kind: String, gi: Int, sj: Int, baseGi: Int, sourceIso: Int,
+                    nFrames: Int, ratio: Double, shot: Int, sensorTs: Long,
+                    stats: DoubleArray, dets: List<Detection>, imgPath: String) {
+            val cell = gi * nS + sj
+            var sumAll = 0.0
+            var nSel = 0
+            for (d in dets) if (d.confidence >= selectConf) { sumAll += d.confidence; nSel++ }
+            logger.row("collect_cells", listOf(frame, kind, cell, gi, sj, gains[gi],
+                shutters[sj], baseGi, sourceIso, nFrames, "%.4f".format(ratio), shot, sensorTs,
+                "%.4f".format(stats[0]), "%.5f".format(stats[1]), dets.size, nSel,
+                "%.3f".format(sumConf(dets)), "%.3f".format(sumAll), imgPath))
+            // Thirty images a frame with up to a hundred boxes each: building that JSON on
+            // the loop thread cost more than a tenth of a second per frame. One writer
+            // thread keeps the lines in order.
+            detsWriter.execute {
+                val arr = JSONArray()
+                for (d in dets) arr.put(detJson(d))
+                logger.jsonl("collect_dets", JSONObject().put("frame", frame).put("kind", kind)
+                    .put("cell", cell).put("base_gi", baseGi).put("dets", arr))
+            }
+        }
+
+        // Decoded values are black-subtracted, so they top out at white minus black. The
+        // shared formation path divides by the white level alone, which leaves a saturated
+        // real pixel at about 97% while a sum or a multiply of the same pixel clips to
+        // 100%. That gap is an artifact, and it would be read as "synthesized differs from
+        // real" wherever the scene clips. Here both are measured against the usable range.
+        fun usableRange(f: RawFrame, black: Int) = RawFrame(f.bayer, f.width, f.height,
+            f.cfaPattern, (f.maxDn - black).coerceAtLeast(1.0), f.sensorOrientation,
+            f.whiteBalance, f.cameraToSrgb)
+
+        // Turning a tensor lane into a Bitmap costs about 20 ms and there are fifteen per
+        // frame, so it happens off the loop thread, from a private copy of the lane.
+        val laneBytes = 640 * 640 * 3 * 4
+        val jpegPool = java.util.concurrent.Executors.newFixedThreadPool(2)
+        val copyPermits = java.util.concurrent.Semaphore(8)
+        val copies = java.util.concurrent.ConcurrentLinkedQueue<java.nio.ByteBuffer>()
+        fun saveLaneJpeg(tensor: Exp21TensorResult, lane: Int, name: String): String {
+            // Writers far behind: this image is skipped and its path left blank, rather
+            // than holding up capture or piling up 5 MB copies.
+            if (!copyPermits.tryAcquire()) return ""
+            val copy = copies.poll() ?: java.nio.ByteBuffer.allocateDirect(laneBytes)
+                .order(java.nio.ByteOrder.nativeOrder())
+            val view = tensor.batch.input.duplicate()
+            view.position(lane * laneBytes)
+            view.limit((lane + 1) * laneBytes)
+            copy.clear()
+            copy.put(view)
+            jpegPool.execute {
+                try {
+                    val pixels = IntArray(640 * 640)
+                    for (p in pixels.indices) {
+                        val o = p * 12
+                        val r = (copy.getFloat(o) * 255f).toInt().coerceIn(0, 255)
+                        val g = (copy.getFloat(o + 4) * 255f).toInt().coerceIn(0, 255)
+                        val bl = (copy.getFloat(o + 8) * 255f).toInt().coerceIn(0, 255)
+                        pixels[p] = (0xFF shl 24) or (r shl 16) or (g shl 8) or bl
+                    }
+                    val bmp = Bitmap.createBitmap(pixels, 640, 640, Bitmap.Config.ARGB_8888)
+                    logger.saveJpeg(name, bmp)
+                    bmp.recycle()
+                } catch (_: Throwable) {
+                } finally {
+                    copies.offer(copy)
+                    copyPermits.release()
+                }
+            }
+            return "img/$name.jpg"
+        }
+
+        val src = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
+        onStatus("collect: warming GPU batches…")
+        tfl.warmUpAllBatches()
+        var f = 0
+        var failures = 0
+        try {
+            while (running && f < maxFrames) {
+                val tFrame = now()
+                val b = f % nG
+                // Half of the other ISOs before the scheme's burst and half after, each
+                // side ordered so the short exposures sit next to the burst.
+                val others = (0 until nG).filter { it != b }
+                val shots = ArrayList<CollectShot>(4 + (nS - 1) + (nG - 1) * nS)
+                for (g in others.take(others.size / 2))
+                    for (s in nS - 1 downTo 0) shots += CollectShot(g, s, -1)
+                for (k in 0 until 4) shots += CollectShot(b, 0, k)
+                for (s in 1 until nS) shots += CollectShot(b, s, -1)
+                for (g in others.drop(others.size / 2))
+                    for (s in 0 until nS) shots += CollectShot(g, s, -1)
+
+                val tRequestNs = SystemClock.elapsedRealtimeNanos()
+                val handle = raw.beginBracketSequence(
+                    shots.map { shutters[it.sj] to captured(it.gi) })
+                var waitMs = 0.0
+                var formMs = 0.0
+                var inferMs = 0.0
+                var logMs = 0.0
+                var firstExposureNs = Long.MAX_VALUE
+                var lastExposureEndNs = 0L
+                var nImages = 0
+                val burst = ArrayList<RawFrame>(4)
+                var burstShot = -1
+                var burstTs = -1L
+                var preview: Bitmap? = null
+                var previewDets: List<Detection> = emptyList()
+                var ok = true
+                try {
+                    for (i in shots.indices) {
+                        val shot = shots[i]
+                        val tw = now()
+                        val (taken, meta) = raw.takeBracketFrame(handle, i)
+                        waitMs += ms(tw)
+                        val takenNs = SystemClock.elapsedRealtimeNanos()
+                        if (meta.timestamp in 1 until firstExposureNs) firstExposureNs = meta.timestamp
+                        lastExposureEndNs = maxOf(lastExposureEndNs,
+                            meta.timestamp + meta.appliedExpUs * 1_000L)
+                        val tl0 = now()
+                        val rawStats = rawMeanAndClip(taken, meta.black)
+                        val frame = usableRange(taken, meta.black)
+                        logger.row("collect_shots", listOf(f, i,
+                            if (shot.burstK >= 0) "burst" else "real", shot.gi, shot.sj,
+                            gains[shot.gi], meta.requestedIso, meta.appliedIso,
+                            meta.requestedExpUs, meta.appliedExpUs, meta.timestamp,
+                            meta.frameDurationNs, takenNs, handle.focusDistance[i],
+                            handle.afState[i], handle.lensState[i],
+                            "%.4f".format(rawStats[0]), "%.5f".format(rawStats[1])))
+                        logMs += ms(tl0)
+
+                        if (shot.burstK >= 0) {
+                            if (shot.burstK == 0) { burstShot = i; burstTs = meta.timestamp }
+                            burst += frame
+                            if (shot.burstK < 3) continue
+                            // All four frames are in hand: make the scheme's fifteen cells.
+                            val laneN = IntArray(nG * nS) { 1 shl (it % nS) }
+                            val laneRatio = DoubleArray(nG * nS) {
+                                gains[it / nS].toDouble() / captured(b)
+                            }
+                            val tf = now()
+                            val tensor = src.formExplicitBurstTensor(burst, laneN, laneRatio)
+                            formMs += ms(tf)
+                            val dets = tfl.detectTensorBatchAllClasses(tensor.batch)
+                            inferMs += tfl.lastRunMs + tfl.lastDecodeMs
+                            val tl = now()
+                            var baseStats = doubleArrayOf(0.0, 0.0)
+                            for (lane in 0 until nG * nS) {
+                                val gi = lane / nS
+                                val sj = lane % nS
+                                val stats = lumaAndClipFromTensorLane(tensor, lane)
+                                if (gi == b && sj == 0) baseStats = stats
+                                logCell(f, "synth", gi, sj, b, captured(b), 1 shl sj,
+                                    laneRatio[lane], burstShot, burstTs, stats, dets[lane], "")
+                            }
+                            // The base cell at 1/60 s is the first burst frame untouched, so
+                            // it is also the real photo of itself.
+                            val baseLane = b * nS
+                            // The one bitmap made on this thread per frame, for the preview.
+                            val bmp = src.selectedTensorBitmap(tensor, baseLane)
+                            val path = saveLaneJpeg(tensor, baseLane,
+                                "${frameName(f)}_g${gains[b]}_e${shutters[0]}")
+                            logCell(f, "real", b, 0, b, captured(b), 1, laneRatio[baseLane],
+                                burstShot, burstTs, baseStats, dets[baseLane], path)
+                            detectionTotalAtFloor += dets[baseLane].size
+                            detectionTotalAboveThresh +=
+                                dets[baseLane].count { it.confidence >= selectConf }
+                            preview = bmp
+                            previewDets = src.detectionsForTensorPreview(
+                                dets[baseLane], tensor, baseLane)
+                            nImages += nG * nS + 1
+                            burst.clear()
+                            logMs += ms(tl)
+                        } else {
+                            // The real photo of one cell. Only the top level, captured at
+                            // the analog ceiling, carries a ratio other than 1.
+                            val ratio = gains[shot.gi].toDouble() / captured(shot.gi)
+                            val tf = now()
+                            val tensor = src.formExplicitGainsTensor(frame, doubleArrayOf(ratio))
+                            formMs += ms(tf)
+                            val dets = tfl.detectTensorBatchAllClasses(tensor.batch)[0]
+                            inferMs += tfl.lastRunMs + tfl.lastDecodeMs
+                            val tl = now()
+                            val stats = lumaAndClipFromTensorLane(tensor, 0)
+                            val path = saveLaneJpeg(tensor, 0,
+                                "${frameName(f)}_g${gains[shot.gi]}_e${shutters[shot.sj]}")
+                            logCell(f, "real", shot.gi, shot.sj, b, captured(shot.gi), 1,
+                                ratio, i, meta.timestamp, stats, dets, path)
+                            detectionTotalAtFloor += dets.size
+                            detectionTotalAboveThresh += dets.count { it.confidence >= selectConf }
+                            nImages++
+                            logMs += ms(tl)
+                        }
+                    }
+                } catch (t: Throwable) {
+                    raw.abortBracketSequence(handle)
+                    ok = false
+                    failures++
+                    onStatus("collect: frame $f failed (${t.message})")
+                }
+                if (!ok) {
+                    // One lost frame is survivable; a camera that keeps failing is not.
+                    if (failures >= 3) break
+                    continue
+                }
+                failures = 0
+                val tDoneNs = SystemClock.elapsedRealtimeNanos()
+                val totalMs = ms(tFrame)
+                val h = health.sample()
+                logger.row("collect_frames", listOf(f, b, gains[b], captured(b),
+                    tRequestNs, firstExposureNs, lastExposureEndNs, tDoneNs,
+                    "%.1f".format((lastExposureEndNs - firstExposureNs) / 1e6),
+                    "%.1f".format(waitMs), "%.1f".format(formMs), "%.1f".format(inferMs),
+                    "%.1f".format(logMs), "%.1f".format(totalMs), shots.size, nImages,
+                    sensors.currentYawRate, "%.2f".format(sensors.totalYawDeg),
+                    sensors.currentLux, sensors.currentAccel,
+                    h.batteryTemperatureC, h.thermalStatus,
+                    if (h.cpuPercent < 0) "" else "%.1f".format(h.cpuPercent),
+                    h.cpuMaxMhz, h.totalPssKb, h.javaHeapKb,
+                    if (h.chargeUAh == Long.MIN_VALUE) "" else h.chargeUAh, h.pluggedState))
+                lastFrameIdx = f
+                totalFramesLogged += 1
+                preview?.let { bmp ->
+                    runCatching { onFrame(bmp, previewDets, gains[b], shutters[0]) }
+                }
+                onStatus("COLLECT f=$f base ISO ${gains[b]} | ${shots.size} shots, " +
+                    "$nImages images | ${"%.0f".format(totalMs)}ms")
+                f++
+            }
+        } finally {
+            runCatching { raw.stopFastCapture() }
+            runCatching { src.shutdown() }
+            // The logger closes as soon as this returns, so the last images must be on
+            // disk first.
+            runCatching {
+                jpegPool.shutdown()
+                detsWriter.shutdown()
+                jpegPool.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)
+                detsWriter.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)
+            }
+            endPass()
+        }
+    }
+
+    /** Mean level and clipped fraction of a decoded Bayer frame, both relative to the
+     *  usable range above black. Sampled, so it costs a fraction of a millisecond. */
+    private fun rawMeanAndClip(frame: RawFrame, black: Int): DoubleArray {
+        val px = frame.bayer
+        val top = (frame.maxDn - black).coerceAtLeast(1.0)
+        val clipAt = top - 4.0
+        val step = (px.size / 100_000).coerceAtLeast(1) or 1   // odd, so all CFA sites are hit
+        var sum = 0L
+        var clipped = 0
+        var count = 0
+        var i = 0
+        while (i < px.size) {
+            val v = px[i]
+            sum += v
+            if (v >= clipAt) clipped++
+            count++
+            i += step
+        }
+        return if (count == 0) doubleArrayOf(0.0, 0.0)
+        else doubleArrayOf(sum.toDouble() / count / top, clipped.toDouble() / count)
+    }
+
+    /** Mean luma and clipped fraction of one tensor lane, over the image area only: the
+     *  letterbox padding is a flat gray that would otherwise pull every mean toward it. */
+    private fun lumaAndClipFromTensorLane(tensor: Exp21TensorResult, lane: Int): DoubleArray {
+        val input = tensor.batch.input
+        val t = tensor.batch.transforms[lane]
+        val size = 640
+        val padX = Math.ceil(t.padX).toInt().coerceIn(0, size / 2 - 1)
+        val padY = Math.ceil(t.padY).toInt().coerceIn(0, size / 2 - 1)
+        val base = lane * size * size * 3 * 4
+        var sum = 0.0
+        var clipped = 0
+        var count = 0
+        var y = padY
+        while (y < size - padY) {
+            var x = padX + (y % 3)
+            while (x < size - padX) {
+                val o = base + (y * size + x) * 12
+                val r = input.getFloat(o)
+                val g = input.getFloat(o + 4)
+                val bl = input.getFloat(o + 8)
+                sum += r * 0.299 + g * 0.587 + bl * 0.114
+                if (r >= 0.995f || g >= 0.995f || bl >= 0.995f) clipped++
+                count++
+                x += 3
+            }
+            y += 3
+        }
+        return if (count == 0) doubleArrayOf(0.0, 0.0)
+        else doubleArrayOf(sum / count, clipped.toDouble() / count)
+    }
+
     // ---------- shared helpers ----------
 
     /** Writes the manifest, opens the shared logs, and arms [running]. Modes with their own

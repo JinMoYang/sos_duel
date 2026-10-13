@@ -711,6 +711,144 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         return decoded.frame
     }
 
+    /** One burst whose shots each carry their own exposure and ISO; see
+     *  [beginBracketSequence]. */
+    class BracketHandle internal constructor(
+        internal val commandIds: LongArray,
+        val exposureUs: IntArray,
+        val iso: IntArray,
+        /** elapsedRealtimeNanos at submission — the clock SENSOR_TIMESTAMP uses. */
+        val submittedSensorNs: Long
+    ) {
+        val count: Int get() = commandIds.size
+        /** Lens state read from each shot's capture result. NaN / -1 until that result
+         *  lands, which is always before the shot's frame can be taken. */
+        val focusDistance = FloatArray(commandIds.size) { Float.NaN }
+        val afState = IntArray(commandIds.size) { -1 }
+        val lensState = IntArray(commandIds.size) { -1 }
+    }
+
+    /**
+     * Submit one burst in which every shot has its OWN (exposureUs, iso), without waiting.
+     *
+     * The S26 Ultra applies each request to its own frame (measured: 209 of 209 shots,
+     * exposure exact), so a mixed burst costs the same per frame as a uniform one. Each
+     * shot becomes a single-frame target on the persistent listener, which already routes
+     * by request tag, so nothing about the existing same-setting paths changes.
+     *
+     * Take the frames in order with [takeBracketFrame]; a decoded frame is 12.5 MB, so
+     * the caller should release each one before asking for many more.
+     */
+    fun beginBracketSequence(shots: List<Pair<Int, Int>>): BracketHandle {
+        check(fastCaptureStarted) { "startFastCapture() must be called first" }
+        require(shots.size in 1..MAX_IMAGES)
+        val sess = session ?: error("camera session is closed")
+        val submittedSensorNs = SystemClock.elapsedRealtimeNanos()
+        val startedNs = System.nanoTime()
+        val ids = LongArray(shots.size)
+        val indexOf = HashMap<Long, Int>(shots.size * 2)
+        val requests = ArrayList<CaptureRequest>(shots.size)
+        shots.forEachIndexed { i, (expUs, iso) ->
+            val expected = SensorState(expUs.toLong(), iso)
+            val command = scheduler.enqueue(expected)
+            check(fastTargets.putIfAbsent(command.id,
+                FastTarget(expected, command.id, 1, startedNs)) == null)
+            ids[i] = command.id
+            indexOf[command.id] = i
+            // One template for every shot, so nothing but exposure and ISO differs.
+            requests += manualRequest(expected, command.id, CameraDevice.TEMPLATE_STILL_CAPTURE)
+        }
+        val handle = BracketHandle(ids, IntArray(shots.size) { shots[it].first },
+            IntArray(shots.size) { shots[it].second }, submittedSensorNs)
+        val callback = object : CameraCaptureSession.CaptureCallback() {
+            override fun onCaptureCompleted(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                result: TotalCaptureResult
+            ) {
+                val id = request.tag as? Long ?: return
+                val target = fastTargets[id] ?: return
+                val i = indexOf[id] ?: return
+                val nowNs = System.nanoTime()
+                synchronized(target.lock) {
+                    if (target.firstResultNs == 0L) target.firstResultNs = nowNs
+                }
+                val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: -1L
+                scheduler.markRequestFrame(id, result.frameNumber)
+                val actual = result.sensorState()
+                scheduler.observe(result.frameNumber, ts, actual)?.let {
+                    lastApplyDelayFrames = it.applyDelayFrames; currentState = actual
+                }
+                handle.focusDistance[i] = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: Float.NaN
+                handle.afState[i] = result.get(CaptureResult.CONTROL_AF_STATE) ?: -1
+                handle.lensState[i] = result.get(CaptureResult.LENS_STATE) ?: -1
+                fastResults[ts] = result
+                synchronized(fastResultLock) { fastResultLock.notifyAll() }
+                // Same settling-slot replacement as captureFast, per shot.
+                if (!scheduler.matches(target.expected, actual)) {
+                    val resubmit = synchronized(target.lock) {
+                        if (target.resubmits < SETTING_GUARD_FRAMES) { target.resubmits++; true }
+                        else false
+                    }
+                    if (resubmit) runCatching { session.capture(request, this, cameraHandler) }
+                }
+            }
+
+            override fun onCaptureFailed(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                failure: CaptureFailure
+            ) {
+                val id = request.tag as? Long ?: return
+                val target = fastTargets[id] ?: return
+                synchronized(target.lock) {
+                    target.failures++
+                    target.error = IllegalStateException(
+                        "Bracket shot failed frame=${failure.frameNumber} reason=${failure.reason}")
+                    target.lock.notifyAll()
+                }
+            }
+        }
+        sess.captureBurst(requests, callback, cameraHandler)
+        return handle
+    }
+
+    /** Blocks until shot [index] of [handle] is decoded, then hands it over. Shots may be
+     *  taken in any order, but each only once. */
+    fun takeBracketFrame(
+        handle: BracketHandle,
+        index: Int,
+        timeoutMs: Long = 6_000L
+    ): Pair<RawFrame, RawMeta> {
+        val id = handle.commandIds[index]
+        val target = fastTargets[id] ?: error("Bracket shot $index is no longer active")
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        // Polls in short steps so a failed shot is reported at once instead of after the
+        // whole timeout.
+        fun awaitDecoded(): Decoded {
+            while (true) {
+                target.ready.poll(100, TimeUnit.MILLISECONDS)?.let { return it }
+                val failure = target.error
+                if (failure != null || System.nanoTime() >= deadline) {
+                    fastTargets.remove(id)
+                    throw failure ?: IllegalStateException(
+                        "Timed out waiting for bracket shot $index " +
+                            "(${handle.exposureUs[index]}us ISO${handle.iso[index]})")
+                }
+            }
+        }
+        val decoded = awaitDecoded()
+        fastTargets.remove(id)
+        lastMeta = listOf(decoded.meta); lastSettlingMeta = lastMeta
+        currentState = SensorState(decoded.meta.appliedExpUs, decoded.meta.appliedIso)
+        return decoded.frame to decoded.meta
+    }
+
+    /** Drops every shot of [handle] that has not been taken; late images are discarded. */
+    fun abortBracketSequence(handle: BracketHandle) {
+        for (id in handle.commandIds) fastTargets.remove(id)
+    }
+
     @Synchronized
     fun stopFastCapture() {
         if (!fastCaptureStarted) return

@@ -146,6 +146,10 @@ class MeasurementActivity : AppCompatActivity() {
         Thread(task, "SoS-DisplayIo").apply { priority = Thread.MIN_PRIORITY }
     }
     @Volatile private var runActive = false
+    /** Lap-driven collection (LapSession.kt). Null whenever none is in progress. */
+    private var lapSession: LapSession? = null
+    /** Digital boost to put back when a lap session ends; negative when none is saved. */
+    private var boostBeforeLapSession = -1.0
     private var opened = false
     @Volatile private var resourcesMustClose = false
     @Volatile private var displayConfThreshold = 0.25f
@@ -315,6 +319,15 @@ class MeasurementActivity : AppCompatActivity() {
         // It opens camera 0 by itself, so it is only for a launch that starts no run.
         if (intent.getBooleanExtra("interval_diag", false)) {
             Thread({ IntervalDiag.run(applicationContext, ::post) }, "interval-diag").start()
+        }
+        // Lap-driven collection: the one control this experiment adds. From adb,
+        // `--ez lap_session true` presses it, with optional `--es lap_plan
+        // "collect:10,ae_phone:3"`, `--ei lap_repeats 3`, `--ei lap_leadin_s 90` and
+        // `--ei lap_fallback_s 15`. A single collection run without laps is
+        // `--es run collect`, optionally capped with `--ei collect_frames N`.
+        findViewById<Button>(R.id.btnLapSession).setOnClickListener { toggleLapSession() }
+        if (intent.getBooleanExtra("lap_session", false)) {
+            btnStart.postDelayed({ if (lapSession == null) toggleLapSession() }, 1500)
         }
         // General adb runner — the glass touchpad intercepts injected taps (focus-first
         // model), so radio selection is impossible from the host; this starts any method
@@ -1585,7 +1598,58 @@ class MeasurementActivity : AppCompatActivity() {
     private val playlistHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     /** Programmatic equivalent of picking a method radio and pressing Start. */
+    /** The 5x3 collection run (MeasurementController.runCollect53). It has no method radio,
+     *  so it is started directly rather than through the Start button. */
+    private fun startCollect() {
+        val cap = intent.getIntExtra("collect_frames", NO_FRAME_CAP)
+        start("collect_5x3") { mc!!.runCollect53(cap, ::post, ::showFrame) }
+    }
+
+    /** Starts a lap session, or stops the one in progress. The plan and its timeouts come
+     *  from the launch intent when given, otherwise from LapSession's defaults. */
+    private fun toggleLapSession() {
+        val lapButton = findViewById<Button>(R.id.btnLapSession)
+        if (lapSession != null) { stopMeasurement(); return }
+        if (runActive || playlistActive) { post("busy — stop first"); return }
+        val plan = LapSession.parsePlan(
+            intent.getStringExtra("lap_plan") ?: LapSession.DEFAULT_PLAN)
+        if (plan.isEmpty()) { post("lap plan is empty"); return }
+        // The x2 digital boost exists for the S25's ISO-400 analog ceiling and is folded
+        // into every grid-formed image, phone AE included. The collection run sets its own
+        // ratios, so leaving the boost on would make the AE laps one stop brighter than
+        // what the phone chose and than everything they are compared with. It is put back
+        // when the session ends; the manifest of each run records the value in force.
+        boostBeforeLapSession = grid.digitalBoost
+        grid.digitalBoost = 1.0
+        val session = LapSession(this, sensors, object : LapSession.Host {
+            override fun startBlock(method: String) {
+                if (method == "collect") startCollect() else launchRunnerCommand(method)
+            }
+            override fun stopBlock() = stopMeasurement(userInitiated = false)
+            override fun status(text: String) { lapButton.text = "STOP · $text" }
+            override fun buzz(ms: Long) = vibrate(ms)
+            override fun sessionEnded(completed: Boolean) {
+                lapSession = null
+                // An aborted session can end while its last run is still winding down;
+                // the boost goes back only once no run can still be forming images.
+                if (!runActive) restoreBoostAfterLapSession()
+                lapButton.text = if (completed) "Lap session · done" else "Lap session"
+            }
+        }, plan, intent.getIntExtra("lap_repeats", LapSession.DEFAULT_REPEATS).coerceAtLeast(1),
+            leadInTimeoutS = intent.getIntExtra("lap_leadin_s", 90).coerceAtLeast(1),
+            fallbackLapS = intent.getIntExtra("lap_fallback_s", 15).coerceAtLeast(3))
+        lapSession = session
+        vibrate(120)
+        session.start()
+    }
+
+    private fun restoreBoostAfterLapSession() {
+        if (boostBeforeLapSession > 0.0) grid.digitalBoost = boostBeforeLapSession
+        boostBeforeLapSession = -1.0
+    }
+
     private fun launchRunnerCommand(cmd: String) {
+        if (cmd == "collect") { startCollect(); return }
         val rid = when (cmd) {
             "fixed" -> R.id.methodFixed
             "ae_phone" -> R.id.methodAePhone
@@ -1655,6 +1719,8 @@ class MeasurementActivity : AppCompatActivity() {
     }
 
     private fun stopMeasurement(userInitiated: Boolean = true) {
+        // A stop the operator asked for ends the lap plan too, not just the current block.
+        if (userInitiated) lapSession?.abort()
         if (userInitiated && playlistActive) {
             playlistActive = false
             setDriveBrightness(false)
@@ -2018,6 +2084,8 @@ class MeasurementActivity : AppCompatActivity() {
                 // Playlist continuation: the next block starts once this run's worker has
                 // fully unwound (camera and GPU stay open, so the gap is a second or two).
                 runOnUiThread {
+                    lapSession?.onRunEnded()
+                    if (lapSession == null) restoreBoostAfterLapSession()
                     updateDriveUi()
                     when {
                         !playlistActive -> {}
@@ -2045,6 +2113,7 @@ class MeasurementActivity : AppCompatActivity() {
     override fun onResume() { super.onResume(); sensors.registerListeners() }
     override fun onPause() {
         super.onPause()
+        lapSession?.abort()
         cancelRotationSession()
         sensors.unregisterListeners()
         // Backgrounding revokes camera ownership, but Interpreter.close() must not race an

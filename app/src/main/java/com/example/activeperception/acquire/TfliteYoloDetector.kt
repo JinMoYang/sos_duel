@@ -109,6 +109,12 @@ class TfliteYoloDetector(
     private val coco5Decoder = if (numClasses == 80) OptimizedYoloDecode(
         numClasses, numAnchors, confThresh, allowed, iouThresh, maxDet, preNmsTopK = 1000,
         classIndices = COCO5_CLASS_IDS) else null
+    /** The same decode with no class filter, for collection runs that keep every COCO
+     *  class whatever [allowed] set this instance was built with. */
+    private val allClassDecoder by lazy {
+        OptimizedYoloDecode(numClasses, numAnchors, confThresh, null, iouThresh, maxDet,
+            preNmsTopK = 1000, classIdMap = classIdMap)
+    }
     private fun outputTransform(transform: TensorLetterbox): TensorLetterbox =
         if (normalizedOutputBoxes) TensorLetterbox(
             transform.scale / imgsz, transform.padX / imgsz, transform.padY / imgsz)
@@ -334,6 +340,10 @@ class TfliteYoloDetector(
     /** EXP2.3 arm 1: retain the 80-class model output but scan only five COCO channels. */
     fun detectTensorBatchOptimizedCoco5(batch: DirectTensorBatch): List<List<Detection>> =
         detectTensorBatchWithDecoder(batch, requireNotNull(coco5Decoder), "EXP2.3")
+
+    /** Same GPU path as [detectTensorBatchOptimized], but every class survives decode. */
+    fun detectTensorBatchAllClasses(batch: DirectTensorBatch): List<List<Detection>> =
+        detectTensorBatchWithDecoder(batch, allClassDecoder, "COLLECT")
 
     private fun detectTensorBatchWithDecoder(
         batch: DirectTensorBatch, decoder: OptimizedYoloDecode, experiment: String
