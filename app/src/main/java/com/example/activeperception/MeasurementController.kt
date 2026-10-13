@@ -135,6 +135,10 @@ class MeasurementController(
     private fun now() = System.nanoTime()
     private fun ms(t0: Long) = (now() - t0) / 1e6
 
+    /** Elapsed between two captured marks, for spans that do not end at "now" — the
+     *  capture round trip is bracketed mid-step, so [ms] cannot express it. */
+    private fun msBetween(t0: Long, t1: Long) = (t1 - t0) / 1e6
+
     // ---------- manifest + per-frame helpers shared by all modes ----------
 
     private fun headers() = listOf(
@@ -155,7 +159,21 @@ class MeasurementController(
         "tie_break",
         // AE_quant only: AE's continuous choice before quantization. The gain/exposure_us
         // columns above carry the quantized cell that was actually captured. Blank elsewhere.
-        "ae_iso", "ae_exp_us"
+        "ae_iso", "ae_exp_us",
+        // Resource accounting. Appended rather than slotted next to their relatives so
+        // every existing column keeps its index and older analysis scripts still parse.
+        // capture_ms: the capture round trip (request issued -> frames in hand). It used
+        // to be recoverable only as total-formation-infer, a residual that silently
+        // absorbed bitmap alloc, JPEG enqueue, logging and GC — reading actuation cost out
+        // of that residual is what produced a wrong lag estimate, so it is measured now.
+        // cpu_pct: percent of ONE core (200 = two cores busy), whole process, 2 s window.
+        // graphics_kb: GPU/texture/EGL memory, the one that actually moves with K.
+        "capture_ms", "cpu_pct", "java_heap_kb", "native_heap_kb", "graphics_kb", "cpu_mhz",
+        // Energy. Run energy = (batt_charge_uah at start - at end) x mean batt_voltage_mv,
+        // which is far steadier than integrating batt_current_ua. batt_plugged MUST be 0
+        // for any of it to mean anything: on USB the phone charges while the run drains
+        // it, so a tethered run has to be rejected, not averaged in.
+        "batt_charge_uah", "batt_current_ua", "batt_voltage_mv", "batt_pct", "batt_plugged"
     )
 
     /** [methodParams] carries the mode's own configuration so a run variant is identifiable
@@ -192,6 +210,13 @@ class MeasurementController(
         m.put("sync_max_latency", raw.syncMaxLatency)
         m.put("timestamp_source", raw.timestampSource)
         m.put("platform", platformTag)
+        m.put("pairing", JSONObject()
+            .put("drive_role", driveRole)
+            .put("device_id", deviceId)
+            .put("block_s", blockSeconds)
+            .put("block_idx", blockIndex)
+            .put("repeats", playlistRepeats)
+            .put("rows", playlistRows))
         m.put("sensor_orientation", raw.sensorOrientation)
         m.put("sensor_iso_range", JSONObject()
             .put("min", raw.sensorIsoMin).put("max", raw.sensorIsoMax))
@@ -395,7 +420,10 @@ class MeasurementController(
         dets: List<Detection>, imgPath: String, tieBreak: String = "",
         aeIso: Int = -1, aeExpUs: Int = -1,
         /** v2 passes nominal rung ISO with no digital-boost concept behind it. */
-        applyBoost: Boolean = true
+        applyBoost: Boolean = true,
+        /** Capture round trip in ms. Defaulted so call sites that do not time the capture
+         *  separately keep compiling; they log it blank rather than a wrong number. */
+        captureMs: Double = -1.0
     ) {
         // Published before the mode's onFrame callback fires, so listeners see the matching id.
         lastFrameIdx = idx
@@ -428,7 +456,14 @@ class MeasurementController(
             k, if (isBurst) 1 else 0,
             "%.1f".format(formationMs), "%.1f".format(inferMs), "%.1f".format(totalMs),
             dets.size, "%.3f".format(sumConf(dets)), imgPath, tieBreak,
-            aeIsoCol, aeExpCol
+            aeIsoCol, aeExpCol,
+            if (captureMs < 0) "" else "%.1f".format(captureMs),
+            if (healthNow.cpuPercent < 0) "" else "%.1f".format(healthNow.cpuPercent),
+            healthNow.javaHeapKb, healthNow.nativeHeapKb,
+            healthNow.graphicsKb, healthNow.cpuMaxMhz,
+            if (healthNow.chargeUAh == Long.MIN_VALUE) "" else healthNow.chargeUAh,
+            if (healthNow.currentUA == Int.MIN_VALUE) "" else healthNow.currentUA,
+            healthNow.voltageMv, healthNow.batteryPct, healthNow.pluggedState
         ))
         writeDets(idx, method, chosenCell, dets)
     }
@@ -458,7 +493,8 @@ class MeasurementController(
                 val path = logger.saveJpegAsync(
                     "${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
                 logFrame(f, "fixed", cell, gainVal, expUs, 1, false, formMs,
-                    pipe.inferMs, totalMs, dets, path)
+                    pipe.inferMs, totalMs, dets, path,
+                    captureMs = msBetween(t0, tf))
                 onFrame(bmp, pipe.previewDets(dets, tensor, 0), effIso(gainVal), expUs)
                 onStatus("Fixed f=$f g=${effIso(gainVal)} exp=${expUs}us ndet=${dets.size} " +
                     "${"%.0f".format(totalMs)}ms")
@@ -544,7 +580,8 @@ class MeasurementController(
                     "${frameName(f)}_${isoExpTag(eff(gainVal), expUs)}", bmp)
                 logFrame(f, "physsweep", cell, gainVal, expUs, 1, false, formMs,
                     pipe.inferMs, totalMs, dets, path,
-                    tieBreak = if (sweeping) "sweep" else "hold", applyBoost = !v2)
+                    tieBreak = if (sweeping) "sweep" else "hold", applyBoost = !v2,
+                    captureMs = msBetween(t0, tf))
                 onFrame(bmp, pipe.previewDets(dets, tensor, 0), eff(gainVal), expUs)
                 onStatus("PhysSweep f=$f ${if (sweeping) "sweep" else "hold"} cell=$cell " +
                     "score=${"%.2f".format(score)} ${"%.0f".format(totalMs)}ms")
@@ -643,7 +680,8 @@ class MeasurementController(
                     "${frameName(f)}_${isoExpTag(eff(gainVal), expUs)}", bmp)
                 logFrame(f, if (v2) "shin_nm_v2_$mode" else "shin_nm_$mode", cell, gainVal,
                     expUs, 1, false, formMs,
-                    pipe.inferMs, totalMs, dets, path, tieBreak = phase, applyBoost = !v2)
+                    pipe.inferMs, totalMs, dets, path, tieBreak = phase, applyBoost = !v2,
+                    captureMs = msBetween(t0, tf))
                 onFrame(bmp, pipe.previewDets(dets, tensor, 0), eff(gainVal), expUs)
                 onStatus("ShinNM[$mode] f=$f $phase cell=$cell f(I)=${"%.2f".format(fI)} " +
                     "evals=${nm?.nFeval ?: 0} restarts=$nRestart")
@@ -707,7 +745,8 @@ class MeasurementController(
                     "${frameName(f)}_${isoExpTag(eff(gainVal), expUs)}", bmp)
                 logFrame(f, if (v2) "nae_v2_hist_scalar_ema" else "nae_hist_scalar_ema",
                     cell, gainVal, expUs, 1, false,
-                    formMs, pipe.inferMs, totalMs, dets, path, applyBoost = !v2)
+                    formMs, pipe.inferMs, totalMs, dets, path, applyBoost = !v2,
+                    captureMs = msBetween(t0, tf))
                 onFrame(bmp, pipe.previewDets(dets, tensor, 0), eff(gainVal), expUs)
                 onStatus("NAE f=$f cell=$cell logU=${"%.3f".format(logU)} ${"%.0f".format(totalMs)}ms")
                 val target = Math.log(NaeSnap.cellE(cell, g.gains, g.exposuresUs)) + logU
@@ -1002,7 +1041,8 @@ class MeasurementController(
                     val path = logger.saveJpegAsync(
                         "${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
                     logFrame(f, "ae", -1, gainVal, expUs, 1, false, formMs,
-                        pipe.inferMs, totalMs, dets, path)
+                        pipe.inferMs, totalMs, dets, path,
+                        captureMs = msBetween(t0, tf))
                     onFrame(bmp, pipe.previewDets(dets, tensor, 0), effIso(gainVal), expUs)
                     onStatus("AE[custom] f=$f iso=${effIso(gainVal)} exp=${expUs}us " +
                         "ndet=${dets.size} ${"%.0f".format(totalMs)}ms")
@@ -1033,7 +1073,8 @@ class MeasurementController(
             val gainVal = applied?.appliedIso ?: -1
             val expUs = (applied?.appliedExpUs ?: -1L).toInt()
             val path = logger.saveJpegAsync("${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
-            logFrame(f, "ae", -1, gainVal, expUs, 1, false, formMs, infMs, totalMs, dets, path)
+            logFrame(f, "ae", -1, gainVal, expUs, 1, false, formMs, infMs, totalMs, dets, path,
+                captureMs = msBetween(t0, tf))
             onFrame(bmp, dets, effIso(gainVal), expUs)
             onStatus("AE[phone] f=$f iso=${effIso(gainVal)} exp=${expUs}us ndet=${dets.size} ${"%.0f".format(totalMs)}ms")
             f++
@@ -3554,6 +3595,17 @@ class MeasurementController(
     /** The rig this run rode (limo / car / rayneo), recorded in every manifest so a mixed
      *  pile of runs can be split by platform without parsing directory names. */
     @Volatile var platformTag: String = ""
+    /** Two-phone pairing state. A drive is only interpretable if you can tell WHICH phone
+     *  produced a run and WHICH block it belongs to; car_v1 recorded none of it, and the
+     *  LEFT/RIGHT roles had to be recovered afterwards from an accident of fuel-gauge
+     *  quantisation. Defaults mean "not a playlist run" rather than "unknown". */
+    @Volatile var driveRole: String = ""
+    @Volatile var blockSeconds: Int = -1
+    @Volatile var blockIndex: Long = -1L
+    @Volatile var playlistRepeats: Int = -1
+    @Volatile var playlistRows: String = ""
+    /** Stable per-install id, so two units of the same model are distinguishable. */
+    @Volatile var deviceId: String = ""
     /** The v2 lattice as a Grid, so the space-generic baselines (PhysSweep, ShinNM,
      *  NeuralAE snap) can search the SAME space Prop-C lives on. Boost 1: v2 has no
      *  digital-boost concept — nominal ISO is the label. */
@@ -3698,6 +3750,11 @@ class MeasurementController(
             "sum_conf", "chosen", "tie_break"))
         logger.csv("cont", listOf("frame", "rung_idx", "nominal_iso", "phys_iso", "residual",
             "shutter_idx", "probe", "gain_pend", "shutter_pend"))
+        // Was missing: row() is a documented no-op on a stream csv() never opened, so every
+        // router decision this method made was silently discarded — in the one method the
+        // routing story is about. Header order must match the five values written below.
+        logger.csv("router", listOf("frame", "score", "model_limited_clusters",
+            "recovered_locally_clusters", "offload"))
         val router = CrossExposureRouter(selectConf)
         val src = ParallelRawCandidateSource(grid, raw,
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
@@ -3800,7 +3857,7 @@ class MeasurementController(
                 logFrame(f, "proposed_v2", v2Cell(chosenGi, sj), chosenNominal,
                     v2ShutterRungsUs[sj], laneCount, nBurst > 1, formMs, inferMs, totalMs,
                     chosenDets, path, tieBreak = if (allZero) "hold" else "conf",
-                    applyBoost = false)
+                    applyBoost = false, captureMs = msBetween(t0, tForm))
                 runCatching { onFrame(bmp, previewDets, chosenNominal, v2ShutterRungsUs[sj]) }
                 onStatus("V2 f=$f iso=$rung($phys) exp=${v2ShutterRungsUs[sj] / 1000.0}ms " +
                     "conf=${"%.2f".format(scores[bestLane])}" +

@@ -70,6 +70,10 @@ class MeasurementActivity : AppCompatActivity() {
         private const val NAE_MAX_FRAMES = 300
         /** Below this the pool is too small to hold out a meaningful validation split. */
         private const val NAE_MIN_TRAIN = 300
+        /** Dark enough that the panel costs almost nothing, bright enough to still read
+         *  the block number at a glance when the car is stopped. Not 0f: some panels
+         *  treat that as off, and the run depends on the Activity staying resumed. */
+        private const val DRIVE_BRIGHTNESS = 0.05f
     }
 
     // Device profile: each grid's base exposure nearly fills its device's RAW frame period
@@ -99,6 +103,7 @@ class MeasurementActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("sos_ui", MODE_PRIVATE) }
     private lateinit var driveRowsView: LinearLayout
     private lateinit var blockSecView: EditText
+    private lateinit var repeatsView: EditText
     private var driveMode = false
     private var driveRole = "A"
     private var driveShownAtMs = 0L
@@ -629,6 +634,32 @@ class MeasurementActivity : AppCompatActivity() {
     private var platformIdx = 0
     private fun platformTag() = platformTags[platformIdx.coerceIn(0, 2)]
 
+    /** Stable per-install id. Two units of the same model are otherwise indistinguishable in
+     *  the output — car_v1's roles had to be recovered from a fuel-gauge quantisation fluke. */
+    @Suppress("HardwareIds")
+    private fun deviceId(): String = runCatching {
+        android.provider.Settings.Secure.getString(contentResolver,
+            android.provider.Settings.Secure.ANDROID_ID) ?: ""
+    }.getOrDefault("")
+
+    /** Snapshot of the two-phone pairing state, taken on the UI thread: the worker that
+     *  builds the controller must not read driveRole/rows while the operator can edit them. */
+    private class PairingSnap(val role: String, val deviceId: String, val blockS: Int,
+                              val blockIdx: Long, val repeats: Int, val rows: String)
+
+    private fun pairingSnap() = PairingSnap(
+        role = if (platformTag() == "car") driveRole else "",
+        deviceId = deviceId(),
+        blockS = if (playlistActive) playlistBlockS else -1,
+        blockIdx = if (playlistActive) currentBlockIndex() else -1L,
+        repeats = if (playlistActive) playlistRepeats else -1,
+        rows = if (playlistActive) rows.joinToString(";") { it.encode() } else "")
+
+    private fun MeasurementController.applyPairing(p: PairingSnap) {
+        driveRole = p.role; deviceId = p.deviceId; blockSeconds = p.blockS
+        blockIndex = p.blockIdx; playlistRepeats = p.repeats; playlistRows = p.rows
+    }
+
     private fun naeDatasetFile() = java.io.File(getExternalFilesDir(null), "nae_dataset.bin")
 
     /** Neural-AE data collection only: one press appends up to [NAE_TARGET_SAMPLES] to the
@@ -901,6 +932,7 @@ class MeasurementActivity : AppCompatActivity() {
         displayConfThreshold = selectConf
         val sess = sessionTag()
         val plat = platformTag()
+        val pairSnap = pairingSnap()
         applyMountOffset()
         val session = RotationRunSession(System.currentTimeMillis())
         rotationSession = session
@@ -942,6 +974,7 @@ class MeasurementActivity : AppCompatActivity() {
                 val mcLocal = MeasurementController(raw, detector, grid, sensors, logger, health, selectConf)
                 mcLocal.setV2Session(sess)
                 mcLocal.platformTag = plat
+                mcLocal.applyPairing(pairSnap)
                 mc = mcLocal
                 offloader = offUrl?.let {
                     OffloadClient(it, logger.dir, offRegime) { mcLocal.lastFrameIdx }
@@ -1173,6 +1206,17 @@ class MeasurementActivity : AppCompatActivity() {
                 ?.hideSoftInputFromWindow(blockSecView.windowToken, 0)
             true
         }
+        playlistRepeats = prefs.getInt("repeats", 0)
+        repeatsView = findViewById(R.id.driveRepeats)
+        repeatsView.setText(playlistRepeats.toString())
+        repeatsView.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) commitRepeats() }
+        repeatsView.setOnEditorActionListener { _, _, _ ->
+            commitRepeats()
+            repeatsView.clearFocus()
+            (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
+                ?.hideSoftInputFromWindow(repeatsView.windowToken, 0)
+            true
+        }
         loadRows()
         // Offload survives launches too: in the car there is no chance to retype a URL.
         prefs.getString("offload_url", null)?.let { offloadUrl.setText(it) }
@@ -1301,6 +1345,36 @@ class MeasurementActivity : AppCompatActivity() {
             blockSecView.setText(playlistBlockS.toString())
         prefs.edit().putInt("block_s", playlistBlockS).apply()
         updateDriveUi()
+    }
+
+    /** How many full passes over the list to run before stopping by itself. 0 keeps the
+     *  old behaviour — rotate until the operator taps STOP — which is what a drive of
+     *  unknown length wants; a fixed count is what a repeatable protocol wants. */
+    private fun commitRepeats() {
+        val v = repeatsView.text.toString().toIntOrNull() ?: playlistRepeats
+        playlistRepeats = v.coerceIn(0, 999)
+        if (repeatsView.text.toString() != playlistRepeats.toString())
+            repeatsView.setText(playlistRepeats.toString())
+        prefs.edit().putInt("repeats", playlistRepeats).apply()
+        updateDriveUi()
+    }
+
+    /** Blocks in one full pass: Prop-C takes every other block, so a pass is twice the
+     *  number of rotating rows. Never 0, so the repeat check cannot divide by nothing. */
+    private fun cycleBlocks(): Long = (2L * baselineRows().size).coerceAtLeast(1L)
+
+    /** The display stays ON (the Activity must not pause) but goes dark for the drive: at
+     *  full brightness a 30 min run spends real energy and heat on a screen nobody looks
+     *  at, and both now land in the log as batt_charge_uah / thermal_status / cpu_mhz.
+     *  It must be a FIXED value for the whole playlist, never adaptive — a brightness that
+     *  drifts mid-run puts a varying load underneath the per-method energy comparison,
+     *  which is the one thing that comparison cannot tolerate.
+     *  BRIGHTNESS_OVERRIDE_NONE hands control back to the system. */
+    private fun setDriveBrightness(dim: Boolean) {
+        window.attributes = window.attributes.apply {
+            screenBrightness = if (dim) DRIVE_BRIGHTNESS
+            else android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        }
     }
 
     /** Restore a row into the settings screen — this is also how a block is launched. */
@@ -1437,12 +1511,18 @@ class MeasurementActivity : AppCompatActivity() {
         if (nb == 0) { cap.text = "no rotating rows - add one"; return }
         val cycleMin = 2 * nb * playlistBlockS / 60.0
         cap.text = "cycle " + (2 * nb) + " blocks = " + "%.0f".format(cycleMin) +
-            " min  |  each row 2x" + playlistBlockS + "s  |  starts at the top"
+            " min  |  each row 2x" + playlistBlockS + "s  |  " +
+            (if (playlistRepeats > 0)
+                "stops after " + playlistRepeats + "x = " +
+                    "%.0f".format(cycleMin * playlistRepeats) + " min"
+             else "runs until STOP")
     }
 
     private fun startDrivePlaylist() {
         if (rows.isEmpty()) { post("playlist is empty — add a row"); return }
         commitBlockSec()
+        commitRepeats()
+        setDriveBrightness(true)
         playlistActive = true
         blockCounter = 0; liveBlockIdx = 0
         vibrate(120); playlistHandler.postDelayed({ vibrate(120) }, 220)
@@ -1494,6 +1574,8 @@ class MeasurementActivity : AppCompatActivity() {
     // ---------- driving playlist ----------
 
     private var playlistBlockS: Int = 120
+    /** Full passes over the list before the playlist stops itself. 0 = run forever. */
+    private var playlistRepeats: Int = 0
     @Volatile private var playlistActive = false
     private val playlistHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -1532,7 +1614,23 @@ class MeasurementActivity : AppCompatActivity() {
             playlistHandler.postDelayed({ startPlaylistBlock() }, remain + 500)
             return
         }
-        if (rows.isEmpty()) { playlistActive = false; post("playlist is empty"); return }
+        if (rows.isEmpty()) {
+            playlistActive = false; setDriveBrightness(false)
+            post("playlist is empty"); return
+        }
+        // Stop on a PASS boundary, never mid-rotation: an unequal tail would give some
+        // baselines one more block than others, which is exactly what breaks the paired
+        // comparison the whole rotation exists to produce.
+        if (playlistRepeats > 0 && blockCounter >= playlistRepeats * cycleBlocks()) {
+            playlistActive = false
+            // One long buzz, distinct from the short per-block one, so the driver knows it
+            // ended without looking at the screen.
+            vibrate(700)
+            setDriveBrightness(false)
+            post("playlist finished: " + playlistRepeats + " x " + cycleBlocks() + " blocks")
+            updateDriveUi()
+            return
+        }
         val k = blockCounter
         liveBlockIdx = k
         blockCounter = k + 1
@@ -1554,6 +1652,7 @@ class MeasurementActivity : AppCompatActivity() {
     private fun stopMeasurement(userInitiated: Boolean = true) {
         if (userInitiated && playlistActive) {
             playlistActive = false
+            setDriveBrightness(false)
             prepStage = 0
             playlistHandler.removeCallbacksAndMessages(null)
             post("playlist cancelled")
@@ -1857,6 +1956,7 @@ class MeasurementActivity : AppCompatActivity() {
         displayConfThreshold = selectConf
         val sess = sessionTag()
         val plat = platformTag()
+        val pairSnap = pairingSnap()
         applyMountOffset()
         runActive = true
         inferenceExecutor.execute {
@@ -1885,6 +1985,7 @@ class MeasurementActivity : AppCompatActivity() {
                 val mcLocal = MeasurementController(raw, detector, grid, sensors, logger, health, selectConf)
                 mcLocal.setV2Session(sess)
                 mcLocal.platformTag = plat
+                mcLocal.applyPairing(pairSnap)
                 mc = mcLocal
                 // The currentFrame supplier reads lastFrameIdx, so staleness is measured
                 // against the same frame index that frames.csv records.

@@ -154,6 +154,26 @@
                     android:text="s"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="   Repeat"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp" />
+                <EditText android:id="@+id/driveRepeats"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:inputType="number"
+                    android:text="0"
+                    android:importantForAutofill="no"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="x"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp" />
             </LinearLayout>
 
             <!-- The constant partner of every rotating row. It is not a peer in the list,
