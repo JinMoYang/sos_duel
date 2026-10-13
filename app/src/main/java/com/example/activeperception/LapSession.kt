@@ -54,12 +54,20 @@ class LapSession(
         fun stopBlock()
         fun status(text: String)
         fun buzz(ms: Long)
+        /** An audible cue: one beep when counting really starts, three when the plan is done. */
+        fun beep(times: Int)
+        /** A new lap of the running block has begun; [lapsInBlock] laps of it are complete.
+         *  Lets a block change a setting lap by lap. Not called for a block's first lap,
+         *  which [startBlock] itself opens. */
+        fun lapStarted(method: String, lapsInBlock: Int)
         fun sessionEnded(completed: Boolean)
     }
 
     companion object {
         const val DEFAULT_PLAN = "collect:10,ae_phone:3"
-        const val DEFAULT_REPEATS = 3
+        /** Five repeats give the collection 50 laps: ten for each of its five base ISOs,
+         *  which is what it takes to tell base ISOs apart at about 16%. */
+        const val DEFAULT_REPEATS = 5
         private const val TICK_MS = 50L
 
         /** "collect:10,ae_phone:3" -> blocks. Entries that do not parse are dropped. */
@@ -145,6 +153,7 @@ class LapSession(
         event("start", note = "plan=" + plan.joinToString("+") { "${it.method}x${it.laps}" } +
             " repeats=$repeats gravity_locked=${sensors.gravityLocked}")
         host.buzz(120)
+        host.beep(1)
         host.status(if (sensors.gravityLocked) "lead-in lap…"
                     else "lead-in… (hold still once so gravity locks)")
     }
@@ -168,6 +177,7 @@ class LapSession(
         if (blockIdx >= totalBlocks) {
             event("done")
             host.buzz(800)
+            host.beep(3)
             finish(completed = true)
             return
         }
@@ -236,7 +246,7 @@ class LapSession(
                             switchStartMs = nowMs
                             event("block_stop_request")
                             host.stopBlock()
-                        }
+                        } else host.lapStarted(block.method, lapsInBlock)
                     } else {
                         event("lap_during_switch", lapS = lapS)
                     }

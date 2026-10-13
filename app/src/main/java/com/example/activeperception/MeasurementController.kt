@@ -4342,6 +4342,12 @@ class MeasurementController(
      *  for a shot taken only as the real photo of its cell. */
     private class CollectShot(val gi: Int, val sj: Int, val burstK: Int)
 
+    /** Which base ISO [runCollect53] shoots its burst at, as a running count taken modulo
+     *  the number of levels. Negative (the default) steps the base every frame. A lap
+     *  session sets it once per lap, so each lap is one base ISO from start to finish.
+     *  Read before every frame, so it may change while the run is going. */
+    @Volatile var collectBaseOverride: Int = -1
+
     /**
      * Data collection for post-hoc analysis. Nothing is selected here.
      *
@@ -4389,7 +4395,9 @@ class MeasurementController(
                 .put("shutters_us", JSONArray(shutters.toList()))
                 .put("scheme_burst", "4 x 1/60 s at the base ISO; shutters are FIRST_N sums " +
                     "of 1, 2, 4 frames; brightness is a digital ratio to the base")
-                .put("base_iso_rotation", "frame index mod $nG")
+                .put("base_iso_rotation", if (collectBaseOverride >= 0)
+                    "one base ISO per lap, stepped by the lap session; see base_gi per frame"
+                    else "frame index mod $nG")
                 .put("shots_per_frame", 4 + (nS - 1) + (nG - 1) * nS)
                 .put("cell_id", "gain_idx * $nS + shutter_idx")
                 .put("class_filter", "none: every COCO class, 0.01 decode floor")
@@ -4494,7 +4502,8 @@ class MeasurementController(
         try {
             while (running && f < maxFrames) {
                 val tFrame = now()
-                val b = f % nG
+                val held = collectBaseOverride
+                val b = if (held >= 0) held % nG else f % nG
                 // Half of the other ISOs before the scheme's burst and half after, each
                 // side ordered so the short exposures sit next to the burst.
                 val others = (0 until nG).filter { it != b }

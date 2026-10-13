@@ -150,6 +150,8 @@ class MeasurementActivity : AppCompatActivity() {
     private var lapSession: LapSession? = null
     /** Digital boost to put back when a lap session ends; negative when none is saved. */
     private var boostBeforeLapSession = -1.0
+    /** How many collection blocks the current lap session has opened, minus one. */
+    private var lapCollectBlockOrdinal = -1
     private var opened = false
     @Volatile private var resourcesMustClose = false
     @Volatile private var displayConfThreshold = 0.25f
@@ -1602,7 +1604,14 @@ class MeasurementActivity : AppCompatActivity() {
      *  so it is started directly rather than through the Start button. */
     private fun startCollect() {
         val cap = intent.getIntExtra("collect_frames", NO_FRAME_CAP)
-        start("collect_5x3") { mc!!.runCollect53(cap, ::post, ::showFrame) }
+        // Inside a lap session the base ISO is held for a whole lap and stepped by the
+        // session; on its own the run steps it every frame.
+        val base = if (lapSession != null) lapCollectBlockOrdinal else -1
+        start("collect_5x3") {
+            val controller = mc!!
+            controller.collectBaseOverride = base
+            controller.runCollect53(cap, ::post, ::showFrame)
+        }
     }
 
     /** Starts a lap session, or stops the one in progress. The plan and its timeouts come
@@ -1623,25 +1632,36 @@ class MeasurementActivity : AppCompatActivity() {
         grid.digitalBoost = 1.0
         val session = LapSession(this, sensors, object : LapSession.Host {
             override fun startBlock(method: String) {
-                if (method == "collect") startCollect() else launchRunnerCommand(method)
+                if (method == "collect") {
+                    // Each collection block opens one base ISO further along than the
+                    // last, so the lap cut short by the block switch is not always the
+                    // same ISO's.
+                    lapCollectBlockOrdinal++
+                    startCollect()
+                } else launchRunnerCommand(method)
             }
             override fun stopBlock() = stopMeasurement(userInitiated = false)
             override fun status(text: String) { lapButton.text = "STOP · $text" }
             override fun buzz(ms: Long) = vibrate(ms)
+            override fun beep(times: Int) = playLapBeeps(times)
+            override fun lapStarted(method: String, lapsInBlock: Int) {
+                // One base ISO per lap: the collection run reads this before each frame.
+                if (method == "collect")
+                    mc?.collectBaseOverride = lapsInBlock + lapCollectBlockOrdinal
+            }
             override fun sessionEnded(completed: Boolean) {
                 lapSession = null
                 // An aborted session can end while its last run is still winding down;
                 // the boost goes back only once no run can still be forming images.
                 if (!runActive) restoreBoostAfterLapSession()
                 lapButton.text = if (completed) "Lap session · done" else "Lap session"
-                // Heard only when the whole plan ran out, never on a stop the operator made.
-                if (completed) playLapSessionDoneSound()
             }
         }, plan, intent.getIntExtra("lap_repeats", LapSession.DEFAULT_REPEATS).coerceAtLeast(1),
             leadInTimeoutS = intent.getIntExtra("lap_leadin_s", 90).coerceAtLeast(1),
             fallbackLapS = intent.getIntExtra("lap_fallback_s", 15).coerceAtLeast(3),
             startDelayS = intent.getIntExtra("lap_start_delay_s", 5).coerceAtLeast(0))
         lapSession = session
+        lapCollectBlockOrdinal = -1
         vibrate(120)
         session.start()
     }
@@ -1651,17 +1671,18 @@ class MeasurementActivity : AppCompatActivity() {
         boostBeforeLapSession = -1.0
     }
 
-    /** Three long beeps on the ALARM stream, so the end of a session is heard from across
-     *  the room whatever the media volume is and with the phone on silent. */
-    private fun playLapSessionDoneSound() {
+    /** Long beeps on the ALARM stream, so they are heard from across the room whatever the
+     *  media volume is and with the phone on silent: one when a lap session really
+     *  starts, three when its whole plan is done. */
+    private fun playLapBeeps(times: Int) {
         val tone = runCatching {
             android.media.ToneGenerator(android.media.AudioManager.STREAM_ALARM, 100)
         }.getOrNull() ?: return
         val handler = android.os.Handler(android.os.Looper.getMainLooper())
-        for (i in 0 until 3) handler.postDelayed({
+        for (i in 0 until times) handler.postDelayed({
             runCatching { tone.startTone(android.media.ToneGenerator.TONE_DTMF_D, 450) }
         }, i * 750L)
-        handler.postDelayed({ runCatching { tone.release() } }, 3_500L)
+        handler.postDelayed({ runCatching { tone.release() } }, times * 750L + 1_000L)
     }
 
     private fun launchRunnerCommand(cmd: String) {
