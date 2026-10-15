@@ -1700,14 +1700,14 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** auto_collect's three steps: question 1 (synthesis reproduces the real photo)
      *  with the phone still, questions 1 and 2 on the Limo, and the one-time read noise.
-     *  Still: 60 frames, old and new image pipeline alternating (~2 min). Limo: four rounds,
+     *  Still: 30 frames, old and new image pipeline alternating (~1 min). Limo: four rounds,
      *  40 laps (~9 min): collection 20 (four per base ISO, for aligning synthesized and
      *  real photos by track position), each compared method 4.
      *  v3cause runs at theta 0.10 only; v3cause_t020, v3cause_inf and v3cause_pilot still
      *  start by name. */
     private val EXP_PRESETS = listOf(
         LapPreset("read noise", run = "readnoise"),
-        LapPreset("question 1, still", run = "collect55_ab", cap = 60),
+        LapPreset("question 1, still", run = "collect55_ab", cap = 30),
         LapPreset("questions 1+2, Limo", LIMO_ROUND, 4)
     )
 
