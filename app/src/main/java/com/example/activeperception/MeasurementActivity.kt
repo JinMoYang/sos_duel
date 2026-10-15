@@ -1670,8 +1670,8 @@ class MeasurementActivity : AppCompatActivity() {
         LapPreset("Static: claim 1 — collect 5x5 old/new A/B, 150 frames",
             run = "collect55_ab", cap = 150),
         LapPreset("Static: read noise (cover the lens)", run = "readnoise"),
-        LapPreset("Static: v3cause desk check, 20 frames", run = "v3cause_t010", cap = 20),
-        LapPreset("Static: v3cause pilot desk check, 20 frames", run = "v3cause_pilot", cap = 20)
+        LapPreset("Static: v3cause desk check, 400 frames (~40 s)", run = "v3cause_t010", cap = 400),
+        LapPreset("Static: v3cause pilot desk check, 400 frames", run = "v3cause_pilot", cap = 400)
     )
 
     /** Frame cap and image saving for the current preset-started run or session. */
