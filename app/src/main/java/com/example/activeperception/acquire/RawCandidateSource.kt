@@ -4,7 +4,8 @@ import android.graphics.Bitmap
 
 /**
  * One linear RAW frame: black-level-subtracted Bayer plane plus geometry / CFA / white level.
- * `bayer.size == width * height`, values in [0, maxDn].
+ * `bayer.size == width * height`. Values are signed and at most maxDn - black: below-black
+ * noise is kept so sums and averages stay unbiased; formation clips once at the end.
  */
 class RawFrame(
     val bayer: IntArray,

@@ -209,6 +209,15 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
      *  fixed-focus lens (minimum 0) is left alone. */
     @Volatile var fixedFocusDiopters: Float = 2.0f
     var minFocusDiopters: Float = 0f; private set
+    /** SENSOR_INFO_EXPOSURE_TIME_RANGE in microseconds (0 when not reported). */
+    var exposureMinUs: Long = 0; private set
+    var exposureMaxUs: Long = 0; private set
+
+    /** Diagnostic tap for read-noise measurement: while set, every decoded frame also hands
+     *  over an UNBINNED crop of raw pixels from the sensor centre, black removed, signed,
+     *  together with its metadata. Called on decode threads. */
+    class RawTap(val cropW: Int, val cropH: Int, val sink: (IntArray, RawMeta) -> Unit)
+    @Volatile var rawTap: RawTap? = null
 
     fun applyFixedFocus(builder: CaptureRequest.Builder) {
         val d = fixedFocusDiopters
@@ -287,6 +296,9 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         }
         maxAnalogIso = chars.get(CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY) ?: 0
         minFocusDiopters = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+        chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)?.let {
+            exposureMinUs = it.lower / 1_000L; exposureMaxUs = it.upper / 1_000L
+        }
         Log.i(TAG, "sensitivity range=[$sensorIsoMin,$sensorIsoMax] maxAnalog=$maxAnalogIso " +
             "minFocus=${minFocusDiopters}dpt fixedFocus=${fixedFocusDiopters}dpt")
         cfaPattern = when (chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)) {
@@ -1384,8 +1396,39 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             whiteBalance = calibration.first.copyOf(),
             cameraToSrgb = calibration.second.copyOf()
         )
+        rawTap?.let { tap ->
+            runCatching {
+                tap.sink(rawCrop(bytes, rowStride, pixelStride, black, tap.cropW, tap.cropH), meta)
+            }
+        }
         return Decoded(RawFrame(out, outWidth, outHeight, cfaPattern, maxDn,
             sensorOrientation, calibration.first.copyOf(), calibration.second.copyOf()), meta)
+    }
+
+    /** Centre crop of raw pixels, NOT binned, black removed per CFA channel, signed. The
+     *  crop origin is even, so the CFA phase of the crop equals the sensor's. */
+    private fun rawCrop(
+        bytes: java.nio.ByteBuffer, rowStride: Int, pixelStride: Int, black: IntArray,
+        cropW: Int, cropH: Int
+    ): IntArray {
+        val cw = minOf(cropW, width) and 1.inv(); val ch = minOf(cropH, height) and 1.inv()
+        val x0 = ((width - cw) / 2) and 1.inv(); val y0 = ((height - ch) / 2) and 1.inv()
+        val out = IntArray(cw * ch)
+        val raw10 = streamFormat == ImageFormat.RAW10
+        for (y in 0 until ch) {
+            val sy = y0 + y
+            for (x in 0 until cw) {
+                val sx = x0 + x
+                val v = if (raw10) {
+                    val off = sy * rowStride + (sx / 4) * 5
+                    val k = sx % 4
+                    ((bytes.get(off + k).toInt() and 0xff) shl 2) or
+                        (((bytes.get(off + 4).toInt() and 0xff) ushr (2 * k)) and 3)
+                } else bytes.getShort(sy * rowStride + sx * pixelStride).toInt() and 0xFFFF
+                out[y * cw + x] = v - black[(sy and 1) * 2 + (sx and 1)]
+            }
+        }
+        return out
     }
 
     /** Every 4x4 sensor block -> one 2x2 Bayer quad; each site is the mean of the block's

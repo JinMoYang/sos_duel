@@ -487,6 +487,60 @@ class ParallelRawCandidateSource(
     }
 
     /**
+     * One batch whose lanes come from DIFFERENT frames: lane i is frame [laneFrame][i] at
+     * digital ratio [laneRatio][i] (burst 1). proposed_v3cause uses it to detect the base,
+     * its digitally brightened copies and the extra exposures in a single inference. Same
+     * fused native fill as every other path.
+     */
+    fun formFramesTensor(
+        frames: List<RawFrame>, laneFrame: IntArray, laneRatio: DoubleArray, imgsz: Int = 640
+    ): Exp21TensorResult {
+        require(frames.isNotEmpty() && laneFrame.size == laneRatio.size && laneRatio.isNotEmpty())
+        val started = System.nanoTime()
+        val count = laneRatio.size
+        val floatsPerFrame = imgsz * imgsz * 3
+        val input = exp21TensorBuffers.computeIfAbsent(count) {
+            ByteBuffer.allocateDirect(count * floatsPerFrame * 4).order(ByteOrder.nativeOrder())
+        }
+        val f0 = frames[0]
+        val lut = lutFor(f0.maxDn)
+        NativeTensorPreprocessor.clearTensor(input, 0, count * floatsPerFrame, 114f / 255f)
+        val degrees = (f0.sensorOrientation % 360 + 360) % 360
+        val rgbW = f0.width / 2; val rgbH = f0.height / 2
+        val orientedH = if (degrees == 90 || degrees == 270) rgbW else rgbH
+        val orientedW = if (degrees == 90 || degrees == 270) rgbH else rgbW
+        val scale = minOf(imgsz.toFloat() / orientedW, imgsz.toFloat() / orientedH)
+        val nh = Math.round(orientedH * scale)
+        val byFrame = (0 until count).groupBy { laneFrame[it] }
+        val stripes = when (byFrame.size) { 1 -> 4; 2 -> 2; else -> 1 }
+        val futures = ArrayList<java.util.concurrent.Future<Double>>()
+        for ((fi, lanes) in byFrame) {
+            val frame = frames[fi]
+            val gains = DoubleArray(lanes.size) { laneRatio[lanes[it]] }
+            val bases = IntArray(lanes.size) { lanes[it] * floatsPerFrame }
+            repeat(stripes) { stripe ->
+                val y0 = stripe * nh / stripes; val y1 = (stripe + 1) * nh / stripes
+                futures += pool.submit<Double> {
+                    val cpuStart = System.nanoTime()
+                    check(NativeTensorPreprocessor.fillFusedBayerSrgbRowStripe(
+                        arrayOf(frame.bayer), 1, frame.width, frame.height, frame.cfaPattern,
+                        frame.sensorOrientation, gains, bases, lut, input, imgsz, y0, y1))
+                    (System.nanoTime() - cpuStart) / 1e6
+                }
+            }
+        }
+        val cpuMs = futures.sumOf { it.get() }
+        input.rewind()
+        val nw = Math.round(orientedW * scale)
+        val mapping = TensorLetterbox(scale.toDouble(),
+            ((imgsz - nw) / 2f).toDouble(), ((imgsz - nh) / 2f).toDouble())
+        val end = System.nanoTime()
+        return Exp21TensorResult(DirectTensorBatch(input, List(count) { mapping }),
+            Exp21PathProfile("V3_frames_native", count,
+                (end - started) / 1e6, cpuMs, 0.0, (end - started) / 1e6))
+    }
+
+    /**
      * EXP6 integrated path: RAW burst sum, 2x2 demosaic, gain, sRGB and letterbox are fused
      * in native code. It avoids per-row summed Bayer and three full RGB IntArrays while
      * retaining the exact FIRST_N and integer-green-average semantics of the reference.

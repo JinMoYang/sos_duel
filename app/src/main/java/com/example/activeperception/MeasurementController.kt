@@ -24,6 +24,7 @@ import com.example.activeperception.acquire.NeuralAeNet
 import com.example.activeperception.acquire.RegimeClassifier
 import com.example.activeperception.acquire.ShinMetric
 import com.example.activeperception.acquire.Signal
+import com.example.activeperception.acquire.V3Cause as V
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -174,7 +175,13 @@ class MeasurementController(
         // for any of it to mean anything: on USB the phone charges while the run drains
         // it, so a tethered run has to be rejected, not averaged in.
         "batt_charge_uah", "batt_current_ua", "batt_voltage_mv", "batt_pct", "batt_plugged"
-    ) + StepClock.HEADERS
+    ) + StepClock.HEADERS + V3_FRAME_HEADERS
+
+    /** proposed_v3cause's per-frame summary (device spec 6.4); blank for every other method.
+     *  capture_ms / formation_ms / infer_ms are the shared columns above. */
+    private val V3_FRAME_HEADERS = listOf("base_again", "weak_max", "k", "plan", "applied",
+        "delta_d", "delta_l", "n_images", "n_captures", "t_capture_start", "t_capture2_start",
+        "t_capture_end", "t_output", "flow_ms", "fusion_ms", "plan_ms")
 
     /** Per-step timeline shared by every method that logs through [logFrame]. */
     private val stepClock = StepClock()
@@ -443,14 +450,20 @@ class MeasurementController(
         applyBoost: Boolean = true,
         /** Capture round trip in ms. Defaulted so call sites that do not time the capture
          *  separately keep compiling; they log it blank rather than a wrong number. */
-        captureMs: Double = -1.0
+        captureMs: Double = -1.0,
+        /** proposed_v3cause's columns, in [V3_FRAME_HEADERS] order; blank otherwise. */
+        v3Extra: List<Any?>? = null,
+        /** False when the method writes its own, richer dets.jsonl line. */
+        writeDetsLine: Boolean = true,
+        /** The capture whose metadata the row describes, when it is not raw.lastMeta[0]. */
+        metaOverride: RawSensorCapturer.RawMeta? = null
     ) {
         // Published before the mode's onFrame callback fires, so listeners see the matching id.
         lastFrameIdx = idx
         detectionTotalAtFloor += dets.size
         detectionTotalAboveThresh += dets.count { it.confidence >= selectConf }
         totalFramesLogged += 1
-        val m = raw.lastMeta.firstOrNull()
+        val m = metaOverride ?: raw.lastMeta.firstOrNull()
         val aeIsoCol = if (aeIso < 0) "" else aeIso.toString()
         val aeExpCol = if (aeExpUs < 0) "" else aeExpUs.toString()
         val healthNow = health.sample()
@@ -484,10 +497,11 @@ class MeasurementController(
             if (healthNow.chargeUAh == Long.MIN_VALUE) "" else healthNow.chargeUAh,
             if (healthNow.currentUA == Int.MIN_VALUE) "" else healthNow.currentUA,
             healthNow.voltageMv, healthNow.batteryPct, healthNow.pluggedState,
-            *stepClock.columns(StepClock.nowNs()).toTypedArray()
+            *stepClock.columns(StepClock.nowNs()).toTypedArray(),
+            *(v3Extra ?: List(V3_FRAME_HEADERS.size) { "" }).map { it ?: "" }.toTypedArray()
         ))
         stepClock.reset()
-        writeDets(idx, method, chosenCell, dets)
+        if (writeDetsLine) writeDets(idx, method, chosenCell, dets)
     }
 
     // ---------- Fixed ----------
@@ -3622,6 +3636,554 @@ class MeasurementController(
         fallback = fallback,
         onFrame = onFrame
     )
+
+    // ---------- proposed_v3cause (device spec "v3 cause 판") ----------
+
+    /** App files dir (getExternalFilesDir), where the read-noise table lives across runs. */
+    @Volatile var appFilesDir: java.io.File? = null
+
+    /** Read noise in DN per analog gain, measured once per device by [runReadNoise]. Between
+     *  measured gains it is interpolated linearly in log(gain); outside, the nearest holds. */
+    private class ReadNoiseTable(val gains: DoubleArray, val rnDn: DoubleArray, val json: JSONObject) {
+        fun at(gain: Double): Double {
+            if (gains.isEmpty() || gain.isNaN()) return Double.NaN
+            if (gain <= gains.first()) return rnDn.first()
+            if (gain >= gains.last()) return rnDn.last()
+            val i = gains.indexOfLast { it <= gain }
+            val t = (kotlin.math.ln(gain) - kotlin.math.ln(gains[i])) /
+                (kotlin.math.ln(gains[i + 1]) - kotlin.math.ln(gains[i]))
+            return rnDn[i] + t * (rnDn[i + 1] - rnDn[i])
+        }
+
+        companion object {
+            const val FILE = "read_noise.json"
+            fun load(dir: java.io.File?): ReadNoiseTable? = runCatching {
+                val j = JSONObject(java.io.File(requireNotNull(dir), FILE).readText())
+                val g = j.getJSONArray("gains_req"); val r = j.getJSONArray("rn_dn")
+                val pairs = (0 until g.length()).map { g.getDouble(it) to r.getDouble(it) }
+                    .filter { it.second.isFinite() }.sortedBy { it.first }
+                ReadNoiseTable(pairs.map { it.first }.toDoubleArray(),
+                    pairs.map { it.second }.toDoubleArray(), j)
+            }.getOrNull()
+        }
+    }
+
+    /** Luma of a formed lane at half resolution (320x320 for the 640 input), divided by its
+     *  mean so a base-gain change between frames does not look like motion. */
+    private fun tensorGrayHalf(t: Exp21TensorResult, lane: Int, imgsz: Int = 640):
+        com.example.activeperception.acquire.SparseFlow.Img {
+        val n = imgsz * imgsz * 3
+        val buf = t.batch.input.duplicate().order(java.nio.ByteOrder.nativeOrder())
+        buf.position(lane * n * 4)
+        val f = FloatArray(n)
+        buf.asFloatBuffer().get(f)
+        val h = imgsz / 2
+        val out = FloatArray(h * h)
+        var sum = 0.0
+        for (y in 0 until h) for (x in 0 until h) {
+            var g = 0f
+            for (dy in 0..1) for (dx in 0..1) {
+                val p = ((2 * y + dy) * imgsz + 2 * x + dx) * 3
+                g += 0.299f * f[p] + 0.587f * f[p + 1] + 0.114f * f[p + 2]
+            }
+            out[y * h + x] = g * 0.25f
+            sum += out[y * h + x]
+        }
+        val mean = (sum / out.size).toFloat().coerceAtLeast(1e-6f)
+        for (i in out.indices) out[i] /= mean
+        return com.example.activeperception.acquire.SparseFlow.Img(h, h, out)
+    }
+
+    /**
+     * proposed_v3cause. Every frame: one base capture (fixed T0, analog base gain) plus the
+     * extras planned on the previous frame, all in ONE capture request; every image detected
+     * in one batch and fused. Then, from this frame's base alone: weak responses, which of
+     * them flickered (recently output), why each was missed (saturated / blurred / too little
+     * light / only too dark), and the cheapest image that fixes the most places, for the next
+     * frame. The base gain moves slowly toward the largest gain that keeps output boxes from
+     * saturating. Burst sums are never used. Decision rules: [V3Cause] (Appendix A port).
+     *
+     * [pilot]: after any frame whose weak max s >= 0.05 the next frame acquires all four
+     * remedies at fixed deltas (digital x4, long x2) for the record; the output still fuses
+     * only what v3cause would have chosen, and the delta table is not updated.
+     * [theta] = +infinity is the no-extras arm (base rules only).
+     */
+    fun runV3Cause(
+        theta: Double, pilot: Boolean, maxFrames: Int,
+        onStatus: (String) -> Unit,
+        onFrame: (Bitmap, List<Detection>, Int, Int) -> Unit = { _, _, _, _ -> }
+    ) {
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+            ?: error("proposed_v3cause requires TfliteYoloDetector")
+        val kappa = 5.0
+        val dgainMax = 16.0
+        // ---- start values: phone AE is metered here only and never used inside the method.
+        onStatus("v3cause: metering the start values with phone AE…")
+        var aeIso = -1; var aeExpUs = -1L
+        repeat(6) {
+            runCatching { raw.captureAe(1) }.getOrNull()?.let {
+                raw.lastMeta.firstOrNull()?.let { m -> aeIso = m.appliedIso; aeExpUs = m.appliedExpUs }
+            }
+        }
+        val isoMin = raw.sensorIsoMin.toDouble()
+        val againMax = v2AnalogCeil().toDouble()
+        val expMinUs = maxOf(1L, raw.exposureMinUs).toDouble()
+        val expMaxUs = (if (raw.exposureMaxUs > 0) raw.exposureMaxUs else 176_000L).toDouble()
+        val haveAe = aeIso > 0 && aeExpUs > 0
+        // T0 = min(1/60 s, AE's exposure converted to the minimum ISO): fixed for the run.
+        val t0Us = if (haveAe) minOf(16_667.0, aeExpUs.toDouble() * aeIso / isoMin)
+            .coerceAtLeast(expMinUs) else 16_667.0
+        val t0S = t0Us / 1e6
+        val t0UsInt = Math.round(t0Us).toInt()
+        val gainStart = (if (haveAe) aeIso * aeExpUs.toDouble() / t0Us else 400.0)
+            .coerceIn(isoMin, againMax)
+        val rn = ReadNoiseTable.load(appFilesDir)
+        if (rn == null) onStatus("v3cause: no read_noise.json — run readnoise first; 'too little light' then uses the gain limit only")
+        val mode = if (pilot) "proposed_v3cause_pilot" else "proposed_v3cause"
+        val thetaTag = if (theta.isInfinite()) "inf" else "%03d".format(Math.round(theta * 100))
+        startPass("${mode}_t$thetaTag", isGtReference = false, methodParams = JSONObject()
+            .put("mode", mode).put("theta", if (theta.isInfinite()) "inf" else theta)
+            .put("two_shot_threshold", V.TWO_SHOT_S).put("flicker_window", V.FLICKER_WINDOW)
+            .put("saturated_place", V.SAT_PLACE).put("blur_ratio", V.BLUR_RATIO)
+            .put("kappa", kappa).put("base_saturation", V.BASE_SAT)
+            .put("hysteresis", V.HYST_WINDOW).put("delta_candidates", JSONArray(listOf(1, 2, 3, 4, 5)))
+            .put("digital_gain_max", dgainMax)
+            .put("T0_us", t0Us).put("T0_rule", "min(1/60 s, AE exposure x AE ISO / min ISO)")
+            .put("start_gain", gainStart).put("start_gain_rule", "AE ISO x AE exposure / T0, clipped to analog range")
+            .put("ae_start", JSONObject().put("iso", aeIso).put("exposure_us", aeExpUs))
+            .put("analog_gain_range", JSONArray(listOf(isoMin, againMax)))
+            .put("exposure_range_us", JSONArray(listOf(expMinUs, expMaxUs)))
+            .put("long_cap_rule", "min(sensor max, T0 x 0.03 / blur ratio at T0 of the long-targeted places)")
+            .put("read_noise", rn?.json ?: JSONObject.NULL)
+            .put("saturation_rule", "(site - black) x scale >= (white - black) on decoded sites " +
+                "(each the mean of 4 same-colour pixels)")
+            .put("motion_rule", "pyramidal LK on half-res luma of the formed base, <= 8 corners " +
+                "per box, median displacement, detector-input px")
+            .put("pilot_fixed", if (pilot) JSONObject().put("digital_delta", 2).put("long_delta", 1)
+                else JSONObject.NULL)
+            .put("detector", "yolov8n tflite, vehicle classes, conf >= 0.05 kept")
+            .put("input_size", 640))
+        val src = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
+        onStatus("warming FP16 GPU batches…")
+        tfl.warmUpAllBatches()
+
+        // ---- state
+        var baseGain = gainStart
+        val targets = ArrayDeque<Double>()
+        val outHist = ArrayDeque<List<com.example.activeperception.acquire.V3Cause.D>>()
+        val dN = IntArray(6); val dS = DoubleArray(6)
+        val lN = IntArray(6); val lS = DoubleArray(6)
+        class PlanItem(val remedy: String, val delta: Int, val deltaMode: String, val longCapUs: Double)
+        class Acq(val remedy: String, val delta: Int, val deltaMode: String, val expUs: Double,
+                  val again: Double, val dgain: Double, val clamped: String, val inOutput: Boolean)
+        var plan: List<PlanItem> = emptyList()
+        var pilotAll = false
+        var pilotCapUs = Double.POSITIVE_INFINITY
+        var prevGray: List<com.example.activeperception.acquire.SparseFlow.Img>? = null
+        var prevBaseStartNs = 0L
+        class Pending(val json: JSONObject, val box: DoubleArray)
+        var pending: List<Pending> = emptyList()
+        var placeId = 0
+        var failures = 0
+
+        fun acquireSetting(p: PlanItem, inOutput: Boolean): Acq {
+            val s = V.remedySetting(p.remedy, t0S, baseGain, p.delta, againMax, dgainMax)
+            var expUs = s.exposureS * 1e6
+            var clamped = "none"
+            if (p.remedy == "digital" && Math.pow(2.0, p.delta.toDouble()) > dgainMax) clamped = "dgain_max"
+            if (p.remedy == "short_blur" && baseGain * 2 > againMax) clamped = "gain_max"
+            if (p.remedy != "digital") {
+                if (expUs < expMinUs) { expUs = expMinUs; clamped = "exp_min" }
+                if (expUs > expMaxUs) { expUs = expMaxUs; clamped = "exp_max" }
+                if (p.remedy == "long" && expUs > p.longCapUs) { expUs = p.longCapUs; clamped = "blur_limit" }
+            }
+            return Acq(p.remedy, p.delta, p.deltaMode, expUs, s.again, s.dgain, clamped, inOutput)
+        }
+        fun jsonBox(b: DoubleArray) = JSONArray(b.toList())
+        fun nul(v: Double) = if (v.isNaN() || v.isInfinite()) JSONObject.NULL else v
+
+        try {
+            var f = 0
+            while (running && f < maxFrames) {
+                val t0 = now()
+                stepClock.begin()
+                // ---- A1. One capture request: base + this frame's physical extras.
+                val planned = plan.map { acquireSetting(it, inOutput = true) }
+                val acquire: List<Acq> = if (pilot && pilotAll) {
+                    val chosen = plan.map { it.remedy }.toSet()
+                    V.ORDER.map { r ->
+                        acquireSetting(PlanItem(r, if (r == "digital") 2 else if (r == "long") 1 else 0,
+                            "fixed", pilotCapUs), inOutput = r in chosen)
+                    }
+                } else planned
+                val physical = acquire.filter { it.remedy != "digital" }
+                val shots = ArrayList<Pair<Int, Int>>()
+                shots += t0UsInt to Math.round(baseGain).toInt()
+                for (p in physical) shots += Math.round(p.expUs).toInt() to Math.round(p.again).toInt()
+                val got = ArrayList<Pair<RawFrame, RawSensorCapturer.RawMeta>>()
+                val handle = raw.beginBracketSequence(shots)
+                val okCapture = runCatching {
+                    for (i in shots.indices) got += raw.takeBracketFrame(handle, i)
+                }.isSuccess
+                if (!okCapture) {
+                    raw.abortBracketSequence(handle)
+                    failures++
+                    onStatus("v3cause: capture failed ($failures)")
+                    if (failures >= 5) break
+                    continue
+                }
+                failures = 0
+                val metas = got.map { it.second }
+                val frames = got.map { it.first }
+                stepClock.captured(metas)
+                val tCap = now()
+                val captureMs = msBetween(t0, tCap)
+
+                // ---- A2. Images: base, digital copies of the base RAW, physical extras.
+                class Im(val role: String, val frameIdx: Int, val ratio: Double, val acq: Acq?)
+                val imgs = ArrayList<Im>()
+                imgs += Im("base", 0, 1.0, null)
+                for (a in acquire) if (a.remedy == "digital") imgs += Im("digital", 0, a.dgain, a)
+                physical.forEachIndexed { i, a -> imgs += Im(a.remedy, i + 1, 1.0, a) }
+                val tensor = src.formFramesTensor(frames,
+                    IntArray(imgs.size) { imgs[it].frameIdx }, DoubleArray(imgs.size) { imgs[it].ratio })
+                stepClock.formed()
+                val dets = tfl.detectTensorBatchOptimized(tensor.batch)
+                stepClock.detected()
+                val inferMs = tfl.lastRunMs + tfl.lastDecodeMs
+                val formMs = ms(tCap) - inferMs
+                val tFlow0 = now()
+                val curGray = com.example.activeperception.acquire.SparseFlow.pyramid(tensorGrayHalf(tensor, 0))
+                var flowMs = ms(tFlow0)
+                val map0 = tensor.batch.transforms[0]
+                val samplers = frames.mapIndexed { i, fr ->
+                    com.example.activeperception.acquire.RawBoxSampler(fr, metas[i].blackLevels, metas[i].white.toDouble())
+                }
+                val per = imgs.indices.map { a ->
+                    V.perImage(dets[a].filter { it.confidence >= 0.05f }.map { d ->
+                        V.D(d.confidence.toDouble(), DoubleArray(4) { d.xyxy[it].toDouble() }, d.classId)
+                    })
+                }
+                fun satOf(a: Int): (DoubleArray) -> Double =
+                    { box -> samplers[imgs[a].frameIdx].satFrac(box, imgs[a].ratio) }
+
+                // ---- A4. Delta table update from this frame's digital / long images.
+                val deltaUpdates = JSONArray()
+                for (a in imgs.indices) {
+                    val acq = imgs[a].acq ?: continue
+                    if (acq.remedy != "digital" && acq.remedy != "long") continue
+                    val x = V.addedBoxes(per[a].out, per[0].out, satOf(a))
+                    val update = !pilot
+                    if (update) {
+                        if (acq.remedy == "digital") { dN[acq.delta]++; dS[acq.delta] += x }
+                        else { lN[acq.delta]++; lS[acq.delta] += x }
+                    }
+                    deltaUpdates.put(JSONObject().put("remedy", acq.remedy).put("delta", acq.delta)
+                        .put("added_boxes", x).put("updated", update))
+                }
+
+                // ---- A3. Fuse (pilot: only what v3cause would have chosen).
+                val tFuse0 = now()
+                val fuseIdx = imgs.indices.filter { it == 0 || imgs[it].acq?.inOutput == true }
+                val clusters = V.fuse(fuseIdx.map { V.FuseImage(per[it].out, per[it].low, satOf(it)) })
+                val kept = clusters.filter { it.status == "kept" }
+                val fusionMs = ms(tFuse0)
+                val tOutputNs = StepClock.nowNs()
+                val outDets = kept.map { c ->
+                    Detection(FloatArray(4) { c.box[it].toFloat() }, c.evidence.toFloat(), c.cls)
+                }
+
+                // ---- Outcomes of the previous frame's places in this frame's images.
+                for (p in pending) {
+                    val oc = JSONObject()
+                    for (a in 1 until imgs.size) oc.put(imgs[a].role,
+                        per[a].low.filter { V.iou(it.box, p.box) >= V.PLACE_IOU }.maxOfOrNull { it.conf } ?: 0.0)
+                    p.json.put("outcome", oc).put("outcome_frame", f)
+                        .put("base_next", per[0].low.filter { V.iou(it.box, p.box) >= V.PLACE_IOU }
+                            .maxOfOrNull { it.conf } ?: 0.0)
+                    logger.jsonl("places", p.json)
+                }
+                pending = emptyList()
+
+                // ---- B. Next frame's plan, from this frame's base alone.
+                val tPlan0 = now()
+                val baseStartNs = metas[0].timestamp
+                val frameDtS = if (prevBaseStartNs > 0) (baseStartNs - prevBaseStartNs) / 1e9 else Double.NaN
+                val againApplied = metas[0].appliedIso.toDouble()
+                val rnNow = rn?.at(againApplied) ?: Double.NaN
+                val againAtMax = baseGain >= againMax - 0.5
+                val weak = per[0].weak
+                val hist = outHist.toList()
+                class Info(val d: com.example.activeperception.acquire.V3Cause.D, val sat: Double,
+                           val signal: Double, val motion: Double, val blur: Double,
+                           val cause: String, val flicker: Int)
+                val infos = weak.map { w ->
+                    val st = samplers[0].stats(w.box, doubleArrayOf(1.0))
+                    val tFl = now()
+                    val motion = prevGray?.let { pg ->
+                        val gx0 = (w.box[0] * map0.scale + map0.padX) / 2
+                        val gy0 = (w.box[1] * map0.scale + map0.padY) / 2
+                        val gx1 = (w.box[2] * map0.scale + map0.padX) / 2
+                        val gy1 = (w.box[3] * map0.scale + map0.padY) / 2
+                        com.example.activeperception.acquire.SparseFlow.boxMotion(pg, curGray, gx0, gy0, gx1, gy1) *
+                            2.0 / map0.scale
+                    } ?: Double.NaN
+                    flowMs += ms(tFl)
+                    Info(w, st.satFrac[0], st.meanDn, motion,
+                        V.blurRatio(w.box, motion, t0S, frameDtS),
+                        V.cause(w.box, st.satFrac[0], motion, t0S, frameDtS, st.meanDn, rnNow, againAtMax, kappa),
+                        V.flickerCount(w.box, hist))
+                }
+                val infoOf = java.util.IdentityHashMap<com.example.activeperception.acquire.V3Cause.D, Info>()
+                infos.forEach { infoOf[it.d] = it }
+                val pl = V.planNext(weak, hist, { infoOf[it]!!.cause }, theta)
+                val placeSet = java.util.Collections.newSetFromMap(
+                    java.util.IdentityHashMap<com.example.activeperception.acquire.V3Cause.D, Boolean>())
+                placeSet.addAll(pl.places)
+                // Long exposures stop where the targeted places would start to blur.
+                val longCapUs = minOf(expMaxUs, pl.places.mapNotNull { d ->
+                    val i = infoOf[d]!!
+                    if (i.cause == "long" && i.blur > 0) t0Us * V.BLUR_RATIO / i.blur else null
+                }.minOrNull() ?: Double.POSITIVE_INFINITY)
+                val nextPlan = pl.chosen.map { r ->
+                    when {
+                        pilot -> PlanItem(r, if (r == "digital") 2 else if (r == "long") 1 else 0, "fixed", longCapUs)
+                        r == "digital" -> V.pickDelta(dN, dS).let { (d, m) -> PlanItem(r, d, m, longCapUs) }
+                        r == "long" -> V.pickDelta(lN, lS).let { (d, m) -> PlanItem(r, d, m, longCapUs) }
+                        else -> PlanItem(r, 0, "none", longCapUs)
+                    }
+                }
+                // Place records; outcomes are filled from the next frame.
+                pending = infos.map { i ->
+                    val inPlaces = i.d in placeSet
+                    Pending(JSONObject().put("frame", f).put("place_id", placeId++)
+                        .put("box", jsonBox(i.d.box)).put("conf", i.d.conf)
+                        .put("flicker_count", i.flicker).put("in_places", inPlaces)
+                        .put("sat_frac", i.sat).put("motion_px", nul(i.motion))
+                        .put("blur_ratio", i.blur).put("frame_dt_s", nul(frameDtS))
+                        .put("signal_dn", i.signal).put("read_noise_dn", nul(rnNow))
+                        .put("signal_over_rn", nul(i.signal / rnNow))
+                        .put("again_at_max", againAtMax).put("cause", i.cause)
+                        .put("targeted_by", if (inPlaces && i.cause in pl.chosen) i.cause else JSONObject.NULL),
+                        i.d.box)
+                }
+                outHist.addLast(per[0].out)
+                while (outHist.size > V.FLICKER_WINDOW) outHist.removeFirst()
+
+                // ---- 5. Base gain: slow, physical.
+                val scales = DoubleArray(9) { Math.pow(2.0, (it - 4).toDouble()) }
+                val satCache = HashMap<DoubleArray, DoubleArray>()
+                val bt = V.baseTarget(per[0].out, { box, s ->
+                    val fr = satCache.getOrPut(box) { samplers[0].stats(box, scales).satFrac }
+                    fr[scales.indexOfFirst { kotlin.math.abs(it - s) < 1e-9 }]
+                }, baseGain, isoMin, againMax)
+                val gainUsed = baseGain
+                var reason = "no_boxes"
+                var changed = false
+                if (bt != null) {
+                    targets.addLast(bt.target)
+                    while (targets.size > V.HYST_WINDOW) targets.removeFirst()
+                    val (ng, r) = V.hysteresis(baseGain, targets.toList())
+                    reason = r
+                    if (ng != baseGain) { baseGain = ng; changed = true }
+                }
+                val planMs = ms(tPlan0)
+                stepClock.decided()
+                val totalMs = ms(t0)
+
+                // ---- Records.
+                for (a in imgs.indices) {
+                    val im = imgs[a]
+                    val arr = JSONArray()
+                    for (d in dets[a]) {
+                        if (d.confidence < 0.05f) continue
+                        val box = DoubleArray(4) { d.xyxy[it].toDouble() }
+                        arr.put(JSONObject().put("xyxy", jsonBox(box)).put("conf", d.confidence.toDouble())
+                            .put("class", d.classId).put("sat", satOf(a)(box)))
+                    }
+                    val m = metas[im.frameIdx]
+                    logger.jsonl("candidate_dets", JSONObject().put("frame", f).put("role", im.role)
+                        .put("capture", im.frameIdx).put("exposure_us", m.appliedExpUs)
+                        .put("exposure_us_req", m.requestedExpUs)
+                        .put("analog_gain", m.appliedIso).put("analog_gain_req", m.requestedIso)
+                        .put("digital_gain", im.ratio).put("sensor_ts", m.timestamp)
+                        .put("in_output", a == 0 || im.acq?.inOutput == true)
+                        .put("dets", arr))
+                }
+                val outArr = JSONArray(); val dropArr = JSONArray()
+                val fuseRoles = JSONArray(fuseIdx.map { imgs[it].role })
+                for (c in clusters) {
+                    val o = JSONObject().put("xyxy", jsonBox(c.box)).put("evidence", c.evidence)
+                        .put("peak", c.peak).put("class", c.cls).put("n_pic", c.nPic)
+                        .put("r", JSONArray(c.r.toList())).put("w", JSONArray(c.w.toList()))
+                    if (c.status == "kept") outArr.put(o) else dropArr.put(o.put("reason", c.status))
+                }
+                logger.jsonl("dets", JSONObject().put("frame", f).put("method", mode).put("cell", -1)
+                    .put("roles", fuseRoles).put("dets", outArr).put("dropped", dropArr))
+                fun tableJson(n: IntArray, s: DoubleArray) = JSONObject()
+                    .put("n", JSONArray((1..5).map { n[it] })).put("sum", JSONArray((1..5).map { s[it] }))
+                logger.jsonl("decisions", JSONObject().put("frame", f)
+                    .put("base", JSONObject().put("exposure_us", t0UsInt)
+                        .put("again_req", Math.round(gainUsed)).put("again_applied", metas[0].appliedIso)
+                        .put("exp_applied", metas[0].appliedExpUs)
+                        .put("target_again", bt?.target ?: JSONObject.NULL)
+                        .put("target_j", bt?.j ?: JSONObject.NULL)
+                        .put("hyst_window", JSONArray(targets.toList()))
+                        .put("changed", changed).put("reason", reason).put("next_again", baseGain))
+                    .put("applied", JSONArray(acquire.map { a -> JSONObject().put("remedy", a.remedy)
+                        .put("delta", a.delta).put("delta_mode", a.deltaMode)
+                        .put("exposure_us", Math.round(a.expUs)).put("again", a.again).put("dgain", a.dgain)
+                        .put("clamped", a.clamped).put("in_output", a.inOutput) }))
+                    .put("delta_update", deltaUpdates)
+                    .put("delta_table", JSONObject().put("digital", tableJson(dN, dS)).put("long", tableJson(lN, lS)))
+                    .put("plan_next", JSONObject().put("s", pl.s).put("k", pl.k)
+                        .put("skip_reason", pl.skipReason).put("n_weak", pl.nWeak)
+                        .put("n_places", pl.nPlaces ?: JSONObject.NULL)
+                        .put("cause_counts", pl.causeCounts?.let { JSONObject(it as Map<*, *>) } ?: JSONObject.NULL)
+                        .put("ranked", pl.ranked?.let { r -> JSONArray(r.map { JSONArray(listOf(it.first, it.second)) }) }
+                            ?: JSONObject.NULL)
+                        .put("chosen", JSONArray(pl.chosen))
+                        .put("deltas", JSONArray(nextPlan.map { JSONObject().put("remedy", it.remedy)
+                            .put("delta", it.delta).put("delta_mode", it.deltaMode) }))
+                        .put("long_cap_us", nul(longCapUs))
+                        .put("pilot_all_next", pilot && pl.s >= V.WEAK_LO))
+                    .put("frame_dt_s", nul(frameDtS)).put("read_noise_dn", nul(rnNow)))
+
+                val bmp = src.selectedTensorBitmap(tensor, 0)
+                val path = saveImage("${frameName(f)}_base", bmp)
+                if (saveImages) for (a in 1 until imgs.size) {
+                    saveImage("${frameName(f)}_${imgs[a].role}", src.selectedTensorBitmap(tensor, a))
+                }
+                val lastEnd = metas.maxOf { it.timestamp + it.appliedExpUs * 1_000L }
+                logFrame(f, mode, -1, metas[0].appliedIso, metas[0].appliedExpUs.toInt(), imgs.size,
+                    physical.isNotEmpty(), formMs, inferMs, totalMs, outDets, path,
+                    tieBreak = if (pl.chosen.isEmpty()) pl.skipReason else pl.chosen.joinToString("+"),
+                    applyBoost = false, captureMs = captureMs,
+                    v3Extra = listOf(Math.round(gainUsed), "%.4f".format(pl.s), pl.k,
+                        pl.chosen.joinToString("+"), acquire.joinToString("+") { it.remedy },
+                        acquire.firstOrNull { it.remedy == "digital" }?.delta ?: "",
+                        acquire.firstOrNull { it.remedy == "long" }?.delta ?: "",
+                        imgs.size, shots.size, metas[0].timestamp,
+                        metas.getOrNull(1)?.timestamp ?: "", lastEnd, tOutputNs,
+                        "%.1f".format(flowMs), "%.1f".format(fusionMs), "%.1f".format(planMs)),
+                    writeDetsLine = false, metaOverride = metas[0])
+                runCatching { onFrame(bmp, src.detectionsForTensorPreview(outDets, tensor, 0),
+                    metas[0].appliedIso, t0UsInt) }
+                onStatus("v3cause f=$f g=${Math.round(gainUsed)} s=${"%.2f".format(pl.s)} " +
+                    "plan=${pl.chosen.joinToString("+").ifEmpty { pl.skipReason }} " +
+                    "imgs=${imgs.size} ${"%.0f".format(totalMs)}ms")
+
+                // ---- carry over
+                plan = nextPlan
+                pilotAll = pilot && pl.s >= V.WEAK_LO
+                pilotCapUs = longCapUs
+                prevGray = curGray
+                prevBaseStartNs = baseStartNs
+                f++
+            }
+        } finally {
+            for (p in pending) logger.jsonl("places", p.json.put("outcome", JSONObject.NULL))
+            runCatching { raw.stopFastCapture() }
+            runCatching { src.shutdown() }
+        }
+        endPass()
+    }
+
+    /**
+     * Read noise per analog gain, measured once per device with the LENS COVERED: for each
+     * gain, [framesPerGain] dark frames; per raw pixel (unbinned, sensor centre crop) the
+     * standard deviation over frames, averaged as RMS over pixels with hot pixels excluded.
+     * Also the same on decoded sites (mean of 4 pixels) for reference. Writes
+     * read_noise.json to the run and to the app files dir, where v3cause reads it.
+     */
+    fun runReadNoise(onStatus: (String) -> Unit, framesPerGain: Int = 20, exposureUs: Int = 16_667) {
+        startPass("readnoise", isGtReference = false, withFrames = false, methodParams = JSONObject()
+            .put("note", "lens covered").put("frames_per_gain", framesPerGain)
+            .put("exposure_us", exposureUs).put("crop_px", 512).put("site_crop", 256))
+        logger.csv("readnoise", listOf("gain_req", "gain_applied", "n_frames", "n_site_frames",
+            "exposure_us", "rn_pixel_dn", "rn_site_dn", "offset_dn", "fpn_dn", "hot_frac"))
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
+        val ceil = v2AnalogCeil()
+        val gains = listOf(raw.sensorIsoMin, 100, 200, 400, 800, ceil)
+            .filter { it in raw.sensorIsoMin..ceil }.distinct().sorted()
+        class Row(val gain: Int, val applied: Int, val n: Int, val ns: Int, val rn: Double,
+                  val rnSite: Double, val offset: Double, val fpn: Double, val hot: Double)
+        val rows = ArrayList<Row>()
+        /** RMS over pixels of the temporal std, hot pixels (> 25x the median variance) out. */
+        fun temporal(stack: List<IntArray>): DoubleArray {
+            if (stack.size < 2) return doubleArrayOf(Double.NaN, Double.NaN, Double.NaN, Double.NaN)
+            val m = stack[0].size
+            val varr = DoubleArray(m); val mean = DoubleArray(m)
+            for (p in 0 until m) {
+                var s = 0.0; var s2 = 0.0
+                for (fr in stack) { val v = fr[p].toDouble(); s += v; s2 += v * v }
+                val mu = s / stack.size
+                mean[p] = mu
+                varr[p] = (s2 - stack.size * mu * mu) / (stack.size - 1)
+            }
+            val med = varr.sorted()[m / 2].coerceAtLeast(1e-9)
+            val good = (0 until m).filter { varr[it] <= 25 * med }
+            val rnv = kotlin.math.sqrt(good.sumOf { varr[it] } / good.size)
+            val off = good.sumOf { mean[it] } / good.size
+            val fpn = kotlin.math.sqrt(good.sumOf { (mean[it] - off) * (mean[it] - off) } / good.size)
+            return doubleArrayOf(rnv, off, fpn, 1.0 - good.size.toDouble() / m)
+        }
+        try {
+            for (g in gains) {
+                if (!running) break
+                val crops = java.util.Collections.synchronizedList(ArrayList<IntArray>())
+                val applied = java.util.Collections.synchronizedList(ArrayList<Int>())
+                raw.rawTap = RawSensorCapturer.RawTap(512, 512) { crop, meta ->
+                    if (kotlin.math.abs(meta.appliedIso - g) <= maxOf(8, g / 100)) {
+                        crops.add(crop); applied.add(meta.appliedIso)
+                    }
+                }
+                val sites = ArrayList<IntArray>()
+                var tries = 0
+                while (running && crops.size < framesPerGain && tries < framesPerGain * 3) {
+                    tries++
+                    val fr = runCatching { raw.captureFast(exposureUs, g, 1) }.getOrNull() ?: continue
+                    if (fr.isEmpty()) continue
+                    val frame = fr[0]
+                    val n = 256
+                    val x0 = ((frame.width - n) / 2) and 1.inv(); val y0 = ((frame.height - n) / 2) and 1.inv()
+                    sites += IntArray(n * n) { i -> frame.bayer[(y0 + i / n) * frame.width + x0 + i % n] }
+                    onStatus("read noise ISO $g: ${crops.size}/$framesPerGain (cover the lens)")
+                }
+                raw.rawTap = null
+                val px = temporal(crops.toList())
+                val st = temporal(sites)
+                val ap = applied.toList().sorted().let { if (it.isEmpty()) -1 else it[it.size / 2] }
+                val row = Row(g, ap, crops.size, sites.size, px[0], st[0], px[1], px[2], px[3])
+                rows += row
+                logger.row("readnoise", listOf(g, ap, row.n, row.ns, exposureUs,
+                    "%.4f".format(row.rn), "%.4f".format(row.rnSite), "%.4f".format(row.offset),
+                    "%.4f".format(row.fpn), "%.5f".format(row.hot)))
+            }
+        } finally {
+            raw.rawTap = null
+            runCatching { raw.stopFastCapture() }
+        }
+        val j = JSONObject().put("device_model", Build.MODEL).put("measured_at_ms", System.currentTimeMillis())
+            .put("exposure_us", exposureUs).put("frames_per_gain", framesPerGain)
+            .put("gains_req", JSONArray(rows.map { it.gain })).put("gains_applied", JSONArray(rows.map { it.applied }))
+            .put("rn_dn", JSONArray(rows.map { if (it.rn.isNaN()) JSONObject.NULL else it.rn }))
+            .put("rn_site_dn", JSONArray(rows.map { if (it.rnSite.isNaN()) JSONObject.NULL else it.rnSite }))
+            .put("offset_dn", JSONArray(rows.map { if (it.offset.isNaN()) JSONObject.NULL else it.offset }))
+            .put("fpn_dn", JSONArray(rows.map { if (it.fpn.isNaN()) JSONObject.NULL else it.fpn }))
+            .put("hot_frac", JSONArray(rows.map { if (it.hot.isNaN()) JSONObject.NULL else it.hot }))
+            .put("n_frames", JSONArray(rows.map { it.n }))
+        runCatching { java.io.File(logger.dir, ReadNoiseTable.FILE).writeText(j.toString(2)) }
+        if (rows.isNotEmpty() && rows.all { it.n >= 2 }) {
+            runCatching { appFilesDir?.let { java.io.File(it, ReadNoiseTable.FILE).writeText(j.toString(2)) } }
+        }
+        onStatus("read noise: " + rows.joinToString(" ") { "ISO${it.gain}=${"%.2f".format(it.rn)}DN" })
+        endPass()
+    }
 
     // ---------- Continuous v2 (S26U): selection-following analog base ----------
 

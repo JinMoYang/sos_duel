@@ -1731,8 +1731,32 @@ class MeasurementActivity : AppCompatActivity() {
         handler.postDelayed({ runCatching { tone.release() } }, times * 750L + 1_000L)
     }
 
+    /** proposed_v3cause arms by name: v3cause_t010 / v3cause_t020 / v3cause_inf, and the
+     *  pilot v3cause_pilot (theta 0.10) or v3cause_pilot_t020. Null if [cmd] is not one. */
+    private fun v3Command(cmd: String): Pair<Double, Boolean>? {
+        if (!cmd.startsWith("v3cause")) return null
+        val pilot = cmd.startsWith("v3cause_pilot")
+        val t = Regex("_t(\\d{3})$").find(cmd)?.groupValues?.get(1)?.toIntOrNull()
+        val theta = when {
+            cmd.endsWith("_inf") -> Double.POSITIVE_INFINITY
+            t != null -> t / 100.0
+            pilot -> 0.10
+            else -> return null
+        }
+        return theta to pilot
+    }
+
     private fun launchRunnerCommand(cmd: String) {
         if (cmd == "collect") { startCollect(); return }
+        if (cmd == "readnoise") {
+            start("readnoise") { mc!!.runReadNoise(::post) }
+            return
+        }
+        v3Command(cmd)?.let { (theta, pilot) ->
+            val cap = launchCollectFrames ?: NO_FRAME_CAP
+            start(cmd) { mc!!.runV3Cause(theta, pilot, cap, ::post, ::showFrame) }
+            return
+        }
         val rid = when (cmd) {
             "fixed" -> R.id.methodFixed
             "ae_phone" -> R.id.methodAePhone
@@ -1746,6 +1770,8 @@ class MeasurementActivity : AppCompatActivity() {
             "nae" -> R.id.methodNeuralAe
             else -> 0
         }
+        // An unknown name used to press Start with whatever radio happened to be checked.
+        if (rid == 0 && cmd != "collect_nae") { post("unknown method: $cmd"); return }
         if (rid != 0) findViewById<android.widget.RadioButton>(rid).isChecked = true
         if (cmd == "collect_nae") findViewById<Button>(R.id.btnNaeCollect).performClick()
         else btnStart.performClick()
@@ -2143,6 +2169,7 @@ class MeasurementActivity : AppCompatActivity() {
                 mcLocal.platformTag = plat
                 mcLocal.applyPairing(pairSnap)
                 mcLocal.saveImages = saveImagesNow
+                mcLocal.appFilesDir = getExternalFilesDir(null)
                 raw.fixedFocusDiopters = focusNow
                 mc = mcLocal
                 // The currentFrame supplier reads lastFrameIdx, so staleness is measured
