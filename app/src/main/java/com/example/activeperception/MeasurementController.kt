@@ -4107,7 +4107,8 @@ class MeasurementController(
      * gain, [framesPerGain] dark frames; per raw pixel (unbinned, sensor centre crop) the
      * standard deviation over frames, averaged as RMS over pixels with hot pixels excluded.
      * Also the same on decoded sites (mean of 4 pixels) for reference. Writes
-     * read_noise.json to the run and to the app files dir, where v3cause reads it.
+     * read_noise.json to the run and, only when every gain was measured (a stopped run must
+     * not replace a full table), to the app files dir, where v3cause reads it.
      */
     fun runReadNoise(onStatus: (String) -> Unit, framesPerGain: Int = 20, exposureUs: Int = 16_667) {
         startPass("readnoise", isGtReference = false, withFrames = false, methodParams = JSONObject()
@@ -4187,8 +4188,9 @@ class MeasurementController(
             .put("fpn_dn", JSONArray(rows.map { if (it.fpn.isNaN()) JSONObject.NULL else it.fpn }))
             .put("hot_frac", JSONArray(rows.map { if (it.hot.isNaN()) JSONObject.NULL else it.hot }))
             .put("n_frames", JSONArray(rows.map { it.n }))
+            .put("complete", rows.size == gains.size && rows.all { it.n >= 2 })
         runCatching { java.io.File(logger.dir, ReadNoiseTable.FILE).writeText(j.toString(2)) }
-        if (rows.isNotEmpty() && rows.all { it.n >= 2 }) {
+        if (j.getBoolean("complete")) {
             runCatching { appFilesDir?.let { java.io.File(it, ReadNoiseTable.FILE).writeText(j.toString(2)) } }
         }
         onStatus("read noise: " + rows.joinToString(" ") { "ISO${it.gain}=${"%.2f".format(it.rn)}DN" })

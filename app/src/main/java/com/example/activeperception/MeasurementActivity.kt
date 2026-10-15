@@ -334,9 +334,6 @@ class MeasurementActivity : AppCompatActivity() {
         // "collect:10,ae_phone:3"`, `--ei lap_repeats 3`, `--ei lap_leadin_s 90` and
         // `--ei lap_fallback_s 15`. A single collection run without laps is
         // `--es run collect`, optionally capped with `--ei collect_frames N`.
-        findViewById<Spinner>(R.id.lapPresetSpinner).adapter = ArrayAdapter(this,
-            android.R.layout.simple_spinner_item, LAP_PRESETS.map { it.label }
-        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         findViewById<Button>(R.id.btnLapSession).setOnClickListener { toggleLapSession() }
         if (intent.getBooleanExtra("lap_session", false)) {
             btnStart.postDelayed({ if (lapSession == null) toggleLapSession() }, 1500)
@@ -1290,6 +1287,29 @@ class MeasurementActivity : AppCompatActivity() {
             updateDriveUi()
         }
         findViewById<Button>(R.id.driveToLab).setOnClickListener { openEditor(-2) }
+        // auto_collect: three steps and what is running, over the preview, kept clear of the
+        // status and navigation bars like the drive panel.
+        val expPanel = findViewById<View>(R.id.expPanel)
+        val expBase = intArrayOf(expPanel.paddingLeft, expPanel.paddingTop,
+            expPanel.paddingRight, expPanel.paddingBottom)
+        ViewCompat.setOnApplyWindowInsetsListener(expPanel) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(expBase[0] + bars.left, expBase[1] + bars.top,
+                expBase[2] + bars.right, expBase[3] + bars.bottom)
+            insets
+        }
+        findViewById<Button>(R.id.driveToExp).setOnClickListener { expPanel.visibility = View.VISIBLE }
+        findViewById<Button>(R.id.expClose).setOnClickListener { expPanel.visibility = View.GONE }
+        listOf(R.id.expReadNoise, R.id.expStatic, R.id.expLimo).forEachIndexed { i, id ->
+            val b = findViewById<Button>(id)
+            b.setOnClickListener {
+                // While a step runs, only its own button (stop) does anything.
+                if ((runActive || lapSession != null) && activeStepButton !== b) {
+                    post("busy: stop the running step first"); return@setOnClickListener
+                }
+                toggleLapSession(EXP_PRESETS[i], b)
+            }
+        }
         findViewById<Button>(R.id.driveAddRow).setOnClickListener { openEditor(-1) }
         findViewById<Button>(R.id.editorSave).setOnClickListener { saveEditorRow() }
         findViewById<Button>(R.id.editorRunNow).setOnClickListener {
@@ -1661,27 +1681,53 @@ class MeasurementActivity : AppCompatActivity() {
         val run: String? = null, val cap: Int? = null, val saveImages: Boolean = true
     )
 
-    private val LAP_PRESETS = listOf(
-        LapPreset("① 준비: read noise — 렌즈를 완전히 가리고 (1분)", run = "readnoise"),
-        LapPreset("② 준비: v3cause 확인 — 차 앞에 세워 두고 (40초)", run = "v3cause_t010", cap = 400),
-        LapPreset("③ v3cause pilot — Limo, 한 번만 (40바퀴)", "v3cause_pilot:40", 1),
-        LapPreset("④ 질문 1 — 폰 고정, 조명마다 (150 frame, 5분)",
-            run = "collect55_ab", cap = 150),
-        LapPreset("⑤ 질문 1+2 — Limo, 조명마다 (78바퀴, 약 20분)",
-            "collect55:5," + CLAIM2_PLAN.replace(":N", ":3"), 3),
-        LapPreset("(선택) 지연 시간 보정 — Limo, 사진 저장 없이 (7바퀴)",
-            CLAIM2_PLAN.replace(":N", ":1"), 1, saveImages = false),
-        LapPreset("(이전) 5x3 수집 + 폰 AE", "collect:10,ae_phone:3", 5)
+    /** auto_collect's three steps: question 1 (synthesis reproduces the real photo)
+     *  with the phone still, questions 1 and 2 on the Limo (one lap session: collection laps
+     *  plus every compared method, v3cause's pilot included), and the one-time read noise. */
+    private val EXP_PRESETS = listOf(
+        LapPreset("read noise", run = "readnoise"),
+        LapPreset("question 1, still", run = "collect55_ab", cap = 150),
+        LapPreset("questions 1+2, Limo",
+            "collect55:5," + CLAIM2_PLAN.replace(":N", ":3") + ",v3cause_pilot:3", 3)
     )
 
-    /** Frame cap and image saving for the current preset-started run or session. */
+    /** Frame cap and image saving for the current auto_collect run or session. */
     private var presetRunCap: Int? = null
     private var presetSaveImages: Boolean? = null
     private var presetRunActive = false
+    /** The auto_collect button whose step is running, and its idle label. */
+    private var activeStepButton: Button? = null
+    private var activeStepLabel: CharSequence = ""
+    /** How a static step ended when not normally: "stopped" or "error". */
+    @Volatile private var stepEnding: String? = null
 
-    private fun selectedPreset(): LapPreset =
-        LAP_PRESETS[findViewById<Spinner>(R.id.lapPresetSpinner).selectedItemPosition
-            .coerceIn(0, LAP_PRESETS.size - 1)]
+    /** The large line on auto_collect: what runs now, or how the last step ended. */
+    private fun showNow(text: String) = runOnUiThread {
+        findViewById<TextView>(R.id.expNow)?.text = text
+    }
+
+    /** What auto_collect shows in large letters while [method] runs. */
+    private fun methodTitle(method: String): String {
+        v3Command(method)?.let { (theta, pilot) ->
+            return if (pilot) "pilot: v3cause"
+            else "proposed: v3cause " + if (theta.isInfinite()) "θ∞" else "θ%.2f".format(theta)
+        }
+        return when (method) {
+            "prop_c" -> "baseline: Sense-well"
+            "ae_phone" -> "baseline: AE-Phone"
+            "physsweep" -> "baseline: PhysSweep"
+            "shin_nm" -> "baseline: ShinNM"
+            "collect55" -> "collect: 5×5"
+            "collect55_ab" -> "collect: 5×5 A/B"
+            "readnoise" -> "read noise"
+            else -> method
+        }
+    }
+
+    private fun restoreStepButton(done: Boolean) {
+        activeStepButton?.let { b -> b.text = activeStepLabel.toString() + if (done) "  ✓" else "" }
+        activeStepButton = null
+    }
 
     /** Programmatic equivalent of picking a method radio and pressing Start. */
     /** The 5x3 collection run (MeasurementController.runCollect53). It has no method radio,
@@ -1711,21 +1757,28 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** Starts a lap session, or stops the one in progress. The plan and its timeouts come
      *  from the launch intent when given, otherwise from LapSession's defaults. */
-    private fun toggleLapSession() {
-        val lapButton = findViewById<Button>(R.id.btnLapSession)
+    private fun toggleLapSession(preset: LapPreset? = null, stepButton: Button? = null) {
+        val lapButton = stepButton ?: findViewById<Button>(R.id.btnLapSession)
         if (lapSession != null) { stopMeasurement(); return }
-        if (presetRunActive && runActive) { stopMeasurement(); return }
+        if (presetRunActive && runActive) { stepEnding = "stopped"; stopMeasurement(); return }
         if (runActive || playlistActive) { post("busy — stop first"); return }
-        val preset = selectedPreset()
-        presetSaveImages = preset.saveImages
-        // A static preset is one run, not a lap session.
-        if (launchLapPlan == null && preset.run != null) {
+        presetSaveImages = preset?.saveImages
+        if (stepButton != null) {
+            activeStepButton = stepButton
+            activeStepLabel = stepButton.text.toString().removeSuffix("  ✓")
+            stepEnding = null
+            findViewById<TextView>(R.id.expStatus).text = ""
+        }
+        // A static step is one run, not a lap session.
+        if (preset?.run != null) {
             presetRunCap = preset.cap
             presetRunActive = true
+            stepButton?.text = "■ stop"
+            showNow(methodTitle(preset.run))
             launchRunnerCommand(preset.run)
             return
         }
-        val plan = LapSession.parsePlan(launchLapPlan ?: preset.plan ?: LapSession.DEFAULT_PLAN)
+        val plan = LapSession.parsePlan(launchLapPlan ?: preset?.plan ?: LapSession.DEFAULT_PLAN)
         if (plan.isEmpty()) { post("lap plan is empty"); return }
         // The x2 digital boost exists for the S25's ISO-400 analog ceiling and is folded
         // into every grid-formed image, phone AE included. The collection run sets its own
@@ -1736,6 +1789,7 @@ class MeasurementActivity : AppCompatActivity() {
         grid.digitalBoost = 1.0
         val session = LapSession(this, sensors, object : LapSession.Host {
             override fun startBlock(method: String) {
+                if (stepButton != null) showNow(methodTitle(method))
                 if (isCollect(method)) {
                     // Each collection block opens one base ISO further along than the
                     // last, so the lap cut short by the block switch is not always the
@@ -1745,7 +1799,11 @@ class MeasurementActivity : AppCompatActivity() {
                 } else launchRunnerCommand(method)
             }
             override fun stopBlock() = stopMeasurement(userInitiated = false)
-            override fun status(text: String) { lapButton.text = "STOP · $text" }
+            override fun status(text: String) {
+                if (stepButton == null) { lapButton.text = "STOP · $text"; return }
+                stepButton.text = "■ stop"
+                findViewById<TextView>(R.id.expStatus).text = text
+            }
             override fun buzz(ms: Long) = vibrate(ms)
             override fun beep(times: Int) = playLapBeeps(times)
             override fun lapStarted(method: String, lapsInBlock: Int) {
@@ -1759,15 +1817,18 @@ class MeasurementActivity : AppCompatActivity() {
                 // An aborted session can end while its last run is still winding down;
                 // the boost goes back only once no run can still be forming images.
                 if (!runActive) restoreBoostAfterLapSession()
-                lapButton.text = if (completed) "Lap session · done" else "Lap session"
+                if (stepButton != null) {
+                    restoreStepButton(completed)
+                    showNow(if (completed) "done" else "stopped")
+                } else lapButton.text = if (completed) "Lap session · done" else "Lap session"
             }
-        }, plan, (launchLapRepeats ?: if (launchLapPlan != null) LapSession.DEFAULT_REPEATS
-                else preset.repeats).coerceAtLeast(1),
+        }, plan, (launchLapRepeats ?: preset?.repeats ?: LapSession.DEFAULT_REPEATS).coerceAtLeast(1),
             leadInTimeoutS = (launchLapLeadInS ?: 90).coerceAtLeast(1),
             fallbackLapS = (launchLapFallbackS ?: 15).coerceAtLeast(3),
             startDelayS = (launchLapStartDelayS ?: 5).coerceAtLeast(0))
         lapSession = session
         lapCollectBlockOrdinal = -1
+        if (stepButton != null) showNow("lead-in")
         vibrate(120)
         session.start()
     }
@@ -1915,6 +1976,10 @@ class MeasurementActivity : AppCompatActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Volume keys start/stop in drive mode: findable by touch in a car mount, so the
         // experiment can be driven without locating a button on screen.
+        // On the experiment screen they do nothing: a volume press there used to start the
+        // car playlist hidden underneath.
+        if (findViewById<View>(R.id.expPanel)?.isShown == true && event.keyCode in intArrayOf(
+                KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_UP)) return true
         if (driveMode && event.keyCode in intArrayOf(
                 KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_UP)) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
@@ -2090,6 +2155,9 @@ class MeasurementActivity : AppCompatActivity() {
     private fun post(s: String) = runOnUiThread {
         status.text = s
         if (driveMode) driveStatus.text = s
+        // In a lap session auto_collect's small line shows the session's progress instead.
+        if (lapSession == null)
+            findViewById<TextView>(R.id.expStatus)?.let { if (it.isShown) it.text = s }
     }
 
     /** Preview plus non-blocking advisory-cloud escalation from cross-exposure consistency. */
@@ -2252,6 +2320,7 @@ class MeasurementActivity : AppCompatActivity() {
                 android.os.Handler(android.os.Looper.getMainLooper())
                     .postDelayed({ status.text = "" }, 5000)
             } catch (e: Throwable) {
+                if (stepEnding == null) stepEnding = "error"
                 post("error: ${e.message}")
             } finally {
                 runActive = false
@@ -2260,6 +2329,10 @@ class MeasurementActivity : AppCompatActivity() {
                 runOnUiThread {
                     lapSession?.onRunEnded()
                     if (lapSession == null) {
+                        if (presetRunActive) {
+                            restoreStepButton(stepEnding == null)
+                            showNow(stepEnding ?: "done")
+                        }
                         restoreBoostAfterLapSession()
                         // A single adb-started run consumes its overrides too.
                         if (!playlistActive) clearLaunchOverrides()

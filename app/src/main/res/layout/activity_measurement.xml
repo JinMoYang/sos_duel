@@ -89,6 +89,13 @@
                     android:text="Lab" android:textSize="12sp"
                     android:minWidth="0dp" android:paddingLeft="10dp"
                     android:paddingRight="10dp" />
+                <Button android:id="@+id/driveToExp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="auto_collect" android:textSize="12sp"
+                    android:textAllCaps="false"
+                    android:minWidth="0dp" android:paddingLeft="10dp"
+                    android:paddingRight="10dp" />
             </LinearLayout>
 
             <!-- Session is one level up from the rows: a drive does not change scene
@@ -233,6 +240,92 @@
                 android:textColor="@color/text_primary"
                 android:textSize="18sp"
                 android:maxLines="3" />
+        </LinearLayout>
+
+        <!-- auto_collect: what is running now, in letters readable from across the room,
+             a small progress line under it, and the three steps. Pressing the running
+             step's button again stops it. -->
+        <LinearLayout
+            android:id="@+id/expPanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:background="#FF000000"
+            android:padding="16dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="auto_collect"
+                    android:textColor="@color/text_label"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+                <Button android:id="@+id/expClose"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="close"
+                    android:textAllCaps="false"
+                    android:textSize="15sp" />
+            </LinearLayout>
+
+            <TextView android:id="@+id/expNow"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:maxLines="2"
+                android:text="ready"
+                android:textColor="@color/text_primary"
+                android:textStyle="bold"
+                android:autoSizeTextType="uniform"
+                android:autoSizeMinTextSize="24sp"
+                android:autoSizeMaxTextSize="120sp" />
+
+            <TextView android:id="@+id/expStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:maxLines="2"
+                android:textColor="@color/text_label"
+                android:textSize="16sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:baselineAligned="false"
+                android:orientation="horizontal">
+                <Button android:id="@+id/expReadNoise"
+                    android:layout_width="0dp"
+                    android:layout_height="72dp"
+                    android:layout_weight="1"
+                    android:text="read noise"
+                    android:textAllCaps="false"
+                    android:textSize="18sp" />
+                <Button android:id="@+id/expStatic"
+                    android:layout_width="0dp"
+                    android:layout_height="72dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:text="static"
+                    android:textAllCaps="false"
+                    android:textSize="18sp" />
+                <Button android:id="@+id/expLimo"
+                    android:layout_width="0dp"
+                    android:layout_height="72dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:text="Limo"
+                    android:textAllCaps="false"
+                    android:textSize="18sp" />
+            </LinearLayout>
         </LinearLayout>
     </FrameLayout>
 
@@ -550,12 +643,6 @@
                     android:text="Train NAE"
                     android:textSize="13sp" />
             </LinearLayout>
-
-            <!-- Which experiment the button below runs: a lap plan, or one static run. -->
-            <Spinner android:id="@+id/lapPresetSpinner"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp" />
 
             <!-- Lap-driven collection: one press runs the whole plan while the vehicle
                  keeps circling (LapSession.kt). The label doubles as its status line. -->
