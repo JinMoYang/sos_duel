@@ -1,6 +1,6 @@
 # v3-experiments 핸드오버 (2026-10-16 기준)
 
-이 문서 하나로 다음 agent가 (1) 지금까지 만든 것과 수집된 데이터를 이해하고, (2) 남은 세션을 돌리고, (3) 결과가 나오면 분석할 수 있게 하는 것이 목적이다. 코드 식별자·경로는 영어 그대로 둔다.
+이 문서 하나로 다음 담당자(사람 또는 agent)가 (1) 지금까지 만든 것과 수집된 데이터를 이해하고, (2) 남은 세션을 돌리고, (3) 결과가 나오면 분석할 수 있게 하는 것이 목적이다. 코드 식별자·경로는 영어 그대로 둔다. 환경 준비와 빌드는 저장소 루트의 [README](../README.md)를 먼저 볼 것. `<repo>`는 이 저장소의 루트를 뜻한다.
 
 ---
 
@@ -34,21 +34,19 @@
 
 ## 3. 코드, 빌드, 설치
 
-- 저장소: `C:\Users\yjm34\OneDrive\Desktop\RayNeo_SoS`, 브랜치 **`v3-experiments`** (`limo-collection` 79c2ed6에서 분기). **push하지 않았다.**
+- 저장소: `<repo>`, 브랜치 **`v3-experiments`** (`limo-collection` 79c2ed6에서 분기). **GitHub에 push하지 않았다**(폴더나 git bundle로 전달됨). 서명 키(debug keystore)는 폰에 깔린 앱과 같아야 한다(README 참고).
 - 앱 패키지: **`com.sos.integrate`**, activity `com.example.activeperception.MeasurementActivity`.
   - 같은 폰에 이름이 비슷한 **예전 앱 `com.sos.rayneox3.final`이 있다. 절대 그걸 띄우지 말 것.** 한 번 착각해서 잘못된 결론을 낸 적이 있다.
-- 빌드 (Git Bash 기준):
-  ```bash
-  powershell.exe -NoProfile -Command "$env:JAVA_HOME='C:\Users\yjm34\.jdks\jbr-21.0.11'; Set-Location 'C:\Users\yjm34\OneDrive\Desktop\RayNeo_SoS'; .\gradlew.bat assembleDebug --console=plain"
-  ```
-  Android Studio의 Java 25 JBR로는 Gradle 8.13이 깨진다. 반드시 위 JAVA_HOME을 쓴다.
+- 빌드: `JAVA_HOME=<JDK 21 경로> ./gradlew assembleDebug`. Windows PowerShell에서는 `$env:JAVA_HOME='<JDK 21 경로>'; .\gradlew.bat assembleDebug`.
+  Java 25(최신 Android Studio의 기본 JBR)로는 Gradle 8.13이 깨진다. 반드시 JDK 21을 쓴다.
 - 설치: `adb install -r app/build/outputs/apk/debug/app-debug.apk` 다음 `adb shell am start -n com.sos.integrate/com.example.activeperception.MeasurementActivity`.
   - **설치하면 앱이 재시작된다.** 설치 전에 폰에서 아무것도 돌고 있지 않은지 확인할 것: 가장 최근 run 폴더에 `summary.json`이 있는지, auto_collect 화면의 큰 글씨가 `ready/done/stopped`인지(`uiautomator dump`로 `id/expNow` 읽기).
   - Git Bash에서 adb 경로가 망가지지 않게 `export MSYS_NO_PATHCONV=1`.
   - 이미 떠 있는 task가 있으면 `am start ... --es run X`의 extra가 무시될 수 있다(기존 task가 앞으로 나올 뿐). `-S`(강제 종료 후 시작)는 사용자 허락을 받고 쓸 것.
 - 커밋 주의: `app/.cxx/...` 빌드 산출물이 git에 추적되고 있어 항상 수정됨으로 보인다. **소스 파일만 골라서 add.**
-- OneDrive가 `app/build/test-results`를 잠그면 단위 테스트가 실패한다 → 그 폴더 이름을 바꿔 치우고 다시 실행.
-- Python은 300자 넘는 경로를 못 연다 → 작업 파일은 `%TEMP%\sos_*` 같은 짧은 경로에 둔다.
+- 원래 PC에서 겪은 것:
+  - 저장소가 OneDrive 안에 있으면 OneDrive가 `app/build/test-results`를 잠가 단위 테스트가 실패한다. 그 폴더 이름을 바꿔 치우면 된다.
+  - Windows의 Python은 아주 긴 경로를 못 연다. 작업 파일은 짧은 경로에 둔다.
 
 ### 이 브랜치의 커밋 (오래된 것부터)
 
@@ -176,10 +174,10 @@ lap session CSV: `wall_ms, elapsed_ns, event(countdown/start/leadin_done/block_s
 
 | 데이터 | 상태 |
 |---|---|
-| `lapsession_1792059146151` + run 60개(epoch 1792059169832~1792059922337), 19:12~19:25 | **무효.** 폰을 옆으로 달았는데 회전 수정 전이라 사진이 누움 → 모든 방법 검출 0. 사용자가 지우기로 함(아래 명령. agent는 영구 삭제 금지). PC 사본: `%TEMP%\sos_l1`(사진 포함) |
+| `lapsession_1792059146151` + run 60개(epoch 1792059169832~1792059922337), 19:12~19:25 | **무효.** 폰을 옆으로 달았는데 회전 수정 전이라 사진이 누움 → 모든 방법 검출 0. 사용자가 지우기로 함(아래 명령. agent는 영구 삭제 금지) |
 | static `collect_5x5_ab_1792061117004`, 19:45, 58프레임(손으로 멈춤) | 유효. 회전 수정 후, 사진 바로 섬. 폰 조도센서 중앙값 약 27.6 |
 | static `..._1792061592937` 19:53 / `..._1792061664103` 19:54 / `..._1792061751218` 19:55, 각 30프레임 | 아직 안 봄. 조도센서 중앙값 27.4 / 2.6 / 1.6 → 밝음/중간/어두움으로 보이나 **사용자에게 확인할 것** |
-| Limo dark: `lapsession_1792061839643` + run 40개(1792061869416~1792062371279), 19:57~20:06 | 유효. 40/40바퀴, 회전 180, 폰 조도센서 5~6. 로그만 PC 사본 `%TEMP%\sos_dark`(사진 없음) |
+| Limo dark: `lapsession_1792061839643` + run 40개(1792061869416~1792062371279), 19:57~20:06 | 유효. 40/40바퀴, 회전 180, 폰 조도센서 5~6 |
 | read noise | `1792058310965`(18:58, 엎어서 측정)가 **앱 기준값**. `1792057653242`는 손으로 가려 빛이 샘. `1792057646317`, `1792062446069`는 덜 가린 채 멈춘 것(무시) |
 | 밝은 조명 Limo | **다시 해야 함**(첫 세션이 무효) |
 | 18:18~18:23 `run_car_*` | 책상 점검용. 실험 데이터 아님 |
@@ -287,7 +285,7 @@ adb shell 'cd /sdcard/Documents/sos && rm -r run_limo_*_17920591[6-9]* run_limo_
 - 폰 조도센서는 거치 방향에 따라 달라서 조명 비교에 쓰면 안 된다(§9.1).
 - `96698d3`은 중간안(v3cause 8바퀴)이다. 이 빌드로 돈 세션은 없다(이후 바로 fe8c0cb 설치).
 - 모든 세션은 사진 저장을 켠 채로 돌았다.
-- 예전(10/13) collect 5×3 세션은 다른 브랜치·예전 파이프라인이다. 직접 비교하지 말 것(PC 사본 `%TEMP%\sos_full1~3`).
+- 예전(10/13) collect 5×3 세션은 다른 브랜치(`limo-collection`)·예전 파이프라인이다. 직접 비교하지 말 것.
 
 ---
 
@@ -315,4 +313,4 @@ adb shell 'cd /sdcard/Documents/sos && rm -r run_limo_*_17920591[6-9]* run_limo_
 - 커밋은 이 브랜치에서 허락된 범위로만, **push 금지**.
 - 기존 앱 기능을 크게 바꾸지 않는다(필요한 것만 덧붙인다).
 - 화면은 멀리서 보이는 큰 글씨 한 줄로, 설명 문구는 넣지 않는다.
-- 이전 agent의 작업 메모: `C:\Users\yjm34\.claude\projects\C--Users-yjm34-OneDrive-Desktop-sos-control\memory\` (특히 `v3-experiments-implementation.md`, `limo-session-2026-10-15-dark.md`, `limo-session-2026-10-15-sideways.md`, `experiment-decisions-2026-10-15.md`, `proposed-v3cause-spec.md`).
+- 원본 데이터는 폰(`/sdcard/Documents/sos/`)에 있다. 원래 PC의 임시 사본과 이전 agent의 작업 메모는 공유 대상이 아니며, 그 내용은 이 문서에 모두 옮겨 두었다.
