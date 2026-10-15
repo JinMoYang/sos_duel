@@ -74,6 +74,10 @@ class SensorDataManager(
      *  no yaw is integrated before that. */
     val gravityLocked: Boolean get() = isReferenceGravitySet
 
+    /** The locked gravity reading in device axes (x to the right, y up the screen, z out of
+     *  it; the axis pointing up reads +g), or null before it has locked. */
+    fun gravityXyz(): FloatArray? = if (isReferenceGravitySet) referenceGravity.copyOf() else null
+
     /** Per-sample hooks, each fired from the sensor thread with that sensor's OWN timestamp.
      *  Whether those timestamps share a clock with the camera's SENSOR_TIMESTAMP is recorded
      *  in the manifest as timestamp_source. */

@@ -1460,8 +1460,19 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** Read before a run starts; per-run pipelines size their buffers after this. */
     private fun applyMountOffset() {
-        mountOffsetDeg = if (driveFlip) 180 else 0
+        mountOffsetDeg = mountOnSide() ?: if (driveFlip) 180 else 0
         if (::raw.isInitialized) raw.mountOffsetDeg = mountOffsetDeg
+    }
+
+    /** A phone mounted on its side needs a quarter turn, which the 0/180 flip cannot give;
+     *  without it every picture reaches the detector lying sideways, and it finds no cars.
+     *  Read from gravity: left edge up (x reads -g) turns the picture 90 degrees clockwise,
+     *  right edge up 270. Null when the phone stands upright or upside down (the flip
+     *  setting holds) or gravity has not locked yet. */
+    private fun mountOnSide(): Int? {
+        val g = sensors.gravityXyz() ?: return null
+        if (abs(g[0]) < 4.9f || abs(g[0]) < abs(g[1])) return null
+        return if (g[0] < 0f) 90 else 270
     }
 
     /** Block index counts from START, so a drive walks the list from the top exactly as
