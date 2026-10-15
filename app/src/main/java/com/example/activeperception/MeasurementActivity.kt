@@ -62,9 +62,9 @@ class MeasurementActivity : AppCompatActivity() {
         /** Manual focus for every method (diopters): the 2026-10-13 Limo sessions' median
          *  autofocus position, about 45-50 cm, where the toy cars sit. */
         private const val DEFAULT_FOCUS_DIOPTERS = 2.0f
-        /** Claim 2 comparison arms; N = laps per block. */
-        private const val CLAIM2_PLAN = "prop_c:N,ae_phone:N,physsweep:N,shin_nm:N," +
-            "v3cause_t010:N,v3cause_t020:N,v3cause_inf:N"
+        /** Claim 2 comparison arms; N = laps per block. v3cause runs at theta 0.10 only;
+         *  its other arms (v3cause_t020, v3cause_inf, v3cause_pilot) still start by name. */
+        private const val CLAIM2_PLAN = "prop_c:N,ae_phone:N,physsweep:N,shin_nm:N,v3cause_t010:N"
         /** Neural-AE collection budget. The v2 collector pays 25 physical captures per
          *  step for the surface; hists are ~15 ms each, so EVERY captured cell becomes a
          *  sample (a full exposure bracket per scene instant — nothing thrown away).
@@ -1682,13 +1682,14 @@ class MeasurementActivity : AppCompatActivity() {
     )
 
     /** auto_collect's three steps: question 1 (synthesis reproduces the real photo)
-     *  with the phone still, questions 1 and 2 on the Limo (one lap session: collection laps
-     *  plus every compared method, v3cause's pilot included), and the one-time read noise. */
+     *  with the phone still, questions 1 and 2 on the Limo, and the one-time read noise.
+     *  On the Limo the method changes every lap, so slow drift (light, battery, speed) falls
+     *  on every method alike: ten rounds of one collection lap and one lap of each compared
+     *  method, 60 laps, the collection visiting each of its five base ISOs twice. */
     private val EXP_PRESETS = listOf(
         LapPreset("read noise", run = "readnoise"),
         LapPreset("question 1, still", run = "collect55_ab", cap = 150),
-        LapPreset("questions 1+2, Limo",
-            "collect55:5," + CLAIM2_PLAN.replace(":N", ":3") + ",v3cause_pilot:3", 3)
+        LapPreset("questions 1+2, Limo", "collect55:1," + CLAIM2_PLAN.replace(":N", ":1"), 10)
     )
 
     /** Frame cap and image saving for the current auto_collect run or session. */
@@ -1775,6 +1776,9 @@ class MeasurementActivity : AppCompatActivity() {
             presetRunActive = true
             stepButton?.text = "■ stop"
             showNow(methodTitle(preset.run))
+            // Heard from across the room like a lap session: one beep now, three at the end.
+            vibrate(120)
+            playLapBeeps(1)
             launchRunnerCommand(preset.run)
             return
         }
@@ -2332,6 +2336,7 @@ class MeasurementActivity : AppCompatActivity() {
                         if (presetRunActive) {
                             restoreStepButton(stepEnding == null)
                             showNow(stepEnding ?: "done")
+                            if (stepEnding != "stopped") { vibrate(800); playLapBeeps(3) }
                         }
                         restoreBoostAfterLapSession()
                         // A single adb-started run consumes its overrides too.
