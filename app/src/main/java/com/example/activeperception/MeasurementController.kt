@@ -3694,6 +3694,14 @@ class MeasurementController(
         return com.example.activeperception.acquire.SparseFlow.Img(h, h, out)
     }
 
+    /** Writes decode_check.json once the first frame after [RawSensorCapturer.armNativeDecodeValidation]
+     *  has been compared with the Kotlin reference decoder (mismatching sites; 0 = identical). */
+    private fun writeDecodeCheck() = runCatching {
+        java.io.File(logger.dir, "decode_check.json").writeText(JSONObject()
+            .put("native_vs_kotlin_mismatch_sites", raw.lastNativeDecodeMismatchCount)
+            .put("decode_mode", raw.decodeMode).toString(2))
+    }
+
     /**
      * proposed_v3cause. Every frame: one base capture (fixed T0, analog base gain) plus the
      * extras planned on the previous frame, all in ONE capture request; every image detected
@@ -3767,6 +3775,7 @@ class MeasurementController(
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
         raw.startFastCapture()
+        raw.armNativeDecodeValidation()
         onStatus("warming FP16 GPU batches…")
         tfl.warmUpAllBatches()
 
@@ -3836,6 +3845,7 @@ class MeasurementController(
                     continue
                 }
                 failures = 0
+                if (f == 0) writeDecodeCheck()
                 val metas = got.map { it.second }
                 val frames = got.map { it.first }
                 stepClock.captured(metas)
@@ -5334,6 +5344,7 @@ class MeasurementController(
         fun captured(gi: Int) = minOf(gains[gi], ceil)
         // Probe bursts by window-min shutter: (shutter index, frames).
         val bursts = listOf(0 to 4, 1 to 4, 2 to 4, 3 to 2)
+        val CHUNK = 10
         startPass(if (pipelineAB) "collect_5x5_ab" else "collect_5x5", isGtReference = false,
             withFrames = false, methodParams = JSONObject()
                 .put("purpose", "claim 1: every image prop_c synthesizes, beside the real " +
@@ -5412,6 +5423,7 @@ class MeasurementController(
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
         raw.startFastCapture()
+        raw.armNativeDecodeValidation()
         onStatus("collect 5x5: warming GPU batches…")
         tfl.warmUpAllBatches()
         var f = 0
@@ -5431,24 +5443,29 @@ class MeasurementController(
                 for (gi in 0 until nG) for (sj in 0 until nS) units += Unit55("real", gi, sj, 1)
                 units += Unit55("repeat", b, nS - 1, 1)
                 units.shuffle(java.util.Random(f.toLong() * 7919L + 17L))
-                // Expand to shots; split into two requests so neither exceeds the reader.
-                class Shot(val unit: Int, val k: Int)
+                // Expand to shots, in requests of at most CHUNK shots (bursts never split). A
+                // request is issued when the previous one's last frame has been taken, so at
+                // most one request's decoded frames (12.5 MB each) wait in memory: 40 shots
+                // in flight at once exhausted the 512 MB heap.
+                class Shot(val unit: Int, val k: Int, val chunk: Int, val idx: Int)
                 val shots = ArrayList<Shot>()
-                units.forEachIndexed { ui, u -> repeat(u.n) { k -> shots += Shot(ui, k) } }
-                val splitUnit = run {
-                    var count = 0; var cut = units.size
+                val chunkSizes = ArrayList<Int>()
+                run {
+                    var chunk = 0; var inChunk = 0
                     for ((ui, u) in units.withIndex()) {
-                        if (count + u.n > 24) { cut = ui; break }
-                        count += u.n
+                        if (inChunk + u.n > CHUNK && inChunk > 0) { chunkSizes += inChunk; chunk++; inChunk = 0 }
+                        repeat(u.n) { k -> shots += Shot(ui, k, chunk, inChunk); inChunk++ }
                     }
-                    cut
+                    chunkSizes += inChunk
                 }
-                val firstShots = shots.count { it.unit < splitUnit }
                 fun setting(s: Shot): Pair<Int, Int> { val u = units[s.unit]; return shutters[u.sj] to captured(u.gi) }
+                val handles = arrayOfNulls<RawSensorCapturer.BracketHandle>(chunkSizes.size)
+                fun issue(c: Int) {
+                    if (c < chunkSizes.size && handles[c] == null)
+                        handles[c] = raw.beginBracketSequence(shots.filter { it.chunk == c }.map(::setting))
+                }
                 val tRequestNs = SystemClock.elapsedRealtimeNanos()
-                val hA = raw.beginBracketSequence(shots.take(firstShots).map(::setting))
-                val hB = if (firstShots < shots.size)
-                    raw.beginBracketSequence(shots.drop(firstShots).map(::setting)) else null
+                issue(0)
 
                 var waitMs = 0.0; var formMs = 0.0; var inferMs = 0.0; var logMs = 0.0
                 var firstExposureNs = Long.MAX_VALUE; var lastExposureEndNs = 0L
@@ -5482,12 +5499,13 @@ class MeasurementController(
                         val s = shots[i]
                         val u = units[s.unit]
                         val tw = now()
-                        val (taken, meta) = if (i < firstShots) raw.takeBracketFrame(hA, i)
-                            else raw.takeBracketFrame(hB!!, i - firstShots)
+                        val handle = handles[s.chunk]!!
+                        val hi = s.idx
+                        val (taken, meta) = raw.takeBracketFrame(handle, hi)
+                        // This request is fully in hand: start the next one now.
+                        if (hi == chunkSizes[s.chunk] - 1) issue(s.chunk + 1)
                         waitMs += ms(tw)
                         val takenNs = SystemClock.elapsedRealtimeNanos()
-                        val handle = if (i < firstShots) hA else hB!!
-                        val hi = if (i < firstShots) i else i - firstShots
                         if (meta.timestamp in 1 until firstExposureNs) firstExposureNs = meta.timestamp
                         lastExposureEndNs = maxOf(lastExposureEndNs, meta.timestamp + meta.appliedExpUs * 1_000L)
                         val tl0 = now()
@@ -5559,12 +5577,22 @@ class MeasurementController(
                         }
                     }
                 } catch (t: Throwable) {
-                    raw.abortBracketSequence(hA); hB?.let { raw.abortBracketSequence(it) }
+                    handles.forEach { h -> h?.let { raw.abortBracketSequence(it) } }
                     ok = false; failures++
                     onStatus("collect 5x5: frame $f failed (${t.message})")
                 }
-                if (!ok) { if (failures >= 3) break; continue }
+                if (!ok) {
+                    // The failed frame keeps its own index (its partial rows stay in the
+                    // shot and cell logs) and is marked here, so a retry never shares it.
+                    logger.row("collect_frames", listOf(f, b, gains[b], captured(b), pipeline,
+                        "failed", tRequestNs))
+                    burst.clear()
+                    f++
+                    if (failures >= 3) break
+                    continue
+                }
                 failures = 0
+                if (f == 0) writeDecodeCheck()
                 val tDoneNs = SystemClock.elapsedRealtimeNanos()
                 val totalMs = ms(tFrame)
                 val h = health.sample()
