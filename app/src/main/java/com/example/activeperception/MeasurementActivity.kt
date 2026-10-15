@@ -1648,17 +1648,28 @@ class MeasurementActivity : AppCompatActivity() {
     /** Programmatic equivalent of picking a method radio and pressing Start. */
     /** The 5x3 collection run (MeasurementController.runCollect53). It has no method radio,
      *  so it is started directly rather than through the Start button. */
-    private fun startCollect() {
+    private fun startCollect(kind: String = "collect") {
         val cap = launchCollectFrames ?: NO_FRAME_CAP
         // Inside a lap session the base ISO is held for a whole lap and stepped by the
         // session; on its own the run steps it every frame.
         val base = if (lapSession != null) lapCollectBlockOrdinal else -1
-        start("collect_5x3") {
+        val tag = when (kind) {
+            "collect55" -> "collect_5x5"; "collect55_ab" -> "collect_5x5_ab"; else -> "collect_5x3"
+        }
+        start(tag) {
             val controller = mc!!
             controller.collectBaseOverride = base
-            controller.runCollect53(cap, ::post, ::showFrame)
+            when (kind) {
+                // claim 1 on prop_c's lattice; _ab alternates the old and new image pipeline
+                "collect55", "collect55_ab" ->
+                    controller.runCollect55(cap, kind == "collect55_ab", ::post, ::showFrame)
+                else -> controller.runCollect53(cap, ::post, ::showFrame)
+            }
         }
     }
+
+    private fun isCollect(method: String) =
+        method == "collect" || method == "collect55" || method == "collect55_ab"
 
     /** Starts a lap session, or stops the one in progress. The plan and its timeouts come
      *  from the launch intent when given, otherwise from LapSession's defaults. */
@@ -1677,12 +1688,12 @@ class MeasurementActivity : AppCompatActivity() {
         grid.digitalBoost = 1.0
         val session = LapSession(this, sensors, object : LapSession.Host {
             override fun startBlock(method: String) {
-                if (method == "collect") {
+                if (isCollect(method)) {
                     // Each collection block opens one base ISO further along than the
                     // last, so the lap cut short by the block switch is not always the
                     // same ISO's.
                     lapCollectBlockOrdinal++
-                    startCollect()
+                    startCollect(method)
                 } else launchRunnerCommand(method)
             }
             override fun stopBlock() = stopMeasurement(userInitiated = false)
@@ -1691,7 +1702,7 @@ class MeasurementActivity : AppCompatActivity() {
             override fun beep(times: Int) = playLapBeeps(times)
             override fun lapStarted(method: String, lapsInBlock: Int) {
                 // One base ISO per lap: the collection run reads this before each frame.
-                if (method == "collect")
+                if (isCollect(method))
                     mc?.collectBaseOverride = lapsInBlock + lapCollectBlockOrdinal
             }
             override fun sessionEnded(completed: Boolean) {
@@ -1747,7 +1758,7 @@ class MeasurementActivity : AppCompatActivity() {
     }
 
     private fun launchRunnerCommand(cmd: String) {
-        if (cmd == "collect") { startCollect(); return }
+        if (isCollect(cmd)) { startCollect(cmd); return }
         if (cmd == "readnoise") {
             start("readnoise") { mc!!.runReadNoise(::post) }
             return

@@ -219,6 +219,12 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     class RawTap(val cropW: Int, val cropH: Int, val sink: (IntArray, RawMeta) -> Unit)
     @Volatile var rawTap: RawTap? = null
 
+    /** 0 (default): every decoded site is the mean of the 4 same-colour pixels of its 4x4
+     *  block, signed. 1: the pre-2026-10-15 decode (one pixel of the 4, clipped at black),
+     *  kept only so a static collection can alternate old and new pipelines frame by frame.
+     *  Read when each frame is decoded. */
+    @Volatile var decodeMode: Int = 0
+
     fun applyFixedFocus(builder: CaptureRequest.Builder) {
         val d = fixedFocusDiopters
         if (d.isNaN() || d < 0f || minFocusDiopters <= 0f) return
@@ -1348,19 +1354,20 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         val outWidth = (width / 2) and 1.inv()
         val outHeight = (height / 2) and 1.inv()
         val out = IntArray(outWidth * outHeight)
+        val mode = decodeMode
         val nativeOk = nativeDecode && if (streamFormat == ImageFormat.RAW10) {
             NativeTensorPreprocessor.decodeSubsampledRaw10(
-                bytes, bytes.position(), width, height, rowStride, black, out)
+                bytes, bytes.position(), width, height, rowStride, black, out, mode)
         } else {
             NativeTensorPreprocessor.decodeSubsampledBayer(
-                bytes, bytes.position(), width, height, rowStride, pixelStride, black, out)
+                bytes, bytes.position(), width, height, rowStride, pixelStride, black, out, mode)
         }
         if (nativeOk && nativeValidationRemaining.compareAndSet(1, 0)) {
             val reference = IntArray(out.size)
             if (streamFormat == ImageFormat.RAW10) {
-                decodeRaw10Reference(bytes, rowStride, black, outWidth, outHeight, reference)
+                decodeRaw10Reference(bytes, rowStride, black, outWidth, outHeight, reference, mode)
             } else {
-                decodeReference(bytes, rowStride, pixelStride, black, outWidth, outHeight, reference)
+                decodeReference(bytes, rowStride, pixelStride, black, outWidth, outHeight, reference, mode)
             }
             var mismatches = 0
             for (i in out.indices) if (out[i] != reference[i]) mismatches++
@@ -1368,9 +1375,9 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         }
         if (!nativeOk) {
             if (streamFormat == ImageFormat.RAW10) {
-                decodeRaw10Reference(bytes, rowStride, black, outWidth, outHeight, out)
+                decodeRaw10Reference(bytes, rowStride, black, outWidth, outHeight, out, mode)
             } else {
-                decodeReference(bytes, rowStride, pixelStride, black, outWidth, outHeight, out)
+                decodeReference(bytes, rowStride, pixelStride, black, outWidth, outHeight, out, mode)
             }
         }
 
@@ -1436,7 +1443,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
      *  Must match the native decoder bit for bit (floor rounding of the mean). */
     private fun decodeReference(
         bytes: java.nio.ByteBuffer, rowStride: Int, pixelStride: Int,
-        black: IntArray, outWidth: Int, outHeight: Int, out: IntArray
+        black: IntArray, outWidth: Int, outHeight: Int, out: IntArray, mode: Int = 0
     ) {
         fun px(y: Int, x: Int) = bytes.getShort(y * rowStride + x * pixelStride).toInt() and 0xFFFF
         for (oy in 0 until outHeight) {
@@ -1444,16 +1451,18 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             val rowOut = oy * outWidth
             for (ox in 0 until outWidth) {
                 val ix = (ox and 1.inv()) * 2 + (ox and 1)
-                val sum = px(iy, ix) + px(iy, ix + 2) + px(iy + 2, ix) + px(iy + 2, ix + 2)
                 val channelBlack = black[(iy and 1) * 2 + (ix and 1)]
-                out[rowOut + ox] = Math.floorDiv(sum - 4 * channelBlack + 2, 4)
+                out[rowOut + ox] = if (mode == 1) (px(iy, ix) - channelBlack).coerceAtLeast(0) else {
+                    val sum = px(iy, ix) + px(iy, ix + 2) + px(iy + 2, ix) + px(iy + 2, ix + 2)
+                    Math.floorDiv(sum - 4 * channelBlack + 2, 4)
+                }
             }
         }
     }
 
     private fun decodeRaw10Reference(
         bytes: java.nio.ByteBuffer, rowStride: Int, black: IntArray,
-        outWidth: Int, outHeight: Int, out: IntArray
+        outWidth: Int, outHeight: Int, out: IntArray, mode: Int = 0
     ) {
         fun unpack(offset: Int, k: Int): Int {
             val tails = bytes.get(offset + 4).toInt() and 0xff
@@ -1465,6 +1474,11 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             val blackRow = (iy and 1) * 2
             for (group in 0 until outWidth / 2) {
                 val a = iy * rowStride + group * 5
+                if (mode == 1) {
+                    out[rowOut + group * 2] = (unpack(a, 0) - black[blackRow]).coerceAtLeast(0)
+                    out[rowOut + group * 2 + 1] = (unpack(a, 1) - black[blackRow + 1]).coerceAtLeast(0)
+                    continue
+                }
                 val b = (iy + 2) * rowStride + group * 5
                 val even = unpack(a, 0) + unpack(a, 2) + unpack(b, 0) + unpack(b, 2)
                 val odd = unpack(a, 1) + unpack(a, 3) + unpack(b, 1) + unpack(b, 3)

@@ -159,7 +159,10 @@ Java_com_example_activeperception_NativeTensorPreprocessor_fillFusedBayerSrgbRow
         jint bayer_width, jint bayer_height, jstring cfa_string,
         jint orientation, jdoubleArray gains_array, jintArray bases_array,
         jintArray lut_array, jobject destination, jint image_size,
-        jint output_y_start, jint output_y_end) {
+        jint output_y_start, jint output_y_end, jint resample_mode) {
+    // resample_mode 0: area average in linear values, one clip after the gain (current).
+    // resample_mode 1: the pre-2026-10-15 path, kept for the before/after comparison:
+    // bilinear over four quads, each clipped and sRGB-encoded before blending.
     auto* dst = static_cast<float*>(env->GetDirectBufferAddress(destination));
     if (!dst || !frame_arrays || !gains_array || !bases_array || !lut_array ||
         !cfa_string || n_sum <= 0) return JNI_FALSE;
@@ -248,6 +251,50 @@ Java_com_example_activeperception_NativeTensorPreprocessor_fillFusedBayerSrgbRow
             };
             const int begin = std::max(0, static_cast<int>(output_y_start));
             const int end = std::min(nh, static_cast<int>(output_y_end));
+            if (resample_mode == 1) {
+                std::vector<int> x0(nw), x1(nw);
+                std::vector<float> fx(nw);
+                for (int dx = 0; dx < nw; ++dx) {
+                    const double sx = std::clamp((dx + 0.5) * oriented_w / nw - 0.5,
+                                                 0.0, static_cast<double>(oriented_w - 1));
+                    x0[dx] = static_cast<int>(std::floor(sx));
+                    x1[dx] = std::min(x0[dx] + 1, oriented_w - 1);
+                    fx[dx] = static_cast<float>(sx - x0[dx]);
+                }
+                auto demosaic = [&](int oriented_x, int oriented_y, long long out_rgb[3]) {
+                    quad(oriented_x, oriented_y, out_rgb);
+                    out_rgb[1] /= 2;      // the old path halved G in integers
+                };
+                for (int dy = begin; dy < end; ++dy) {
+                    const double sy = std::clamp((dy + 0.5) * oriented_h / nh - 0.5,
+                                                 0.0, static_cast<double>(oriented_h - 1));
+                    const int y0 = static_cast<int>(std::floor(sy));
+                    const int y1 = std::min(y0 + 1, oriented_h - 1);
+                    const float fy = static_cast<float>(sy - y0);
+                    for (int dx = 0; dx < nw; ++dx) {
+                        long long q00[3], q10[3], q01[3], q11[3];
+                        demosaic(x0[dx], y0, q00); demosaic(x1[dx], y0, q10);
+                        demosaic(x0[dx], y1, q01); demosaic(x1[dx], y1, q11);
+                        for (int lane = 0; lane < gain_count; ++lane) {
+                            float* out = dst + bases[lane] +
+                                ((dy + pad_y) * image_size + dx + pad_x) * 3;
+                            const double gain = gains[lane];
+                            for (int c = 0; c < 3; ++c) {
+                                auto enc = [&](long long value) -> float {
+                                    int index = static_cast<int>(value * gain);
+                                    index = std::max(0, std::min(index, lut_max));
+                                    return static_cast<float>(lut[index]);
+                                };
+                                const float top = enc(q00[c]) * (1.0f - fx[dx]) +
+                                                  enc(q10[c]) * fx[dx];
+                                const float bottom = enc(q01[c]) * (1.0f - fx[dx]) +
+                                                     enc(q11[c]) * fx[dx];
+                                out[c] = (top * (1.0f - fy) + bottom * fy) / 255.0f;
+                            }
+                        }
+                    }
+                }
+            } else
             for (int dy = begin; dy < end; ++dy) {
                 const int ys = std::min(span_lo(dy, oriented_h, nh), oriented_h - 1);
                 const int ye = std::max(ys + 1, std::min(span_lo(dy + 1, oriented_h, nh), oriented_h));
@@ -295,7 +342,10 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_activeperception_NativeTensorPreprocessor_decodeSubsampledBayer(
         JNIEnv* env, jobject, jobject source, jint source_byte_offset,
         jint source_width, jint source_height, jint row_stride, jint pixel_stride,
-        jintArray black_array, jintArray destination_array) {
+        jintArray black_array, jintArray destination_array, jint mode) {
+    // mode 0: mean of the four same-colour pixels, signed (current).
+    // mode 1: the pre-2026-10-15 decode, kept for the before/after comparison: one pixel
+    // of the four, clipped at black.
     auto* base = static_cast<const uint8_t*>(env->GetDirectBufferAddress(source));
     if (!base || !black_array || !destination_array) return JNI_FALSE;
     auto* black = static_cast<jint*>(env->GetPrimitiveArrayCritical(black_array, nullptr));
@@ -315,6 +365,24 @@ Java_com_example_activeperception_NativeTensorPreprocessor_decodeSubsampledBayer
         env->ReleasePrimitiveArrayCritical(destination_array, destination, JNI_ABORT);
         env->ReleasePrimitiveArrayCritical(black_array, black, JNI_ABORT);
         return JNI_FALSE;
+    }
+
+    if (mode == 1) {
+        for (int oy = 0; oy < output_height; ++oy) {
+            const int iy = (oy & ~1) * 2 + (oy & 1);
+            const uint8_t* row_bytes = base + static_cast<size_t>(iy) * row_stride;
+            jint* out = destination + static_cast<size_t>(oy) * output_width;
+            const int channel_row = (iy & 1) * 2;
+            for (int ox = 0; ox < output_width; ++ox) {
+                const int ix = (ox & ~1) * 2 + (ox & 1);
+                const uint8_t* p = row_bytes + static_cast<size_t>(ix) * pixel_stride;
+                const int raw = static_cast<int>(p[0]) | (static_cast<int>(p[1]) << 8);
+                out[ox] = std::max(0, raw - black[channel_row + (ix & 1)]);
+            }
+        }
+        env->ReleasePrimitiveArrayCritical(destination_array, destination, 0);
+        env->ReleasePrimitiveArrayCritical(black_array, black, JNI_ABORT);
+        return JNI_TRUE;
     }
 
     // Every 4x4 sensor block becomes one 2x2 Bayer quad of the output. Each output site is
@@ -384,7 +452,7 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_activeperception_NativeTensorPreprocessor_decodeSubsampledRaw10(
         JNIEnv* env, jobject, jobject source, jint source_byte_offset,
         jint source_width, jint source_height, jint row_stride,
-        jintArray black_array, jintArray destination_array) {
+        jintArray black_array, jintArray destination_array, jint mode) {
     auto* base = static_cast<const uint8_t*>(env->GetDirectBufferAddress(source));
     if (!base || !black_array || !destination_array || (source_width & 3) != 0) {
         return JNI_FALSE;
@@ -406,6 +474,26 @@ Java_com_example_activeperception_NativeTensorPreprocessor_decodeSubsampledRaw10
         env->ReleasePrimitiveArrayCritical(destination_array, destination, JNI_ABORT);
         env->ReleasePrimitiveArrayCritical(black_array, black, JNI_ABORT);
         return JNI_FALSE;
+    }
+
+    if (mode == 1) {           // pre-2026-10-15: pixels 0 and 1 of each group, clipped
+        for (int oy = 0; oy < output_height; ++oy) {
+            const int iy = (oy & ~1) * 2 + (oy & 1);
+            const uint8_t* row = base + static_cast<size_t>(iy) * row_stride;
+            jint* out = destination + static_cast<size_t>(oy) * output_width;
+            const int channel_row = (iy & 1) * 2;
+            for (int group = 0; group < output_width / 2; ++group) {
+                const uint8_t* packed = row + static_cast<size_t>(group) * 5;
+                const int tails = packed[4];
+                const int p0 = (static_cast<int>(packed[0]) << 2) | (tails & 0x3);
+                const int p1 = (static_cast<int>(packed[1]) << 2) | ((tails >> 2) & 0x3);
+                out[group * 2] = std::max(0, p0 - black[channel_row]);
+                out[group * 2 + 1] = std::max(0, p1 - black[channel_row + 1]);
+            }
+        }
+        env->ReleasePrimitiveArrayCritical(destination_array, destination, 0);
+        env->ReleasePrimitiveArrayCritical(black_array, black, JNI_ABORT);
+        return JNI_TRUE;
     }
 
     // Android RAW10 stores four 10-bit pixels in five bytes. Bytes 0..3 contain each

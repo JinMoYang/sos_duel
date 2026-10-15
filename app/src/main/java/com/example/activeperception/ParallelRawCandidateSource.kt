@@ -73,6 +73,10 @@ class ParallelRawCandidateSource(
     private val burstWindow: BurstWindow = BurstWindow.FIRST_N
 ) : CandidateSource<Bitmap> {
 
+    /** 0 (default): area average in linear values, one clip after the gain. 1: the
+     *  pre-2026-10-15 bilinear blend, kept only for the before/after comparison. */
+    @Volatile var resampleMode: Int = 0
+
     private val pool = Executors.newFixedThreadPool(nThreads)
     private val exp21TensorBuffers = ConcurrentHashMap<Int, ByteBuffer>()
     @Volatile private var srgbLut: IntArray = IntArray(0)
@@ -421,7 +425,7 @@ class ParallelRawCandidateSource(
                     check(NativeTensorPreprocessor.fillFusedBayerSrgbRowStripe(
                         frameArrays, minOf(burstN, frames.size), f0.width, f0.height,
                         f0.cfaPattern, f0.sensorOrientation, gains, bases, lut, input,
-                        imgsz, y0, y1))
+                        imgsz, y0, y1, resampleMode))
                     (System.nanoTime() - cpuStart) / 1e6
                 }
             }
@@ -471,7 +475,7 @@ class ParallelRawCandidateSource(
                 check(NativeTensorPreprocessor.fillFusedBayerSrgbRowStripe(
                     frameArrays, 1, frame.width, frame.height, frame.cfaPattern,
                     frame.sensorOrientation, gainRatios, bases, lut, input,
-                    imgsz, y0, y1))
+                    imgsz, y0, y1, resampleMode))
                 (System.nanoTime() - cpuStart) / 1e6
             }
         }
@@ -524,7 +528,7 @@ class ParallelRawCandidateSource(
                     val cpuStart = System.nanoTime()
                     check(NativeTensorPreprocessor.fillFusedBayerSrgbRowStripe(
                         arrayOf(frame.bayer), 1, frame.width, frame.height, frame.cfaPattern,
-                        frame.sensorOrientation, gains, bases, lut, input, imgsz, y0, y1))
+                        frame.sensorOrientation, gains, bases, lut, input, imgsz, y0, y1, resampleMode))
                     (System.nanoTime() - cpuStart) / 1e6
                 }
             }
@@ -581,7 +585,7 @@ class ParallelRawCandidateSource(
                         frameArrays, minOf(grid.burstN(sj), frames.size),
                         frames[0].width, frames[0].height, frames[0].cfaPattern,
                         frames[0].sensorOrientation, gains, bases, lut, input,
-                        imgsz, y0, y1))
+                        imgsz, y0, y1, resampleMode))
                     (System.nanoTime() - cpuStart) / 1e6
                 }
             }

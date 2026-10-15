@@ -24,22 +24,29 @@ object NativeTensorPreprocessor {
         bayerWidth: Int, bayerHeight: Int, cfaPattern: String,
         orientation: Int, gains: DoubleArray, baseFloats: IntArray,
         srgbLut: IntArray, destination: ByteBuffer,
-        imageSize: Int, outputYStart: Int, outputYEnd: Int
+        imageSize: Int, outputYStart: Int, outputYEnd: Int,
+        /** 0 = area average in linear values (current); 1 = pre-2026-10-15 bilinear blend
+         *  of clipped, sRGB-encoded quads (kept only for the before/after comparison). */
+        resampleMode: Int
     ): Boolean
 
-    /** EXP5.1.1: CFA-preserving 2x RAW decode + per-channel black subtraction. */
+    /** 4x4 block -> 2x2 quad RAW decode + per-channel black subtraction. */
     external fun decodeSubsampledBayer(
         source: ByteBuffer, sourceByteOffset: Int,
         sourceWidth: Int, sourceHeight: Int,
         rowStrideBytes: Int, pixelStrideBytes: Int,
-        blackLevels: IntArray, destination: IntArray
+        blackLevels: IntArray, destination: IntArray,
+        /** 0 = mean of the 4 same-colour pixels, signed (current); 1 = pre-2026-10-15:
+         *  one pixel of the 4, clipped at black. */
+        mode: Int
     ): Boolean
 
-    /** EXP5.3: Android RAW10 packed decode with the identical CFA-preserving sampling. */
+    /** RAW10 packed variant of [decodeSubsampledBayer], same modes. */
     external fun decodeSubsampledRaw10(
         source: ByteBuffer, sourceByteOffset: Int,
         sourceWidth: Int, sourceHeight: Int,
         rowStrideBytes: Int, blackLevels: IntArray,
-        destination: IntArray
+        destination: IntArray,
+        mode: Int
     ): Boolean
 }
