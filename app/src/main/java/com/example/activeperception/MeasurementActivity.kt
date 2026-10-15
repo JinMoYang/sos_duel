@@ -1270,7 +1270,8 @@ class MeasurementActivity : AppCompatActivity() {
         // adb-driven starts.
         platformIdx = prefs.getInt("platform", if (rayNeoTouchpad) 2 else 0)
         intent.getStringExtra("platform")?.let { t ->
-            val i = platformTags.indexOf(t); if (i >= 0) platformIdx = i
+            val i = platformTags.indexOf(t)
+            if (i >= 0) { platformIdx = i; prefs.edit().putInt("platform", i).apply() }
         }
         findViewById<Button>(R.id.drivePlatform).setOnClickListener {
             platformIdx = (platformIdx + 1) % platformTags.size
@@ -1661,17 +1662,16 @@ class MeasurementActivity : AppCompatActivity() {
     )
 
     private val LAP_PRESETS = listOf(
-        LapPreset("Limo: collect 5x3 + phone AE (2026-10-13)", "collect:10,ae_phone:3", 5),
-        LapPreset("Limo: claim 2 — 7 methods", CLAIM2_PLAN.replace(":N", ":3"), 3),
-        LapPreset("Limo: latency, no images — 7 methods", CLAIM2_PLAN.replace(":N", ":1"), 1,
-            saveImages = false),
-        LapPreset("Limo: claim 1 motion — collect 5x5", "collect55:25", 1),
-        LapPreset("Limo: v3cause pilot", "v3cause_pilot:40", 1),
-        LapPreset("Static: claim 1 — collect 5x5 old/new A/B, 150 frames",
+        LapPreset("① 준비: read noise — 렌즈를 완전히 가리고 (1분)", run = "readnoise"),
+        LapPreset("② 준비: v3cause 확인 — 차 앞에 세워 두고 (40초)", run = "v3cause_t010", cap = 400),
+        LapPreset("③ v3cause pilot — Limo, 한 번만 (40바퀴)", "v3cause_pilot:40", 1),
+        LapPreset("④ 질문 1 — 폰 고정, 조명마다 (150 frame, 5분)",
             run = "collect55_ab", cap = 150),
-        LapPreset("Static: read noise (cover the lens)", run = "readnoise"),
-        LapPreset("Static: v3cause desk check, 400 frames (~40 s)", run = "v3cause_t010", cap = 400),
-        LapPreset("Static: v3cause pilot desk check, 400 frames", run = "v3cause_pilot", cap = 400)
+        LapPreset("⑤ 질문 1+2 — Limo, 조명마다 (78바퀴, 약 20분)",
+            "collect55:5," + CLAIM2_PLAN.replace(":N", ":3"), 3),
+        LapPreset("(선택) 지연 시간 보정 — Limo, 사진 저장 없이 (7바퀴)",
+            CLAIM2_PLAN.replace(":N", ":1"), 1, saveImages = false),
+        LapPreset("(이전) 5x3 수집 + 폰 AE", "collect:10,ae_phone:3", 5)
     )
 
     /** Frame cap and image saving for the current preset-started run or session. */
