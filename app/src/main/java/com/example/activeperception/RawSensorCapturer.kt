@@ -203,6 +203,19 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     var maxAnalogIso: Int = 0; private set
     var streamFormat: Int = ImageFormat.RAW_SENSOR; private set
     val streamFormatName: String get() = formatName(streamFormat)
+    /** Manual focus in diopters, applied to EVERY request this capturer builds (AF off), so
+     *  no method carries the autofocus's own hunting into a comparison. NaN or negative
+     *  leaves focus to the template's AF. Clamped to the lens minimum focus distance; a
+     *  fixed-focus lens (minimum 0) is left alone. */
+    @Volatile var fixedFocusDiopters: Float = 2.0f
+    var minFocusDiopters: Float = 0f; private set
+
+    fun applyFixedFocus(builder: CaptureRequest.Builder) {
+        val d = fixedFocusDiopters
+        if (d.isNaN() || d < 0f || minFocusDiopters <= 0f) return
+        builder.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
+        builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, minOf(d, minFocusDiopters))
+    }
     /** Min frame duration of the ACTIVE RAW stream, from the stream configuration map;
      *  falls back to the RayNeo-measured 33.329ms when the HAL reports none. */
     @Volatile var streamMinFrameDurationNs: Long = BASE_FRAME_DURATION_NS; private set
@@ -273,7 +286,9 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             sensorIsoMin = it.lower; sensorIsoMax = it.upper
         }
         maxAnalogIso = chars.get(CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY) ?: 0
-        Log.i(TAG, "sensitivity range=[$sensorIsoMin,$sensorIsoMax] maxAnalog=$maxAnalogIso")
+        minFocusDiopters = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+        Log.i(TAG, "sensitivity range=[$sensorIsoMin,$sensorIsoMax] maxAnalog=$maxAnalogIso " +
+            "minFocus=${minFocusDiopters}dpt fixedFocus=${fixedFocusDiopters}dpt")
         cfaPattern = when (chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)) {
             CameraMetadata.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB -> "RGGB"
             CameraMetadata.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG -> "GRBG"
@@ -1097,9 +1112,12 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
             set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
             set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
+            applyFixedFocus(this)
             addTarget(reader!!.surface)
         }.build()
-        return runCapture(request, max(1, nBurst), 0, null, null)
+        // Same native decoder as every manual path, so the phone-AE baseline's RAW is read
+        // exactly like the methods it is compared with.
+        return runCapture(request, max(1, nBurst), 0, null, null, nativeDecode = true)
     }
 
     private fun manualRequest(
@@ -1119,6 +1137,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                 set(CaptureRequest.SENSOR_FRAME_DURATION,
                     max(streamMinFrameDurationNs, expected.exposureUs * 1_000L + 1_000_000L))
             }
+            applyFixedFocus(this)
             setTag(commandId)
             addTarget(reader!!.surface)
         }.build()
@@ -1369,19 +1388,22 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             sensorOrientation, calibration.first.copyOf(), calibration.second.copyOf()), meta)
     }
 
+    /** Every 4x4 sensor block -> one 2x2 Bayer quad; each site is the mean of the block's
+     *  four same-colour pixels (rows iy, iy+2; columns ix, ix+2), black removed, NOT clipped.
+     *  Must match the native decoder bit for bit (floor rounding of the mean). */
     private fun decodeReference(
         bytes: java.nio.ByteBuffer, rowStride: Int, pixelStride: Int,
         black: IntArray, outWidth: Int, outHeight: Int, out: IntArray
     ) {
+        fun px(y: Int, x: Int) = bytes.getShort(y * rowStride + x * pixelStride).toInt() and 0xFFFF
         for (oy in 0 until outHeight) {
             val iy = (oy and 1.inv()) * 2 + (oy and 1)
             val rowOut = oy * outWidth
             for (ox in 0 until outWidth) {
                 val ix = (ox and 1.inv()) * 2 + (ox and 1)
-                val offset = iy * rowStride + ix * pixelStride
-                val raw = bytes.getShort(offset).toInt() and 0xFFFF
+                val sum = px(iy, ix) + px(iy, ix + 2) + px(iy + 2, ix) + px(iy + 2, ix + 2)
                 val channelBlack = black[(iy and 1) * 2 + (ix and 1)]
-                out[rowOut + ox] = (raw - channelBlack).coerceAtLeast(0)
+                out[rowOut + ox] = Math.floorDiv(sum - 4 * channelBlack + 2, 4)
             }
         }
     }
@@ -1390,18 +1412,21 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         bytes: java.nio.ByteBuffer, rowStride: Int, black: IntArray,
         outWidth: Int, outHeight: Int, out: IntArray
     ) {
+        fun unpack(offset: Int, k: Int): Int {
+            val tails = bytes.get(offset + 4).toInt() and 0xff
+            return ((bytes.get(offset + k).toInt() and 0xff) shl 2) or ((tails ushr (2 * k)) and 3)
+        }
         for (oy in 0 until outHeight) {
             val iy = (oy and 1.inv()) * 2 + (oy and 1)
             val rowOut = oy * outWidth
             val blackRow = (iy and 1) * 2
             for (group in 0 until outWidth / 2) {
-                val offset = iy * rowStride + group * 5
-                val tails = bytes.get(offset + 4).toInt() and 0xff
-                val p0 = ((bytes.get(offset).toInt() and 0xff) shl 2) or (tails and 3)
-                val p1 = ((bytes.get(offset + 1).toInt() and 0xff) shl 2) or
-                    ((tails ushr 2) and 3)
-                out[rowOut + group * 2] = (p0 - black[blackRow]).coerceAtLeast(0)
-                out[rowOut + group * 2 + 1] = (p1 - black[blackRow + 1]).coerceAtLeast(0)
+                val a = iy * rowStride + group * 5
+                val b = (iy + 2) * rowStride + group * 5
+                val even = unpack(a, 0) + unpack(a, 2) + unpack(b, 0) + unpack(b, 2)
+                val odd = unpack(a, 1) + unpack(a, 3) + unpack(b, 1) + unpack(b, 3)
+                out[rowOut + group * 2] = Math.floorDiv(even - 4 * black[blackRow] + 2, 4)
+                out[rowOut + group * 2 + 1] = Math.floorDiv(odd - 4 * black[blackRow + 1] + 2, 4)
             }
         }
     }

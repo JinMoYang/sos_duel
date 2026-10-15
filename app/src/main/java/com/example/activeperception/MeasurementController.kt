@@ -174,7 +174,17 @@ class MeasurementController(
         // for any of it to mean anything: on USB the phone charges while the run drains
         // it, so a tethered run has to be rejected, not averaged in.
         "batt_charge_uah", "batt_current_ua", "batt_voltage_mv", "batt_pct", "batt_plugged"
-    )
+    ) + StepClock.HEADERS
+
+    /** Per-step timeline shared by every method that logs through [logFrame]. */
+    private val stepClock = StepClock()
+
+    /** False for the short latency check that measures how much image saving costs: no
+     *  JPEG is written, everything else is logged as usual. Recorded in the manifest. */
+    @Volatile var saveImages: Boolean = true
+
+    private fun saveImage(name: String, bmp: Bitmap): String =
+        if (saveImages) logger.saveJpegAsync(name, bmp) else ""
 
     /** [methodParams] carries the mode's own configuration so a run variant is identifiable
      *  from the manifest alone, without parsing the run directory name. Nested so the
@@ -200,11 +210,21 @@ class MeasurementController(
             put("width", captureWidth); put("height", captureHeight)
             put("downsampled_in_decode", true)
             // The RAW size above is NOT the space the logged boxes live in — decode()
-            // block-skips 2× and demosaic2x2 halves again. Every xyxy in dets.jsonl and
+            // bins each 4x4 block to a 2x2 quad and demosaic2x2 halves again. Every xyxy in dets.jsonl and
             // candidate_dets.jsonl is in the detector_input space recorded here.
             put("detector_input_width", raw.bitmapWidth)
             put("detector_input_height", raw.bitmapHeight)
         })
+        m.put("image_pipeline", JSONObject()
+            .put("decode", "each 4x4 sensor block -> one 2x2 Bayer quad; every site is the " +
+                "mean of the block's 4 same-colour pixels (all pixels used); black removed, " +
+                "signed, not clipped")
+            .put("resample", "area average of whole quads in linear values, then gain, " +
+                "then one clip to [0, white], then sRGB LUT")
+            .put("white_balance", "none")
+            .put("fixed_focus_diopters", raw.fixedFocusDiopters.toDouble())
+            .put("lens_min_focus_diopters", raw.minFocusDiopters.toDouble())
+            .put("save_images", saveImages))
         m.put("cfa_pattern", raw.cfaPattern)
         m.put("white_level", raw.maxDn)
         m.put("sync_max_latency", raw.syncMaxLatency)
@@ -463,8 +483,10 @@ class MeasurementController(
             healthNow.graphicsKb, healthNow.cpuMaxMhz,
             if (healthNow.chargeUAh == Long.MIN_VALUE) "" else healthNow.chargeUAh,
             if (healthNow.currentUA == Int.MIN_VALUE) "" else healthNow.currentUA,
-            healthNow.voltageMv, healthNow.batteryPct, healthNow.pluggedState
+            healthNow.voltageMv, healthNow.batteryPct, healthNow.pluggedState,
+            *stepClock.columns(StepClock.nowNs()).toTypedArray()
         ))
+        stepClock.reset()
         writeDets(idx, method, chosenCell, dets)
     }
 
@@ -555,6 +577,7 @@ class MeasurementController(
                 val (gi, sj) = g.indices(cell)
                 val gainVal = g.gains[gi]; val expUs = g.exposuresUs[sj]
                 val t0 = now()
+                stepClock.begin()
                 val tf: Long
                 val tensor: Exp21TensorResult
                 val dets: List<Detection>
@@ -569,6 +592,7 @@ class MeasurementController(
                     tensor = t; dets = all[0]
                 }
                 val formMs = ms(tf)
+                stepClock.decided()
                 val totalMs = ms(t0)
                 val score = sumConf(dets)
                 if (sweeping) obs.add(score to cell)
@@ -576,7 +600,7 @@ class MeasurementController(
                     "%.5f".format(score), if (!sweeping) 1 else 0,
                     if (sweeping) "sweep" else "hold"))
                 val bmp = pipe.bitmap(tensor, 0)
-                val path = logger.saveJpegAsync(
+                val path = saveImage(
                     "${frameName(f)}_${isoExpTag(eff(gainVal), expUs)}", bmp)
                 logFrame(f, "physsweep", cell, gainVal, expUs, 1, false, formMs,
                     pipe.inferMs, totalMs, dets, path,
@@ -626,6 +650,7 @@ class MeasurementController(
             var f = 0
             while (running && f < maxFrames) {
                 val t0 = now()
+                stepClock.begin()
                 val machine = nm
                 val proposal: DoubleArray
                 val phase: String
@@ -673,10 +698,11 @@ class MeasurementController(
                         }
                     }
                 }
+                stepClock.decided()
                 val totalMs = ms(t0)
                 logger.row("candidates", listOf(f, cell, eff(gainVal), expUs,
                     "%.6f".format(fI), 1, phase))
-                val path = logger.saveJpegAsync(
+                val path = saveImage(
                     "${frameName(f)}_${isoExpTag(eff(gainVal), expUs)}", bmp)
                 logFrame(f, if (v2) "shin_nm_v2_$mode" else "shin_nm_$mode", cell, gainVal,
                     expUs, 1, false, formMs,
@@ -1057,26 +1083,54 @@ class MeasurementController(
         }
         // PHONE AE needs the HAL's own AE-on requests, which run through the legacy
         // one-shot path (captureAe re-arms the reader listener and would fight the
-        // persistent fast listener). Its per-step latency is therefore NOT comparable
-        // with pipeline-generation runs — it measures the HAL's policy, not our cost.
+        // persistent fast listener), so its CAPTURE cost is not comparable. Everything after
+        // the RAW arrives is: the frame is decoded natively, formed by the same fused tensor
+        // fill and detected by the same batched detector as prop_c and the v2 baselines, so
+        // the only difference left in the comparison is how the exposure was chosen.
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+        val src = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        tfl?.warmUpAllBatches()
         var f = 0
         while (running && f < maxFrames) {
             val t0 = now()
+            stepClock.begin()
             val frames = raw.captureAe(1)
             if (frames.isEmpty()) break
+            stepClock.captured(raw.lastMeta)
             val tf = now()
-            val bmp = bitmapFromRaw(frames[0])
-            val formMs = ms(tf)
-            val ti = now(); val dets = detector.detectBatch(listOf(bmp))[0]; val infMs = ms(ti)
+            val bmp: Bitmap
+            val dets: List<Detection>
+            val previewDets: List<Detection>
+            val formMs: Double
+            val infMs: Double
+            if (tfl != null) {
+                val tensor = src.formExplicitGainsTensor(frames[0], doubleArrayOf(1.0))
+                stepClock.formed()
+                dets = tfl.detectTensorBatchOptimized(tensor.batch)[0]
+                stepClock.detected()
+                infMs = tfl.lastRunMs + tfl.lastDecodeMs
+                formMs = ms(tf) - infMs
+                bmp = src.selectedTensorBitmap(tensor, 0)
+                previewDets = src.detectionsForTensorPreview(dets, tensor, 0)
+            } else {
+                bmp = bitmapFromRaw(frames[0])
+                formMs = ms(tf)
+                stepClock.formed()
+                val ti = now(); dets = detector.detectBatch(listOf(bmp))[0]; infMs = ms(ti)
+                stepClock.detected()
+                previewDets = dets
+            }
+            stepClock.decided()
             val totalMs = ms(t0)
             val applied = raw.lastMeta.firstOrNull()
             val gainVal = applied?.appliedIso ?: -1
             val expUs = (applied?.appliedExpUs ?: -1L).toInt()
-            val path = logger.saveJpegAsync("${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
+            val path = saveImage("${frameName(f)}_${isoExpTag(gainVal, expUs)}", bmp)
             logFrame(f, "ae", -1, gainVal, expUs, 1, false, formMs, infMs, totalMs, dets, path,
-                captureMs = msBetween(t0, tf))
-            onFrame(bmp, dets, effIso(gainVal), expUs)
-            onStatus("AE[phone] f=$f iso=${effIso(gainVal)} exp=${expUs}us ndet=${dets.size} ${"%.0f".format(totalMs)}ms")
+                applyBoost = false, captureMs = msBetween(t0, tf))
+            runCatching { onFrame(bmp, previewDets, gainVal, expUs) }
+            onStatus("AE[phone] f=$f iso=$gainVal exp=${expUs}us ndet=${dets.size} ${"%.0f".format(totalMs)}ms")
             f++
         }
         endPass()
@@ -3611,7 +3665,7 @@ class MeasurementController(
      *  digital-boost concept — nominal ISO is the label. */
     @Volatile private var v2SpaceCur = Grid(
         gains = v2Sessions["indoor"]!!,
-        exposuresUs = intArrayOf(2083, 4167, 8333, 16667, 33333),
+        exposuresUs = intArrayOf(4167, 8333, 16667, 33333, 66667),
         digitalBoost = 1.0
     )
 
@@ -3622,11 +3676,11 @@ class MeasurementController(
         val gains = v2Sessions[tag] ?: return
         v2SessionTag = tag
         v2SpaceCur = Grid(gains = gains,
-            exposuresUs = intArrayOf(2083, 4167, 8333, 16667, 33333), digitalBoost = 1.0)
+            exposuresUs = intArrayOf(4167, 8333, 16667, 33333, 66667), digitalBoost = 1.0)
     }
 
     private val v2GainRungs: IntArray get() = v2SpaceCur.gains
-    private val v2ShutterRungsUs = intArrayOf(2083, 4167, 8333, 16667, 33333)
+    private val v2ShutterRungsUs = intArrayOf(4167, 8333, 16667, 33333, 66667)
     private fun v2Cell(gi: Int, sj: Int) = gi * v2ShutterRungsUs.size + sj
 
     /** Per-rung digital residual (nominal / analog-realized) for the manifest. */
@@ -3648,9 +3702,13 @@ class MeasurementController(
         val phys = minOf(gainNominal, v2AnalogCeil())
         val frames = capture(expUs, phys, 1)
         if (frames.isEmpty()) return null
+        stepClock.captured(raw.lastMeta)
         val tensor = source.formExplicitGainsTensor(frames[0],
             doubleArrayOf(gainNominal.toDouble() / phys))
-        return tensor to tfl.detectTensorBatchOptimized(tensor.batch)[0]
+        stepClock.formed()
+        val dets = tfl.detectTensorBatchOptimized(tensor.batch)[0]
+        stepClock.detected()
+        return tensor to dets
     }
 
     /** Reachability audit of the v2 lattice: one capture per (rung, shutter) plus a
@@ -3762,16 +3820,20 @@ class MeasurementController(
         raw.startFastCapture()
         onStatus("warming FP16 GPU batches...")
         tfl.warmUpAllBatches()
-        var gi = 2; var sj = 2               // cold start: ISO 400 / 8.3 ms
+        var gi = 2; var sj = 2               // cold start: ISO 400 / rung 2 (1/60 s on the 1/240-1/15 rungs)
         var gainPend = 0; var shutterPend = 0
         var f = 0
         try {
             while (running && f < maxFrames) {
                 val t0 = now()
+                stepClock.begin()
                 val probe = f % period == 0
                 val rung = v2GainRungs[gi]
                 val phys = minOf(rung, analogCeil)
                 val res = rung.toDouble() / phys
+                // The shutter this step outputs at; the hysteresis below may move sj for the
+                // NEXT step, so logging must not read sj after that.
+                val sjUsed = sj
                 val rows = if (probe)
                     (maxOf(0, sj - 1)..minOf(v2ShutterRungsUs.size - 1, sj + 1)).toList()
                 else listOf(sj)
@@ -3782,6 +3844,7 @@ class MeasurementController(
                 // The step's ONE capture command.
                 val frames = raw.captureFast(baseExpUs, phys, nBurst)
                 if (frames.isEmpty()) break
+                stepClock.captured(raw.lastMeta)
                 val tForm = now()
                 val laneCount = rows.size * gis.size
                 val laneBurst = IntArray(laneCount); val laneRatio = DoubleArray(laneCount)
@@ -3794,7 +3857,9 @@ class MeasurementController(
                     laneGi[l] = g; laneSj[l] = r; l++
                 }
                 val tensor = src.formExplicitBurstTensor(frames, laneBurst, laneRatio)
+                stepClock.formed()
                 val dets = tfl.detectTensorBatchOptimized(tensor.batch)
+                stepClock.detected()
                 val inferMs = tfl.lastRunMs + tfl.lastDecodeMs
                 val formMs = ms(tForm) - inferMs
                 val scores = DoubleArray(laneCount) { sumConf(dets[it]) }
@@ -3851,15 +3916,16 @@ class MeasurementController(
                         sj++; shutterPend = 0
                     } else if (shutterPend <= -2 && sj > 0) { sj--; shutterPend = 0 }
                 }
+                stepClock.decided()
                 val totalMs = ms(t0)
-                val path = logger.saveJpegAsync(
-                    "${frameName(f)}_cell${v2Cell(chosenGi, sj)}", bmp)
-                logFrame(f, "proposed_v2", v2Cell(chosenGi, sj), chosenNominal,
-                    v2ShutterRungsUs[sj], laneCount, nBurst > 1, formMs, inferMs, totalMs,
+                val path = saveImage(
+                    "${frameName(f)}_cell${v2Cell(chosenGi, sjUsed)}", bmp)
+                logFrame(f, "proposed_v2", v2Cell(chosenGi, sjUsed), chosenNominal,
+                    v2ShutterRungsUs[sjUsed], laneCount, nBurst > 1, formMs, inferMs, totalMs,
                     chosenDets, path, tieBreak = if (allZero) "hold" else "conf",
                     applyBoost = false, captureMs = msBetween(t0, tForm))
-                runCatching { onFrame(bmp, previewDets, chosenNominal, v2ShutterRungsUs[sj]) }
-                onStatus("V2 f=$f iso=$rung($phys) exp=${v2ShutterRungsUs[sj] / 1000.0}ms " +
+                runCatching { onFrame(bmp, previewDets, chosenNominal, v2ShutterRungsUs[sjUsed]) }
+                onStatus("V2 f=$f iso=$rung($phys) exp=${v2ShutterRungsUs[sjUsed] / 1000.0}ms " +
                     "conf=${"%.2f".format(scores[bestLane])}" +
                     (if (probe) " | probe" else "") + " | ${"%.0f".format(totalMs)}ms")
                 f++

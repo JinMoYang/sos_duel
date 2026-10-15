@@ -59,6 +59,9 @@ class MeasurementActivity : AppCompatActivity() {
         /** Run modes have no frame cap: field passes follow a lap protocol the operator
          *  ends with Stop. Storage stays modest (~85 KB per frame, img/ JPEGs only). */
         private const val NO_FRAME_CAP = Int.MAX_VALUE
+        /** Manual focus for every method (diopters): the 2026-10-13 Limo sessions' median
+         *  autofocus position, about 45-50 cm, where the toy cars sit. */
+        private const val DEFAULT_FOCUS_DIOPTERS = 2.0f
         /** Neural-AE collection budget. The v2 collector pays 25 physical captures per
          *  step for the surface; hists are ~15 ms each, so EVERY captured cell becomes a
          *  sample (a full exposure bracket per scene instant — nothing thrown away).
@@ -311,6 +314,7 @@ class MeasurementActivity : AppCompatActivity() {
                 start("v2_diag") { mc!!.runV2LatticeDiag(::post) }
             else start("iso_diag") { mc!!.runIsoDiag(onStatus = ::post) }
         }
+        takeLaunchOverrides()
         // Headless hook for adb-driven devices whose display sleeps when not worn (the
         // glass): `--ez v2_diag true --ez autorun true` presses IsoDiag after layout.
         if (intent.getBooleanExtra("autorun", false)) {
@@ -1599,11 +1603,53 @@ class MeasurementActivity : AppCompatActivity() {
     @Volatile private var playlistActive = false
     private val playlistHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
+    /** One-shot overrides from the launch intent, for the ONE adb-started lap session or run.
+     *  They used to be read from the intent at every button press, so a test launch's
+     *  settings (a short lap_plan, a 5 s fallback lap) silently stayed in force for later
+     *  manual sessions until the app was killed. Now they are taken once in onCreate,
+     *  removed from the intent, and dropped when that session or run ends. Extras:
+     *  lap_plan, lap_repeats, lap_leadin_s, lap_fallback_s, lap_start_delay_s,
+     *  collect_frames, save_images (false = latency check without JPEGs), focus_dpt
+     *  (manual focus in diopters; "af" leaves autofocus on). */
+    private var launchLapPlan: String? = null
+    private var launchLapRepeats: Int? = null
+    private var launchLapLeadInS: Int? = null
+    private var launchLapFallbackS: Int? = null
+    private var launchLapStartDelayS: Int? = null
+    private var launchCollectFrames: Int? = null
+    private var launchSaveImages: Boolean? = null
+    private var launchFocusDiopters: Float? = null
+
+    private fun takeLaunchOverrides() {
+        val i = intent
+        fun int(key: String): Int? = if (i.hasExtra(key)) i.getIntExtra(key, 0) else null
+        launchLapPlan = i.getStringExtra("lap_plan")
+        launchLapRepeats = int("lap_repeats")
+        launchLapLeadInS = int("lap_leadin_s")
+        launchLapFallbackS = int("lap_fallback_s")
+        launchLapStartDelayS = int("lap_start_delay_s")
+        launchCollectFrames = int("collect_frames")
+        launchSaveImages = if (i.hasExtra("save_images")) i.getBooleanExtra("save_images", true) else null
+        launchFocusDiopters = i.getStringExtra("focus_dpt")?.let {
+            if (it.equals("af", ignoreCase = true)) Float.NaN else it.toFloatOrNull()
+        }
+        for (key in listOf("lap_plan", "lap_repeats", "lap_leadin_s", "lap_fallback_s",
+                "lap_start_delay_s", "collect_frames", "save_images", "focus_dpt")) {
+            i.removeExtra(key)
+        }
+    }
+
+    private fun clearLaunchOverrides() {
+        launchLapPlan = null; launchLapRepeats = null; launchLapLeadInS = null
+        launchLapFallbackS = null; launchLapStartDelayS = null; launchCollectFrames = null
+        launchSaveImages = null; launchFocusDiopters = null
+    }
+
     /** Programmatic equivalent of picking a method radio and pressing Start. */
     /** The 5x3 collection run (MeasurementController.runCollect53). It has no method radio,
      *  so it is started directly rather than through the Start button. */
     private fun startCollect() {
-        val cap = intent.getIntExtra("collect_frames", NO_FRAME_CAP)
+        val cap = launchCollectFrames ?: NO_FRAME_CAP
         // Inside a lap session the base ISO is held for a whole lap and stepped by the
         // session; on its own the run steps it every frame.
         val base = if (lapSession != null) lapCollectBlockOrdinal else -1
@@ -1620,8 +1666,7 @@ class MeasurementActivity : AppCompatActivity() {
         val lapButton = findViewById<Button>(R.id.btnLapSession)
         if (lapSession != null) { stopMeasurement(); return }
         if (runActive || playlistActive) { post("busy — stop first"); return }
-        val plan = LapSession.parsePlan(
-            intent.getStringExtra("lap_plan") ?: LapSession.DEFAULT_PLAN)
+        val plan = LapSession.parsePlan(launchLapPlan ?: LapSession.DEFAULT_PLAN)
         if (plan.isEmpty()) { post("lap plan is empty"); return }
         // The x2 digital boost exists for the S25's ISO-400 analog ceiling and is folded
         // into every grid-formed image, phone AE included. The collection run sets its own
@@ -1651,15 +1696,16 @@ class MeasurementActivity : AppCompatActivity() {
             }
             override fun sessionEnded(completed: Boolean) {
                 lapSession = null
+                clearLaunchOverrides()
                 // An aborted session can end while its last run is still winding down;
                 // the boost goes back only once no run can still be forming images.
                 if (!runActive) restoreBoostAfterLapSession()
                 lapButton.text = if (completed) "Lap session · done" else "Lap session"
             }
-        }, plan, intent.getIntExtra("lap_repeats", LapSession.DEFAULT_REPEATS).coerceAtLeast(1),
-            leadInTimeoutS = intent.getIntExtra("lap_leadin_s", 90).coerceAtLeast(1),
-            fallbackLapS = intent.getIntExtra("lap_fallback_s", 15).coerceAtLeast(3),
-            startDelayS = intent.getIntExtra("lap_start_delay_s", 5).coerceAtLeast(0))
+        }, plan, (launchLapRepeats ?: LapSession.DEFAULT_REPEATS).coerceAtLeast(1),
+            leadInTimeoutS = (launchLapLeadInS ?: 90).coerceAtLeast(1),
+            fallbackLapS = (launchLapFallbackS ?: 15).coerceAtLeast(3),
+            startDelayS = (launchLapStartDelayS ?: 5).coerceAtLeast(0))
         lapSession = session
         lapCollectBlockOrdinal = -1
         vibrate(120)
@@ -2065,6 +2111,8 @@ class MeasurementActivity : AppCompatActivity() {
         val sess = sessionTag()
         val plat = platformTag()
         val pairSnap = pairingSnap()
+        val saveImagesNow = launchSaveImages ?: true
+        val focusNow = launchFocusDiopters ?: DEFAULT_FOCUS_DIOPTERS
         applyMountOffset()
         runActive = true
         inferenceExecutor.execute {
@@ -2094,6 +2142,8 @@ class MeasurementActivity : AppCompatActivity() {
                 mcLocal.setV2Session(sess)
                 mcLocal.platformTag = plat
                 mcLocal.applyPairing(pairSnap)
+                mcLocal.saveImages = saveImagesNow
+                raw.fixedFocusDiopters = focusNow
                 mc = mcLocal
                 // The currentFrame supplier reads lastFrameIdx, so staleness is measured
                 // against the same frame index that frames.csv records.
@@ -2122,7 +2172,11 @@ class MeasurementActivity : AppCompatActivity() {
                 // fully unwound (camera and GPU stay open, so the gap is a second or two).
                 runOnUiThread {
                     lapSession?.onRunEnded()
-                    if (lapSession == null) restoreBoostAfterLapSession()
+                    if (lapSession == null) {
+                        restoreBoostAfterLapSession()
+                        // A single adb-started run consumes its overrides too.
+                        if (!playlistActive) clearLaunchOverrides()
+                    }
                     updateDriveUi()
                     when {
                         !playlistActive -> {}

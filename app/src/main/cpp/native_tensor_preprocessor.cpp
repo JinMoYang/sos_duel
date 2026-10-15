@@ -18,6 +18,11 @@ inline int source_index(int ox, int oy, int width, int height, int degrees) {
     return sy * width + sx;
 }
 
+// floor(v / 4) for any sign, matching Kotlin Math.floorDiv(v, 4) and an arithmetic >> 2.
+inline int floor_div4(int v) {
+    return v >= 0 ? v / 4 : -((-v + 3) / 4);
+}
+
 inline float encoded(const jint* plane, int p, double gain, const jint* lut, int lut_max) {
     int index = static_cast<int>(static_cast<double>(plane[p]) * gain);
     index = std::max(0, std::min(index, lut_max));
@@ -210,22 +215,26 @@ Java_com_example_activeperception_NativeTensorPreprocessor_fillFusedBayerSrgbRow
             const int pad_x = (image_size - nw) / 2;
             const int pad_y = (image_size - nh) / 2;
             const int lut_max = lut_length - 1;
-            std::vector<int> x0(nw), x1(nw);
-            std::vector<float> fx(nw);
+            // Area resampling: output pixel d covers the oriented quads [lo(d), lo(d+1)).
+            // Every quad (and so every decoded site) contributes to exactly one output
+            // pixel, all in linear values; the gain and the single clip come afterwards.
+            auto span_lo = [](int d, int src, int dst) -> int {
+                return static_cast<int>((static_cast<long long>(d) * src) / dst);
+            };
+            std::vector<int> xs(nw), xe(nw);
             for (int dx = 0; dx < nw; ++dx) {
-                const double sx = std::clamp((dx + 0.5) * oriented_w / nw - 0.5,
-                                             0.0, static_cast<double>(oriented_w - 1));
-                x0[dx] = static_cast<int>(std::floor(sx));
-                x1[dx] = std::min(x0[dx] + 1, oriented_w - 1);
-                fx[dx] = static_cast<float>(sx - x0[dx]);
+                xs[dx] = std::min(span_lo(dx, oriented_w, nw), oriented_w - 1);
+                xe[dx] = std::max(xs[dx] + 1, std::min(span_lo(dx + 1, oriented_w, nw), oriented_w));
             }
-            auto demosaic = [&](int oriented_x, int oriented_y, int out_rgb[3]) {
+            // Sum of the burst frames at one quad: R, G1+G2 (kept as a sum so no integer
+            // halving happens before averaging), B.
+            auto quad = [&](int oriented_x, int oriented_y, long long out_rgb[3]) {
                 const int p = source_index(oriented_x, oriented_y, width, height, degrees);
                 const int bx = p % width;
                 const int by = p / width;
                 const int base = (by * 2) * bayer_width + bx * 2;
                 const int offsets[4] = {0, 1, bayer_width, bayer_width + 1};
-                int sites[4] = {0, 0, 0, 0};
+                long long sites[4] = {0, 0, 0, 0};
                 for (int k = 0; k < used; ++k) {
                     const jint* frame = frames[k];
                     sites[0] += frame[base + offsets[0]];
@@ -234,36 +243,34 @@ Java_com_example_activeperception_NativeTensorPreprocessor_fillFusedBayerSrgbRow
                     sites[3] += frame[base + offsets[3]];
                 }
                 out_rgb[0] = sites[r_site];
-                out_rgb[1] = (sites[g_sites[0]] + sites[g_sites[1]]) / 2;
+                out_rgb[1] = sites[g_sites[0]] + sites[g_sites[1]];
                 out_rgb[2] = sites[b_site];
             };
             const int begin = std::max(0, static_cast<int>(output_y_start));
             const int end = std::min(nh, static_cast<int>(output_y_end));
             for (int dy = begin; dy < end; ++dy) {
-                const double sy = std::clamp((dy + 0.5) * oriented_h / nh - 0.5,
-                                             0.0, static_cast<double>(oriented_h - 1));
-                const int y0 = static_cast<int>(std::floor(sy));
-                const int y1 = std::min(y0 + 1, oriented_h - 1);
-                const float fy = static_cast<float>(sy - y0);
+                const int ys = std::min(span_lo(dy, oriented_h, nh), oriented_h - 1);
+                const int ye = std::max(ys + 1, std::min(span_lo(dy + 1, oriented_h, nh), oriented_h));
                 for (int dx = 0; dx < nw; ++dx) {
-                    int q00[3], q10[3], q01[3], q11[3];
-                    demosaic(x0[dx], y0, q00); demosaic(x1[dx], y0, q10);
-                    demosaic(x0[dx], y1, q01); demosaic(x1[dx], y1, q11);
+                    long long acc[3] = {0, 0, 0};
+                    long long q[3];
+                    for (int oy = ys; oy < ye; ++oy) {
+                        for (int ox = xs[dx]; ox < xe[dx]; ++ox) {
+                            quad(ox, oy, q);
+                            acc[0] += q[0]; acc[1] += q[1]; acc[2] += q[2];
+                        }
+                    }
+                    const double n = static_cast<double>((ye - ys) * (xe[dx] - xs[dx]));
+                    const double linear[3] = { acc[0] / n, acc[1] / (2.0 * n), acc[2] / n };
                     for (int lane = 0; lane < gain_count; ++lane) {
                         float* out = dst + bases[lane] +
                             ((dy + pad_y) * image_size + dx + pad_x) * 3;
                         const double gain = gains[lane];
                         for (int c = 0; c < 3; ++c) {
-                            auto enc = [&](int value) -> float {
-                                int index = static_cast<int>(value * gain);
-                                index = std::max(0, std::min(index, lut_max));
-                                return static_cast<float>(lut[index]);
-                            };
-                            const float top = enc(q00[c]) * (1.0f - fx[dx]) +
-                                              enc(q10[c]) * fx[dx];
-                            const float bottom = enc(q01[c]) * (1.0f - fx[dx]) +
-                                                 enc(q11[c]) * fx[dx];
-                            out[c] = (top * (1.0f - fy) + bottom * fy) / 255.0f;
+                            const double v = linear[c] * gain;
+                            int index = v <= 0.0 ? 0 : static_cast<int>(v);
+                            index = std::min(index, lut_max);
+                            out[c] = static_cast<float>(lut[index]) / 255.0f;
                         }
                     }
                 }
@@ -310,40 +317,61 @@ Java_com_example_activeperception_NativeTensorPreprocessor_decodeSubsampledBayer
         return JNI_FALSE;
     }
 
+    // Every 4x4 sensor block becomes one 2x2 Bayer quad of the output. Each output site is
+    // the MEAN of the four same-colour pixels of its block (rows iy, iy+2; columns ix, ix+2),
+    // so every sensor pixel contributes. Values stay signed: the black level is removed but
+    // nothing is clipped here; formation clips once, after summing, averaging and gain.
     for (int oy = 0; oy < output_height; ++oy) {
         const int iy = (oy & ~1) * 2 + (oy & 1);
-        const uint8_t* row_bytes = base + static_cast<size_t>(iy) * row_stride;
+        const uint8_t* row_a = base + static_cast<size_t>(iy) * row_stride;
+        const uint8_t* row_b = base + static_cast<size_t>(iy + 2) * row_stride;
         jint* out = destination + static_cast<size_t>(oy) * output_width;
         const int channel_row = (iy & 1) * 2;
         int ox = 0;
 
-        // RayNeo RAW_SENSOR uses little-endian uint16 pixels. Deinterleave each 32-pixel
-        // source group with vld4: val[0]/val[1] are exactly CFA-preserving positions
-        // 0,1,4,5,...,28,29 selected by the Kotlin reference implementation.
+        // Little-endian uint16 pixels. vld4 deinterleaves 32 source pixels: val[0]/val[2]
+        // are columns 0,2 (+4k) of the even CFA column, val[1]/val[3] columns 1,3 (+4k).
         if (pixel_stride == 2) {
-            const auto* row = reinterpret_cast<const uint16_t*>(row_bytes);
-            const uint16x8_t b0 = vdupq_n_u16(static_cast<uint16_t>(black[channel_row]));
-            const uint16x8_t b1 = vdupq_n_u16(static_cast<uint16_t>(black[channel_row + 1]));
+            const auto* ra = reinterpret_cast<const uint16_t*>(row_a);
+            const auto* rb = reinterpret_cast<const uint16_t*>(row_b);
+            const int32x4_t b0 = vdupq_n_s32(4 * black[channel_row] - 2);
+            const int32x4_t b1 = vdupq_n_s32(4 * black[channel_row + 1] - 2);
             for (; ox + 16 <= output_width; ox += 16) {
                 const int ix = (ox / 2) * 4;
-                const uint16x8x4_t pixels = vld4q_u16(row + ix);
-                const uint16x8_t even = vqsubq_u16(pixels.val[0], b0);
-                const uint16x8_t odd = vqsubq_u16(pixels.val[1], b1);
-                uint32x4x2_t low = { vmovl_u16(vget_low_u16(even)),
-                                     vmovl_u16(vget_low_u16(odd)) };
-                uint32x4x2_t high = { vmovl_u16(vget_high_u16(even)),
-                                      vmovl_u16(vget_high_u16(odd)) };
-                vst2q_u32(reinterpret_cast<uint32_t*>(out + ox), low);
-                vst2q_u32(reinterpret_cast<uint32_t*>(out + ox + 8), high);
+                const uint16x8x4_t pa = vld4q_u16(ra + ix);
+                const uint16x8x4_t pb = vld4q_u16(rb + ix);
+                const uint32x4_t even_lo = vaddq_u32(
+                        vaddl_u16(vget_low_u16(pa.val[0]), vget_low_u16(pa.val[2])),
+                        vaddl_u16(vget_low_u16(pb.val[0]), vget_low_u16(pb.val[2])));
+                const uint32x4_t even_hi = vaddq_u32(
+                        vaddl_u16(vget_high_u16(pa.val[0]), vget_high_u16(pa.val[2])),
+                        vaddl_u16(vget_high_u16(pb.val[0]), vget_high_u16(pb.val[2])));
+                const uint32x4_t odd_lo = vaddq_u32(
+                        vaddl_u16(vget_low_u16(pa.val[1]), vget_low_u16(pa.val[3])),
+                        vaddl_u16(vget_low_u16(pb.val[1]), vget_low_u16(pb.val[3])));
+                const uint32x4_t odd_hi = vaddq_u32(
+                        vaddl_u16(vget_high_u16(pa.val[1]), vget_high_u16(pa.val[3])),
+                        vaddl_u16(vget_high_u16(pb.val[1]), vget_high_u16(pb.val[3])));
+                // (sum - 4*black + 2) >> 2, arithmetic shift = floor, same as the Kotlin
+                // reference's Math.floorDiv.
+                int32x4x2_t low = {
+                        vshrq_n_s32(vsubq_s32(vreinterpretq_s32_u32(even_lo), b0), 2),
+                        vshrq_n_s32(vsubq_s32(vreinterpretq_s32_u32(odd_lo), b1), 2) };
+                int32x4x2_t high = {
+                        vshrq_n_s32(vsubq_s32(vreinterpretq_s32_u32(even_hi), b0), 2),
+                        vshrq_n_s32(vsubq_s32(vreinterpretq_s32_u32(odd_hi), b1), 2) };
+                vst2q_s32(out + ox, low);
+                vst2q_s32(out + ox + 8, high);
             }
         }
         for (; ox < output_width; ++ox) {
             const int ix = (ox & ~1) * 2 + (ox & 1);
-            const uint8_t* pixel = row_bytes + static_cast<size_t>(ix) * pixel_stride;
-            const int raw = static_cast<int>(pixel[0]) |
-                            (static_cast<int>(pixel[1]) << 8);
-            const int value = raw - black[channel_row + (ix & 1)];
-            out[ox] = std::max(0, value);
+            auto px = [&](const uint8_t* row, int x) -> int {
+                const uint8_t* p = row + static_cast<size_t>(x) * pixel_stride;
+                return static_cast<int>(p[0]) | (static_cast<int>(p[1]) << 8);
+            };
+            const int sum = px(row_a, ix) + px(row_a, ix + 2) + px(row_b, ix) + px(row_b, ix + 2);
+            out[ox] = floor_div4(sum - 4 * black[channel_row + (ix & 1)] + 2);
         }
     }
 
@@ -381,22 +409,27 @@ Java_com_example_activeperception_NativeTensorPreprocessor_decodeSubsampledRaw10
     }
 
     // Android RAW10 stores four 10-bit pixels in five bytes. Bytes 0..3 contain each
-    // pixel's upper eight bits and byte 4 contains the four 2-bit tails. The SoS 2x
-    // subsampling keeps pixels 0 and 1 from every group, so no unpacked full-size buffer
-    // is ever allocated.
+    // pixel's upper eight bits and byte 4 contains the four 2-bit tails. One packed group
+    // spans exactly the four columns of a 4x4 block: pixels 0,2 are the even CFA column and
+    // 1,3 the odd one. Each output site is the mean of the four same-colour pixels of its
+    // block (rows iy, iy+2), signed, not clipped. No unpacked full-size buffer is allocated.
     for (int oy = 0; oy < output_height; ++oy) {
         const int iy = (oy & ~1) * 2 + (oy & 1);
-        const uint8_t* row = base + static_cast<size_t>(iy) * row_stride;
+        const uint8_t* row_a = base + static_cast<size_t>(iy) * row_stride;
+        const uint8_t* row_b = base + static_cast<size_t>(iy + 2) * row_stride;
         jint* out = destination + static_cast<size_t>(oy) * output_width;
         const int channel_row = (iy & 1) * 2;
         const int groups = output_width / 2;
         for (int group = 0; group < groups; ++group) {
-            const uint8_t* packed = row + static_cast<size_t>(group) * 5;
-            const int tails = packed[4];
-            const int p0 = (static_cast<int>(packed[0]) << 2) | (tails & 0x3);
-            const int p1 = (static_cast<int>(packed[1]) << 2) | ((tails >> 2) & 0x3);
-            out[group * 2] = std::max(0, p0 - black[channel_row]);
-            out[group * 2 + 1] = std::max(0, p1 - black[channel_row + 1]);
+            const uint8_t* qa = row_a + static_cast<size_t>(group) * 5;
+            const uint8_t* qb = row_b + static_cast<size_t>(group) * 5;
+            auto unpack = [](const uint8_t* q, int k) -> int {
+                return (static_cast<int>(q[k]) << 2) | ((q[4] >> (2 * k)) & 0x3);
+            };
+            const int even = unpack(qa, 0) + unpack(qa, 2) + unpack(qb, 0) + unpack(qb, 2);
+            const int odd = unpack(qa, 1) + unpack(qa, 3) + unpack(qb, 1) + unpack(qb, 3);
+            out[group * 2] = floor_div4(even - 4 * black[channel_row] + 2);
+            out[group * 2 + 1] = floor_div4(odd - 4 * black[channel_row + 1] + 2);
         }
     }
 
