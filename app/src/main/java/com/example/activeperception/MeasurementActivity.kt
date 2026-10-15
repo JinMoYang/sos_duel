@@ -62,6 +62,9 @@ class MeasurementActivity : AppCompatActivity() {
         /** Manual focus for every method (diopters): the 2026-10-13 Limo sessions' median
          *  autofocus position, about 45-50 cm, where the toy cars sit. */
         private const val DEFAULT_FOCUS_DIOPTERS = 2.0f
+        /** Claim 2 comparison arms; N = laps per block. */
+        private const val CLAIM2_PLAN = "prop_c:N,ae_phone:N,physsweep:N,shin_nm:N," +
+            "v3cause_t010:N,v3cause_t020:N,v3cause_inf:N"
         /** Neural-AE collection budget. The v2 collector pays 25 physical captures per
          *  step for the surface; hists are ~15 ms each, so EVERY captured cell becomes a
          *  sample (a full exposure bracket per scene instant — nothing thrown away).
@@ -331,6 +334,9 @@ class MeasurementActivity : AppCompatActivity() {
         // "collect:10,ae_phone:3"`, `--ei lap_repeats 3`, `--ei lap_leadin_s 90` and
         // `--ei lap_fallback_s 15`. A single collection run without laps is
         // `--es run collect`, optionally capped with `--ei collect_frames N`.
+        findViewById<Spinner>(R.id.lapPresetSpinner).adapter = ArrayAdapter(this,
+            android.R.layout.simple_spinner_item, LAP_PRESETS.map { it.label }
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         findViewById<Button>(R.id.btnLapSession).setOnClickListener { toggleLapSession() }
         if (intent.getBooleanExtra("lap_session", false)) {
             btnStart.postDelayed({ if (lapSession == null) toggleLapSession() }, 1500)
@@ -1643,13 +1649,45 @@ class MeasurementActivity : AppCompatActivity() {
         launchLapPlan = null; launchLapRepeats = null; launchLapLeadInS = null
         launchLapFallbackS = null; launchLapStartDelayS = null; launchCollectFrames = null
         launchSaveImages = null; launchFocusDiopters = null
+        presetRunCap = null; presetSaveImages = null; presetRunActive = false
     }
+
+    /** One choice of the experiment selector above the Lap session button: either a lap
+     *  plan (method:laps,... repeated [repeats] times) or a single static [run] with an
+     *  optional frame [cap]. Counts are defaults; adb extras still override them. */
+    private class LapPreset(
+        val label: String, val plan: String? = null, val repeats: Int = 1,
+        val run: String? = null, val cap: Int? = null, val saveImages: Boolean = true
+    )
+
+    private val LAP_PRESETS = listOf(
+        LapPreset("Limo: collect 5x3 + phone AE (2026-10-13)", "collect:10,ae_phone:3", 5),
+        LapPreset("Limo: claim 2 — 7 methods", CLAIM2_PLAN.replace(":N", ":3"), 3),
+        LapPreset("Limo: latency, no images — 7 methods", CLAIM2_PLAN.replace(":N", ":1"), 1,
+            saveImages = false),
+        LapPreset("Limo: claim 1 motion — collect 5x5", "collect55:25", 1),
+        LapPreset("Limo: v3cause pilot", "v3cause_pilot:40", 1),
+        LapPreset("Static: claim 1 — collect 5x5 old/new A/B, 150 frames",
+            run = "collect55_ab", cap = 150),
+        LapPreset("Static: read noise (cover the lens)", run = "readnoise"),
+        LapPreset("Static: v3cause desk check, 20 frames", run = "v3cause_t010", cap = 20),
+        LapPreset("Static: v3cause pilot desk check, 20 frames", run = "v3cause_pilot", cap = 20)
+    )
+
+    /** Frame cap and image saving for the current preset-started run or session. */
+    private var presetRunCap: Int? = null
+    private var presetSaveImages: Boolean? = null
+    private var presetRunActive = false
+
+    private fun selectedPreset(): LapPreset =
+        LAP_PRESETS[findViewById<Spinner>(R.id.lapPresetSpinner).selectedItemPosition
+            .coerceIn(0, LAP_PRESETS.size - 1)]
 
     /** Programmatic equivalent of picking a method radio and pressing Start. */
     /** The 5x3 collection run (MeasurementController.runCollect53). It has no method radio,
      *  so it is started directly rather than through the Start button. */
     private fun startCollect(kind: String = "collect") {
-        val cap = launchCollectFrames ?: NO_FRAME_CAP
+        val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
         // Inside a lap session the base ISO is held for a whole lap and stepped by the
         // session; on its own the run steps it every frame.
         val base = if (lapSession != null) lapCollectBlockOrdinal else -1
@@ -1676,8 +1714,18 @@ class MeasurementActivity : AppCompatActivity() {
     private fun toggleLapSession() {
         val lapButton = findViewById<Button>(R.id.btnLapSession)
         if (lapSession != null) { stopMeasurement(); return }
+        if (presetRunActive && runActive) { stopMeasurement(); return }
         if (runActive || playlistActive) { post("busy — stop first"); return }
-        val plan = LapSession.parsePlan(launchLapPlan ?: LapSession.DEFAULT_PLAN)
+        val preset = selectedPreset()
+        presetSaveImages = preset.saveImages
+        // A static preset is one run, not a lap session.
+        if (launchLapPlan == null && preset.run != null) {
+            presetRunCap = preset.cap
+            presetRunActive = true
+            launchRunnerCommand(preset.run)
+            return
+        }
+        val plan = LapSession.parsePlan(launchLapPlan ?: preset.plan ?: LapSession.DEFAULT_PLAN)
         if (plan.isEmpty()) { post("lap plan is empty"); return }
         // The x2 digital boost exists for the S25's ISO-400 analog ceiling and is folded
         // into every grid-formed image, phone AE included. The collection run sets its own
@@ -1713,7 +1761,8 @@ class MeasurementActivity : AppCompatActivity() {
                 if (!runActive) restoreBoostAfterLapSession()
                 lapButton.text = if (completed) "Lap session · done" else "Lap session"
             }
-        }, plan, (launchLapRepeats ?: LapSession.DEFAULT_REPEATS).coerceAtLeast(1),
+        }, plan, (launchLapRepeats ?: if (launchLapPlan != null) LapSession.DEFAULT_REPEATS
+                else preset.repeats).coerceAtLeast(1),
             leadInTimeoutS = (launchLapLeadInS ?: 90).coerceAtLeast(1),
             fallbackLapS = (launchLapFallbackS ?: 15).coerceAtLeast(3),
             startDelayS = (launchLapStartDelayS ?: 5).coerceAtLeast(0))
@@ -1764,7 +1813,7 @@ class MeasurementActivity : AppCompatActivity() {
             return
         }
         v3Command(cmd)?.let { (theta, pilot) ->
-            val cap = launchCollectFrames ?: NO_FRAME_CAP
+            val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
             start(cmd) { mc!!.runV3Cause(theta, pilot, cap, ::post, ::showFrame) }
             return
         }
@@ -2148,7 +2197,7 @@ class MeasurementActivity : AppCompatActivity() {
         val sess = sessionTag()
         val plat = platformTag()
         val pairSnap = pairingSnap()
-        val saveImagesNow = launchSaveImages ?: true
+        val saveImagesNow = launchSaveImages ?: presetSaveImages ?: true
         val focusNow = launchFocusDiopters ?: DEFAULT_FOCUS_DIOPTERS
         applyMountOffset()
         runActive = true
