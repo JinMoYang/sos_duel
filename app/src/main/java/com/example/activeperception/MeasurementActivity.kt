@@ -1691,17 +1691,18 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** One round of the Limo step, one lap each, the method changing every lap so slow drift
      *  (light, battery, speed) falls on every method alike: five collection laps (one per
-     *  base ISO, never two in a row, also across rounds), two of v3cause (the proposed) and
-     *  one of each baseline (Sense-well = prop_c, AE-Phone, PhysSweep, ShinNM). 11 laps. */
+     *  base ISO, never two in a row, also across rounds) and one of each compared method:
+     *  v3cause (the proposed) and the baselines Sense-well (prop_c), AE-Phone, PhysSweep,
+     *  ShinNM. 10 laps. */
     private val LIMO_ROUND = listOf("collect55", "prop_c", "collect55", "v3cause_t010",
-        "collect55", "ae_phone", "collect55", "physsweep", "collect55", "v3cause_t010",
-        "shin_nm").joinToString(",") { "$it:1" }
+        "collect55", "ae_phone", "collect55", "physsweep", "collect55", "shin_nm")
+        .joinToString(",") { "$it:1" }
 
     /** auto_collect's three steps: question 1 (synthesis reproduces the real photo)
      *  with the phone still, questions 1 and 2 on the Limo, and the one-time read noise.
      *  Still: 60 frames, old and new image pipeline alternating (~2 min). Limo: four rounds,
-     *  44 laps (~10 min): collection 20 (four per base ISO, for aligning synthesized and
-     *  real photos by track position), v3cause 8, each baseline 4.
+     *  40 laps (~9 min): collection 20 (four per base ISO, for aligning synthesized and
+     *  real photos by track position), each compared method 4.
      *  v3cause runs at theta 0.10 only; v3cause_t020, v3cause_inf and v3cause_pilot still
      *  start by name. */
     private val EXP_PRESETS = listOf(
