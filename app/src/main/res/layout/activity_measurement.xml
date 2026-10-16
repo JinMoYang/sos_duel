@@ -333,6 +333,15 @@
                     android:text="collect"
                     android:textAllCaps="false"
                     android:textSize="18sp" />
+                <!-- TEMPORARY: phone AE alone, see EXP_PRESETS. -->
+                <Button android:id="@+id/expAeCollect"
+                    android:layout_width="0dp"
+                    android:layout_height="72dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:text="ae_collect"
+                    android:textAllCaps="false"
+                    android:textSize="14sp" />
             </LinearLayout>
         </LinearLayout>
     </FrameLayout>

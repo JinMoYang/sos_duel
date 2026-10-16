@@ -862,7 +862,9 @@ class MeasurementActivity : AppCompatActivity() {
                 }
             }
             R.id.methodAePhone -> start("ae_phone") {
-                mc!!.runAe(NO_FRAME_CAP, gtRef, AeStrategy.PHONE, ::post, ::onFrameWithOffload)
+                // presetRunCap: the temporary ae_collect step stops itself after its frames.
+                mc!!.runAe(presetRunCap ?: NO_FRAME_CAP, gtRef, AeStrategy.PHONE, ::post,
+                    ::onFrameWithOffload)
             }
             R.id.methodAeCustom -> start("ae_custom") {
                 mc!!.runAe(NO_FRAME_CAP, gtRef, AeStrategy.CUSTOM_BRIGHTNESS, ::post, ::onFrameWithOffload)
@@ -1297,7 +1299,8 @@ class MeasurementActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.driveToExp).setOnClickListener { expPanel.visibility = View.VISIBLE }
         findViewById<Button>(R.id.expClose).setOnClickListener { expPanel.visibility = View.GONE }
-        listOf(R.id.expReadNoise, R.id.expStatic, R.id.expLimo, R.id.expCollect).forEachIndexed { i, id ->
+        listOf(R.id.expReadNoise, R.id.expStatic, R.id.expLimo, R.id.expCollect, R.id.expAeCollect)
+            .forEachIndexed { i, id ->
             val b = findViewById<Button>(id)
             b.setOnClickListener {
                 // While a step runs, only its own button (stop) does anything.
@@ -1716,7 +1719,11 @@ class MeasurementActivity : AppCompatActivity() {
         // each, some 15 per lap, so about 15 laps), started 5 s after the press with no
         // lead-in lap: the record needs no lap boundaries, and the track position is in
         // every moment's yaw.
-        LapPreset("counterfactual record, Limo", run = "collect_cf", cap = 225, delayS = 5)
+        LapPreset("counterfactual record, Limo", run = "collect_cf", cap = 225, delayS = 5),
+        // TEMPORARY (2026-10-16): phone AE alone for ~40-50 s (300 frames, some 3-4 laps), to
+        // measure what AE chooses in a lighting the counterfactual record has but no AE run
+        // has. The replay takes AE's shutter and brightness target from it.
+        LapPreset("phone AE alone, Limo", run = "ae_phone", cap = 300, delayS = 5)
     )
 
     /** Frame cap and image saving for the current auto_collect run or session. */

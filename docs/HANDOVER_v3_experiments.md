@@ -124,6 +124,7 @@ v3cause 주요 상수(manifest `method_params`): θ 0.10, two-shot 0.20, flicker
 | **static** | 조명마다 | `collect55_ab` 30프레임. 폰을 고정하고 차가 보이게 | 약 1분 |
 | **Limo** | 조명마다 | 10바퀴 묶음 × 4 = 40바퀴 | 약 9분 |
 | **collect** | 조명마다(replay용) | 누르고 5초 뒤 시작, `collect_cf` 225순간(약 15바퀴, 준비 바퀴 없음) | 약 3.2분 |
+| **ae_collect** (임시) | AE 데이터가 없는 조명에서 | 누르고 5초 뒤 시작, 폰 AE만 300프레임(Limo에서 약 3~4바퀴). replay에서 AE의 셔터와 목표 밝기를 재는 용도 | 약 1분 |
 
 **collect (counterfactual 기록, 커밋 5b61492 → 용도 구분판)**
 - 목적: sim처럼 "다른 설정이었다면?"을 오프라인 replay로 비교하기 위한 기록. 두 종류의 방법은 보는 사진이 다르다.
