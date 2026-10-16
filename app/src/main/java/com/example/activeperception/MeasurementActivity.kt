@@ -1301,7 +1301,8 @@ class MeasurementActivity : AppCompatActivity() {
             val b = findViewById<Button>(id)
             b.setOnClickListener {
                 // While a step runs, only its own button (stop) does anything.
-                if ((runActive || lapSession != null) && activeStepButton !== b) {
+                if ((runActive || lapSession != null || countdownTick != null) &&
+                    activeStepButton !== b) {
                     post("busy: stop the running step first"); return@setOnClickListener
                 }
                 toggleLapSession(EXP_PRESETS[i], b)
@@ -1686,7 +1687,9 @@ class MeasurementActivity : AppCompatActivity() {
      *  optional frame [cap]. Counts are defaults; adb extras still override them. */
     private class LapPreset(
         val label: String, val plan: String? = null, val repeats: Int = 1,
-        val run: String? = null, val cap: Int? = null, val saveImages: Boolean = true
+        val run: String? = null, val cap: Int? = null, val saveImages: Boolean = true,
+        /** Seconds counted down on the big line before a [run] starts. */
+        val delayS: Int = 0
     )
 
     /** One round of the Limo step, one lap each, the method changing every lap so slow drift
@@ -1709,9 +1712,11 @@ class MeasurementActivity : AppCompatActivity() {
         LapPreset("read noise", run = "readnoise"),
         LapPreset("question 1, still", run = "collect55_ab", cap = 30),
         LapPreset("questions 1+2, Limo", LIMO_ROUND, 4),
-        // The counterfactual replay record: fifteen Limo laps of collect_cf in one run
-        // (about 0.85 s and 46 images per moment, some 15 moments per lap).
-        LapPreset("counterfactual record, Limo", "collect_cf:15", 1)
+        // The counterfactual replay record: one run of collect_cf, 225 moments (about 0.85 s
+        // each, some 15 per lap, so about 15 laps), started 5 s after the press with no
+        // lead-in lap: the record needs no lap boundaries, and the track position is in
+        // every moment's yaw.
+        LapPreset("counterfactual record, Limo", run = "collect_cf", cap = 225, delayS = 5)
     )
 
     /** Frame cap and image saving for the current auto_collect run or session. */
@@ -1787,6 +1792,13 @@ class MeasurementActivity : AppCompatActivity() {
     private fun toggleLapSession(preset: LapPreset? = null, stepButton: Button? = null) {
         val lapButton = stepButton ?: findViewById<Button>(R.id.btnLapSession)
         if (lapSession != null) { stopMeasurement(); return }
+        countdownTick?.let {
+            // Pressed again during the countdown: nothing has started, so just cancel.
+            countdownHandler.removeCallbacks(it); countdownTick = null
+            presetRunActive = false; presetRunCap = null
+            restoreStepButton(false); showNow("stopped")
+            return
+        }
         if (presetRunActive && runActive) { stepEnding = "stopped"; stopMeasurement(); return }
         if (runActive || playlistActive) { post("busy — stop first"); return }
         presetSaveImages = preset?.saveImages
@@ -1801,11 +1813,7 @@ class MeasurementActivity : AppCompatActivity() {
             presetRunCap = preset.cap
             presetRunActive = true
             stepButton?.text = "■ stop"
-            showNow(methodTitle(preset.run))
-            // Heard from across the room like a lap session: one beep now, three at the end.
-            vibrate(120)
-            playLapBeeps(1)
-            launchRunnerCommand(preset.run)
+            startAfterCountdown(preset.delayS, preset.run)
             return
         }
         val plan = LapSession.parsePlan(launchLapPlan ?: preset?.plan ?: LapSession.DEFAULT_PLAN)
@@ -1871,6 +1879,33 @@ class MeasurementActivity : AppCompatActivity() {
     /** Long beeps on the ALARM stream, so they are heard from across the room whatever the
      *  media volume is and with the phone on silent: one when a lap session really
      *  starts, three when its whole plan is done. */
+    private val countdownHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    /** Non-null while an auto_collect step counts down to its start. */
+    private var countdownTick: Runnable? = null
+
+    /** Counts [seconds] down on the big line, then starts [run]. Heard from across the room
+     *  like a lap session: one beep when it really starts, three when it ends. */
+    private fun startAfterCountdown(seconds: Int, run: String) {
+        var left = seconds
+        val tick = object : Runnable {
+            override fun run() {
+                if (left > 0) {
+                    showNow("starting in $left")
+                    left--
+                    countdownHandler.postDelayed(this, 1000L)
+                    return
+                }
+                countdownTick = null
+                showNow(methodTitle(run))
+                vibrate(120)
+                playLapBeeps(1)
+                launchRunnerCommand(run)
+            }
+        }
+        countdownTick = tick
+        tick.run()
+    }
+
     private fun playLapBeeps(times: Int) {
         val tone = runCatching {
             android.media.ToneGenerator(android.media.AudioManager.STREAM_ALARM, 100)
