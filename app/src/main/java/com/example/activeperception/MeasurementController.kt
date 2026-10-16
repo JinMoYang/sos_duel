@@ -5335,13 +5335,18 @@ class MeasurementController(
      * same order. Every synthesized and real image is saved. [pipelineAB] alternates the
      * current image pipeline and the pre-2026-10-15 one frame by frame (for a static scene).
      *
-     * [counterfactual] turns a frame into one moment of a replay record instead: the whole
-     * 5x5 lattice synthesized from captures about 100 ms apart, using only the syntheses the
-     * 2026-10-16 claim-1 analysis found faithful. 1/240 and 1/120 are captured as single
-     * frames (they cannot be synthesized from longer ones; sums of them are not faithful in
-     * the dark or in motion), 1/60 as four back-to-back frames whose sums give 1/30 and 1/15
-     * (no gaps), all at the highest ISO that does not clip, so lower ISOs come from darkening.
-     * One real cell per moment, cycling through all 25, keeps measuring synthesized vs real.
+     * [counterfactual] turns a frame into one moment of a replay record instead: four
+     * back-to-back frames each at 1/240, 1/120 and 1/60 (about 200 ms), at the highest ISO
+     * that does not clip, then one real cell. Every image is labelled with its use:
+     * - "counterfactual": one image per cell built only from syntheses the 2026-10-16 claim-1
+     *   analysis found faithful (1/240 and 1/120 from the first frame of their bursts; 1/60,
+     *   1/30, 1/15 from 1, 2, 4 of the gap-free 1/60 frames; ISO by digital gain from the
+     *   base, so darkening below it). What a baseline, or any method's physical output, sees.
+     * - "proposed_input_only": sums of 2 and 4 of the 1/240 or 1/120 frames, the imperfect
+     *   rows Sense-well's probe computes. For replaying the proposed's own decisions only;
+     *   never a stand-in for a real capture (not faithful in the dark or in motion).
+     * - "real_check": the one real cell, cycling through all 25, against which the
+     *   counterfactual images keep being measured.
      */
     fun runCollect55(
         maxFrames: Int, pipelineAB: Boolean,
@@ -5359,12 +5364,14 @@ class MeasurementController(
         val frameFloorUs = 16_750
         fun captured(gi: Int) = minOf(gains[gi], ceil)
         // Probe bursts by window-min shutter: (shutter index, frames).
-        val bursts = if (counterfactual) listOf(0 to 1, 1 to 1, 2 to 4)
+        val bursts = if (counterfactual) listOf(0 to 4, 1 to 4, 2 to 4)
             else listOf(0 to 4, 1 to 4, 2 to 4, 3 to 2)
         // Counterfactual base: the highest rung whose 1/60 frame would clip on fewer than
         // this fraction of the sites, predicted from the previous moment's 1/60 frame.
         val cfClipLimit = 0.002
-        val CHUNK = 10
+        // A counterfactual moment's 13 shots go in one request: a second request would wait
+        // for the first one's last frame and open a gap in the middle of the moment.
+        val CHUNK = if (counterfactual) 13 else 10
         startPass(if (counterfactual) "collect_cf" else if (pipelineAB) "collect_5x5_ab"
             else "collect_5x5", isGtReference = false,
             withFrames = false, methodParams = JSONObject()
@@ -5391,9 +5398,17 @@ class MeasurementController(
                     if (counterfactual) {
                         put("purpose", "counterfactual record for offline replay: the whole " +
                             "5x5 lattice synthesized from one moment (captures ~100 ms apart)")
-                        put("synth_rule", "1/240 and 1/120 from one frame each, 1/60, 1/30, 1/15 " +
-                            "from 1, 2, 4 back-to-back 1/60 frames; every ISO from the base by " +
-                            "digital gain (darkening below the base)")
+                        put("synth_rule", "four back-to-back frames each at 1/240, 1/120, 1/60; " +
+                            "every burst gives sums of 1, 2, 4 frames at every ISO by digital gain " +
+                            "from the base")
+                        put("uses", JSONObject()
+                            .put("counterfactual", "one faithful image per cell: 1/240 and 1/120 " +
+                                "from the first frame of their bursts, 1/60, 1/30, 1/15 from 1, 2, 4 " +
+                                "of the 1/60 frames; for baselines and every method's output")
+                            .put("proposed_input_only", "sums of 2 and 4 of the 1/240 or 1/120 " +
+                                "frames (Sense-well's probe rows); for replaying the proposed's " +
+                                "decisions only, never as a real capture")
+                            .put("real_check", "the one real cell per moment"))
                         put("yardstick", "one real cell per moment right after the bursts, " +
                             "cell = frame x 7 mod 25 (all 25 every 25 moments)")
                         put("order", "bursts back to back, then the real cell; not shuffled")
@@ -5420,7 +5435,8 @@ class MeasurementController(
         logger.csv("collect_cells", listOf("frame", "pipeline", "kind", "cell", "gi", "sj",
             "nominal_iso", "exposure_us", "base_gi", "burst_sj", "source_iso_captured",
             "n_frames", "gapped", "digital_ratio", "shot", "sensor_ts_ns", "mean_luma",
-            "clip_frac", "n_det", "n_det_sel", "sum_conf_vehicle", "sum_conf_all", "img_path"))
+            "clip_frac", "n_det", "n_det_sel", "sum_conf_vehicle", "sum_conf_all", "img_path",
+            "use"))
 
         val detsWriter = java.util.concurrent.Executors.newSingleThreadExecutor()
         val laneBytes = 640 * 640 * 3 * 4
@@ -5538,21 +5554,22 @@ class MeasurementController(
                 var ok = true
                 fun logCell(kind: String, gi: Int, sj: Int, burstSj: Int, sourceIso: Int, nFrames: Int,
                             gapped: Boolean, ratio: Double, shot: Int, ts: Long, stats: DoubleArray,
-                            dets: List<Detection>, imgPath: String) {
+                            dets: List<Detection>, imgPath: String, use: String = "") {
                     val cell = gi * nS + sj
                     var sumAll = 0.0; var nSel = 0
                     for (d in dets) if (d.confidence >= selectConf) { sumAll += d.confidence; nSel++ }
                     logger.row("collect_cells", listOf(f, pipeline, kind, cell, gi, sj, gains[gi],
                         shutters[sj], b, burstSj, sourceIso, nFrames, if (gapped) 1 else 0,
                         "%.4f".format(ratio), shot, ts, "%.4f".format(stats[0]), "%.5f".format(stats[1]),
-                        dets.size, nSel, "%.3f".format(sumConf(dets)), "%.3f".format(sumAll), imgPath))
+                        dets.size, nSel, "%.3f".format(sumConf(dets)), "%.3f".format(sumAll), imgPath,
+                        use))
                     val fr = f
                     detsWriter.execute {
                         val arr = JSONArray()
                         for (d in dets) arr.put(detJson(d))
                         logger.jsonl("collect_dets", JSONObject().put("frame", fr).put("pipeline", pipeline)
                             .put("kind", kind).put("cell", cell).put("base_gi", b).put("burst_sj", burstSj)
-                            .put("n_frames", nFrames).put("dets", arr))
+                            .put("n_frames", nFrames).put("use", use).put("dets", arr))
                     }
                 }
                 try {
@@ -5616,10 +5633,19 @@ class MeasurementController(
                                 val gi = laneGi[lane]; val sj = laneSj[lane]
                                 val stats = lumaAndClipFromTensorLane(tensor, lane)
                                 val gapped = laneBurst[lane] > 1 && shutters[u.sj] < frameFloorUs
-                                val path = saveLaneJpeg(tensor, lane, "${frameName(f)}_s${laneBurst[lane]}x" +
+                                // Sums of short frames are the proposed's imperfect probe rows.
+                                val use = when {
+                                    !counterfactual -> ""
+                                    laneBurst[lane] > 1 && u.sj < 2 -> "proposed_input_only"
+                                    else -> "counterfactual"
+                                }
+                                val tag = when (use) {
+                                    "counterfactual" -> "cf_"; "proposed_input_only" -> "pi_"; else -> ""
+                                }
+                                val path = saveLaneJpeg(tensor, lane, "${frameName(f)}_${tag}s${laneBurst[lane]}x" +
                                     "${shutters[u.sj]}_b${gains[b]}_g${gains[gi]}")
                                 logCell("synth", gi, sj, u.sj, captured(b), laneBurst[lane], gapped,
-                                    laneRatio[lane], burstShot, burstTs, stats, dets[lane], path)
+                                    laneRatio[lane], burstShot, burstTs, stats, dets[lane], path, use)
                                 if (laneBurst[lane] == 1 && gi == b && u.sj == 2) {
                                     preview = src.selectedTensorBitmap(tensor, lane)
                                     previewDets = src.detectionsForTensorPreview(dets[lane], tensor, lane)
@@ -5639,7 +5665,7 @@ class MeasurementController(
                             val stats = lumaAndClipFromTensorLane(tensor, 0)
                             val path = saveLaneJpeg(tensor, 0, "${frameName(f)}_${u.kind}_g${gains[u.gi]}_e${shutters[u.sj]}")
                             logCell(u.kind, u.gi, u.sj, -1, captured(u.gi), 1, false, ratio, i,
-                                meta.timestamp, stats, dets, path)
+                                meta.timestamp, stats, dets, path, if (counterfactual) "real_check" else "")
                             detectionTotalAtFloor += dets.size
                             detectionTotalAboveThresh += dets.count { it.confidence >= selectConf }
                             nImages++

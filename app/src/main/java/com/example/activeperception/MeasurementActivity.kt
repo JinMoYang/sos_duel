@@ -1709,8 +1709,9 @@ class MeasurementActivity : AppCompatActivity() {
         LapPreset("read noise", run = "readnoise"),
         LapPreset("question 1, still", run = "collect55_ab", cap = 30),
         LapPreset("questions 1+2, Limo", LIMO_ROUND, 4),
-        // The counterfactual replay record: ten Limo laps of collect_cf in one run.
-        LapPreset("counterfactual record, Limo", "collect_cf:10", 1)
+        // The counterfactual replay record: fifteen Limo laps of collect_cf in one run
+        // (about 0.85 s and 46 images per moment, some 15 moments per lap).
+        LapPreset("counterfactual record, Limo", "collect_cf:15", 1)
     )
 
     /** Frame cap and image saving for the current auto_collect run or session. */
