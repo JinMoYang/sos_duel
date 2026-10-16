@@ -206,6 +206,12 @@ adb shell 'cd /sdcard/Documents/sos && rm -r run_limo_*_17920591[6-9]* run_limo_
 
 ---
 
+### 데이터셋 sos_cf_v1 (2026-10-16)
+- 세 조명(bright/dim/dark)의 counterfactual 기록(`collect_cf`, 각 225순간)과 폰 AE 행동을 정리한 데이터셋이다. 원래 PC의 데스크톱 `sos_cf_v1/`에 있고, 약 1.5 GB, 파일 3.2만 개다.
+- 순간마다 사진 46장을 `use`(counterfactual / proposed_input_only / real_check)와 `made_by`(physical / synthesized)로 구분했다. 박스는 JPEG 좌표로 통일했다.
+- 그 밖에 질문 1 일치표(`meta/fidelity.csv`), 제외 목록, AE 재현 규칙(`policies/ae_phone/behavior.csv`), 빌드 스크립트와 읽기 예시가 들어 있다.
+- 자세한 설명은 그 폴더의 `README.md`를 볼 것.
+
 ## 9. 분석 방법
 
 ### 9.1 공통 전처리
