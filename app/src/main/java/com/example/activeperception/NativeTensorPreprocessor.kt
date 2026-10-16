@@ -41,6 +41,11 @@ object NativeTensorPreprocessor {
         mode: Int
     ): Boolean
 
+    /** Packs one HWC float lane of a direct tensor buffer, starting at [floatOffset], into
+     *  opaque ARGB pixels (v * 255, truncated, clamped), one per element of [destination].
+     *  False when the buffer is not direct or too short. */
+    external fun tensorLaneToArgb(source: ByteBuffer, floatOffset: Int, destination: IntArray): Boolean
+
     /** RAW10 packed variant of [decodeSubsampledBayer], same modes. */
     external fun decodeSubsampledRaw10(
         source: ByteBuffer, sourceByteOffset: Int,

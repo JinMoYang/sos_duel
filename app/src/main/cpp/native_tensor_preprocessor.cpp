@@ -525,3 +525,32 @@ Java_com_example_activeperception_NativeTensorPreprocessor_decodeSubsampledRaw10
     env->ReleasePrimitiveArrayCritical(black_array, black, JNI_ABORT);
     return JNI_TRUE;
 }
+
+// Packs one HWC float lane of the detector input (values in [0, 1]) into opaque ARGB pixels
+// for the preview and the saved photo. Each channel is v * 255 truncated and clamped to
+// [0, 255] (NaN and negatives give 0), exactly what the Kotlin loop it replaces computed;
+// that loop cost ~45 ms per frame on the measurement thread.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_activeperception_NativeTensorPreprocessor_tensorLaneToArgb(
+        JNIEnv* env, jobject, jobject source, jint float_offset, jintArray destination_array) {
+    const auto* src = static_cast<const float*>(env->GetDirectBufferAddress(source));
+    const jlong capacity_bytes = env->GetDirectBufferCapacity(source);
+    if (!src || capacity_bytes < 0 || float_offset < 0) return JNI_FALSE;
+    const jsize count = env->GetArrayLength(destination_array);
+    if ((static_cast<jlong>(float_offset) + 3LL * count) * 4LL > capacity_bytes) return JNI_FALSE;
+    auto* out = static_cast<jint*>(env->GetPrimitiveArrayCritical(destination_array, nullptr));
+    if (!out) return JNI_FALSE;
+    auto level = [](float v) -> uint32_t {
+        const float s = v * 255.0f;
+        if (!(s > 0.0f)) return 0u;
+        if (s >= 255.0f) return 255u;
+        return static_cast<uint32_t>(static_cast<int>(s));
+    };
+    const float* px = src + float_offset;
+    for (jsize i = 0; i < count; ++i, px += 3) {
+        out[i] = static_cast<jint>(0xFF000000u | (level(px[0]) << 16) | (level(px[1]) << 8) |
+                                   level(px[2]));
+    }
+    env->ReleasePrimitiveArrayCritical(destination_array, out, 0);
+    return JNI_TRUE;
+}

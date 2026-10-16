@@ -177,7 +177,7 @@ lap session CSV: `wall_ms, elapsed_ns, event(countdown/start/leadin_done/block_s
 | `lapsession_1792059146151` + run 60개(epoch 1792059169832~1792059922337), 19:12~19:25 | **무효.** 폰을 옆으로 달았는데 회전 수정 전이라 사진이 누움 → 모든 방법 검출 0. 사용자가 지우기로 함(아래 명령. agent는 영구 삭제 금지) |
 | static `collect_5x5_ab_1792061117004`, 19:45, 58프레임(손으로 멈춤) | 유효. 회전 수정 후, 사진 바로 섬. 폰 조도센서 중앙값 약 27.6 |
 | static `..._1792061592937` 19:53 / `..._1792061664103` 19:54 / `..._1792061751218` 19:55, 각 30프레임 | 아직 안 봄. 조도센서 중앙값 27.4 / 2.6 / 1.6 → 밝음/중간/어두움으로 보이나 **사용자에게 확인할 것** |
-| Limo dark: `lapsession_1792061839643` + run 40개(1792061869416~1792062371279), 19:57~20:06 | 유효. 40/40바퀴, 회전 180, 폰 조도센서 5~6 |
+| Limo dark: `lapsession_1792061839643` + run 40개(1792061869416~1792062371279), 19:57~20:06 | 유효. 40/40바퀴, 회전 180, 폰 조도센서 5~6. 단, 미리보기 변환이 느리던 빌드로 찍혔다(§9.5). 남은 조명과 조건을 맞추려면 **수정된 빌드로 다시 찍기를 권장** |
 | read noise | `1792058310965`(18:58, 엎어서 측정)가 **앱 기준값**. `1792057653242`는 손으로 가려 빛이 샘. `1792057646317`, `1792062446069`는 덜 가린 채 멈춘 것(무시) |
 | 밝은 조명 Limo | **다시 해야 함**(첫 세션이 무효) |
 | 18:18~18:23 `run_car_*` | 책상 점검용. 실험 데이터 아님 |
@@ -257,6 +257,15 @@ adb shell 'cd /sdcard/Documents/sos && rm -r run_limo_*_17920591[6-9]* run_limo_
 
 책상 점검 값(2026-10-15, 차 없음, 사진 저장): 주기 v3cause 약 100 ms, prop_c 131 ms, ae_phone 166 ms, physsweep 193 ms, shin_nm 233 ms. 노출 시작→검출 62/77/67/116/65 ms.
 
+**미리보기 변환 병목 (2026-10-16에 고침)**
+- 원인: 모든 방법이 검출 직후, 다음 촬영을 요청하기 전에 측정 스레드에서 검출기 입력(640×640×3 float)을 Bitmap으로 바꿨다(`ParallelRawCandidateSource.selectedTensorBitmap`). 픽셀마다 `ByteBuffer.getFloat`를 세 번 부르는 Kotlin 루프였다.
+- 크기: dark 세션에서 프레임당 약 43~46 ms. 주기(133~168 ms)의 약 30%였다. StepClock에서 방법에 따라 `detected→decided` 또는 `decided→logged` 구간에 잡힌다.
+- 영향: 노출→검출 지연에는 들어가지 않는다(검출 뒤에 일어남). 다음 촬영을 늦춰서 프레임 속도와 다음 프레임에 반영되는 결정을 늦춘다.
+- JPEG 쓰기는 원래 별도 스레드였고, collect는 원래 데이터를 복사해 별도 스레드에서 변환했으므로 영향이 없었다.
+- 수정: 네이티브 `NativeTensorPreprocessor.tensorLaneToArgb`(약 1~2 ms로 예상)로 바꿨다. 프로세스당 첫 변환에서 네이티브와 Kotlin 결과를 픽셀 단위로 비교하고, 하나라도 다르면 Kotlin으로 되돌린다.
+- 확인 방법: `adb logcat -s ParallelRawSource`에 `tensorLaneToArgb native vs Kotlin: 0 mismatching pixels`가 찍히는지 본다. 이어서 짧은 실행에서 위 구간이 수 ms로 줄었는지 frames.csv로 본다.
+- **수정 전후 빌드로 찍은 세션의 주기·초당 지표는 서로 비교하지 말 것.**
+
 ### 9.6 v3cause 진단과 spec 작성자에게 보낼 메모
 
 - `decisions.jsonl`로 k 분포, skip 이유, 원인별 횟수, 실제 보정 횟수, base gain 변화를 집계한다.
@@ -293,6 +302,7 @@ adb shell 'cd /sdcard/Documents/sos && rm -r run_limo_*_17920591[6-9]* run_limo_
 
 | # | 할 일 | 누가 |
 |---|---|---|
+| 0 | 미리보기 변환 수정 빌드를 설치하고 폰에서 확인(logcat 0 mismatch, 주기 감소). 그 뒤 dark Limo 다시 찍기 | agent(설치·확인) + 사용자(촬영) |
 | 1 | 무효 세션 삭제(§8 명령) | 사용자 |
 | 2 | 밝은 조명 Limo 재실행, 그 밖에 원하는 조명들의 static + Limo | 사용자(agent는 첫 바퀴 뒤 사진·검출 확인) |
 | 3 | static 3개(19:53~19:55)의 조명 단계 확인 | agent + 사용자 |

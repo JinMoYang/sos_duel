@@ -611,15 +611,54 @@ class ParallelRawCandidateSource(
     fun selectedTensorBitmap(result: Exp21TensorResult, lane: Int, imgsz: Int = 640): Bitmap {
         require(lane in result.batch.transforms.indices)
         val pixels = IntArray(imgsz * imgsz)
-        val base = lane * imgsz * imgsz * 3
+        packArgb(result.batch.input, lane * imgsz * imgsz * 3, pixels)
+        return Bitmap.createBitmap(pixels, imgsz, imgsz, Bitmap.Config.ARGB_8888)
+    }
+
+    /** This runs on the measurement thread after every detection, before the next capture
+     *  is requested. The Kotlin loop took ~45 ms per frame on the S26 Ultra (about 30% of
+     *  each method's frame period); the native packing takes a millisecond or two. The
+     *  first call in a process compares the two pixel by pixel and keeps Kotlin on any
+     *  difference, so saved photos stay exactly what they were. */
+    private fun packArgb(input: ByteBuffer, baseFloat: Int, pixels: IntArray) {
+        when (nativeArgbOk) {
+            true -> if (runCatching {
+                    NativeTensorPreprocessor.tensorLaneToArgb(input, baseFloat, pixels)
+                }.getOrDefault(false)) return
+            null -> {
+                if (runCatching {
+                        NativeTensorPreprocessor.tensorLaneToArgb(input, baseFloat, pixels)
+                    }.getOrDefault(false)) {
+                    val reference = IntArray(pixels.size)
+                    packArgbKotlin(input, baseFloat, reference)
+                    val mismatches = pixels.indices.count { pixels[it] != reference[it] }
+                    nativeArgbOk = mismatches == 0
+                    android.util.Log.i("ParallelRawSource",
+                        "tensorLaneToArgb native vs Kotlin: $mismatches mismatching pixels")
+                    if (mismatches != 0) reference.copyInto(pixels)
+                    return
+                }
+                nativeArgbOk = false
+            }
+            false -> {}
+        }
+        packArgbKotlin(input, baseFloat, pixels)
+    }
+
+    private fun packArgbKotlin(input: ByteBuffer, baseFloat: Int, pixels: IntArray) {
         for (p in pixels.indices) {
-            val i = base + p * 3
-            val r = (result.batch.input.getFloat(i * 4) * 255f).toInt().coerceIn(0, 255)
-            val g = (result.batch.input.getFloat((i + 1) * 4) * 255f).toInt().coerceIn(0, 255)
-            val b = (result.batch.input.getFloat((i + 2) * 4) * 255f).toInt().coerceIn(0, 255)
+            val i = baseFloat + p * 3
+            val r = (input.getFloat(i * 4) * 255f).toInt().coerceIn(0, 255)
+            val g = (input.getFloat((i + 1) * 4) * 255f).toInt().coerceIn(0, 255)
+            val b = (input.getFloat((i + 2) * 4) * 255f).toInt().coerceIn(0, 255)
             pixels[p] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
-        return Bitmap.createBitmap(pixels, imgsz, imgsz, Bitmap.Config.ARGB_8888)
+    }
+
+    private companion object {
+        /** Null until the first conversion has compared native with Kotlin. Process-wide,
+         *  since every run builds its own source. */
+        @Volatile var nativeArgbOk: Boolean? = null
     }
 
     /** Detector boxes are in the pre-letterbox image space; the final preview is the exact
