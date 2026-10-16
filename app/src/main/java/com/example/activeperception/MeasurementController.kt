@@ -1058,6 +1058,7 @@ class MeasurementController(
         val customAe = if (aeStrategy == AeStrategy.CUSTOM_BRIGHTNESS) customAeForDevice() else null
         startPass("ae_${aeStrategy.tag()}", isGtReference, methodParams = JSONObject()
             .put("ae_strategy", aeStrategy.tag())
+            .put("capture_path", "persistent fast routing, as the manual methods")
             .apply { if (customAe != null) put("custom_ae", customAe.toJson()) })
         // Custom AE seed; replaced every frame by the brightness feedback below.
         var nextIso = grid.baseGain
@@ -1095,21 +1096,23 @@ class MeasurementController(
             endPass()
             return
         }
-        // PHONE AE needs the HAL's own AE-on requests, which run through the legacy
-        // one-shot path (captureAe re-arms the reader listener and would fight the
-        // persistent fast listener), so its CAPTURE cost is not comparable. Everything after
-        // the RAW arrives is: the frame is decoded natively, formed by the same fused tensor
-        // fill and detected by the same batched detector as prop_c and the v2 baselines, so
-        // the only difference left in the comparison is how the exposure was chosen.
+        // PHONE AE sends the HAL's own AE-on request, on the same persistent capture routing
+        // as prop_c and the v2 baselines (captureFastAe; until 2026-10-16 the one-shot
+        // captureAe, which re-armed the reader every frame). The frame is decoded natively,
+        // formed by the same fused tensor fill and detected by the same batched detector, so
+        // the only difference left in the comparison is how the exposure was chosen,
+        // including the HAL's 33 ms AE frame duration.
         val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
         val src = ParallelRawCandidateSource(grid, raw,
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
         tfl?.warmUpAllBatches()
         var f = 0
-        while (running && f < maxFrames) {
+        try { while (running && f < maxFrames) {
             val t0 = now()
             stepClock.begin()
-            val frames = raw.captureAe(1)
+            val frames = raw.captureFastAe(1)
             if (frames.isEmpty()) break
             stepClock.captured(raw.lastMeta)
             val tf = now()
@@ -1146,6 +1149,8 @@ class MeasurementController(
             runCatching { onFrame(bmp, previewDets, gainVal, expUs) }
             onStatus("AE[phone] f=$f iso=$gainVal exp=${expUs}us ndet=${dets.size} ${"%.0f".format(totalMs)}ms")
             f++
+        } } finally {
+            runCatching { raw.stopFastCapture() }
         }
         endPass()
     }

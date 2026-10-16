@@ -130,7 +130,8 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
 
     /** One finite exact-N request routed through the persistent low-latency listener. */
     private class FastTarget(
-        val expected: SensorState,
+        /** Null for phone-AE captures: the HAL picks the setting and every frame is kept. */
+        val expected: SensorState?,
         val commandId: Long,
         val wanted: Int,
         val startedNs: Long
@@ -508,7 +509,8 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                     val commandId = result.request.tag as? Long ?: return@execute
                     val target = fastTargets[commandId] ?: return@execute
                     val actual = result.sensorState()
-                    if (!scheduler.matches(target.expected, actual)) {
+                    val expected = target.expected
+                    if (expected != null && !scheduler.matches(expected, actual)) {
                         // Settling frame: a HAL may deliver a tagged request's frame with
                         // pre-settling metadata (seen on the S25 from a cold stream). Skip
                         // it — the result callback resubmits the slot — rather than failing
@@ -557,11 +559,41 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         val wanted = max(1, nBurst)
         val expected = SensorState(exposureUs.toLong(), iso)
         val command = scheduler.enqueue(expected)
-        val target = FastTarget(expected, command.id, wanted, System.nanoTime())
-        check(fastTargets.putIfAbsent(command.id, target) == null)
         val template = if (wanted == 1) CameraDevice.TEMPLATE_PREVIEW
             else CameraDevice.TEMPLATE_STILL_CAPTURE
-        val request = manualRequest(expected, command.id, template)
+        return runFastTarget(FastTarget(expected, command.id, wanted, System.nanoTime()),
+            manualRequest(expected, command.id, template), "requested=${exposureUs}us ISO$iso")
+    }
+
+    /** Phone-AE capture on the same persistent routing as [captureFast]. The request is
+     *  [captureAe]'s (HAL AE and AWB on, fixed focus); only the delivery differs ([captureAe]
+     *  re-arms the reader listener for every frame), so the AE baseline and the manual
+     *  methods share one capture path. Measured 2026-10-16 the delivery itself cost no whole
+     *  frame: AE's longer period comes from the HAL running AE at a 33 ms frame duration even
+     *  at 1/60 s exposures. The HAL picks the setting, so nothing is expected and every frame
+     *  is kept. Ids are negative, so they never meet the scheduler's. */
+    fun captureFastAe(nBurst: Int): List<RawFrame> {
+        check(fastCaptureStarted) { "startFastCapture() must be called first" }
+        val wanted = max(1, nBurst)
+        val id = aeCommandIds.decrementAndGet()
+        val request = device!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+            set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+            set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
+            set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
+            applyFixedFocus(this)
+            addTarget(reader!!.surface)
+            setTag(id)
+        }.build()
+        return runFastTarget(FastTarget(null, id, wanted, System.nanoTime()), request, "phone AE")
+    }
+
+    private val aeCommandIds = AtomicLong(0L)
+
+    /** Submits [request] [FastTarget.wanted] times on the persistent routing and waits for
+     *  that many decoded frames. [what] names the capture in errors. */
+    private fun runFastTarget(target: FastTarget, request: CaptureRequest, what: String): List<RawFrame> {
+        val wanted = target.wanted
+        check(fastTargets.putIfAbsent(target.commandId, target) == null)
         val callback = object : CameraCaptureSession.CaptureCallback() {
             override fun onCaptureCompleted(
                 session: CameraCaptureSession,
@@ -573,16 +605,19 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                     if (target.firstResultNs == 0L) target.firstResultNs = nowNs
                 }
                 val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: -1L
-                scheduler.markRequestFrame(command.id, result.frameNumber)
+                val expected = target.expected
                 val actual = result.sensorState()
-                scheduler.observe(result.frameNumber, ts, actual)?.let {
-                    lastApplyDelayFrames = it.applyDelayFrames; currentState = actual
+                if (expected != null) {
+                    scheduler.markRequestFrame(target.commandId, result.frameNumber)
+                    scheduler.observe(result.frameNumber, ts, actual)?.let {
+                        lastApplyDelayFrames = it.applyDelayFrames; currentState = actual
+                    }
                 }
                 fastResults[ts] = result
                 synchronized(fastResultLock) { fastResultLock.notifyAll() }
                 // Replace a settling frame's slot so exact-N still completes; bounded so a
                 // persistently wrong HAL state cannot loop forever.
-                if (!scheduler.matches(target.expected, actual)) {
+                if (expected != null && !scheduler.matches(expected, actual)) {
                     val resubmit = synchronized(target.lock) {
                         if (target.resubmits < SETTING_GUARD_FRAMES) { target.resubmits++; true }
                         else false
@@ -616,12 +651,12 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                     TimeUnit.NANOSECONDS.toMillis(left).coerceAtLeast(1L)))
             }
         }
-        fastTargets.remove(command.id)
+        fastTargets.remove(target.commandId)
         target.error?.let { throw it }
         val accepted = synchronized(target.lock) { target.decoded.sortedBy { it.meta.frameNumber } }
         check(accepted.size == wanted) {
             "Fast capture obtained ${accepted.size}/$wanted RAW frames; " +
-                "requested=${exposureUs}us ISO$iso failures=${target.failures}"
+                "$what failures=${target.failures}"
         }
         val endNs = System.nanoTime()
         fun sinceStart(value: Long): Double = if (value == 0L) Double.NaN
@@ -678,7 +713,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                 fastResults[ts] = result
                 synchronized(fastResultLock) { fastResultLock.notifyAll() }
                 // Same settling-slot replacement as captureFast.
-                if (!scheduler.matches(target.expected, actual)) {
+                if (!scheduler.matches(target.expected!!, actual)) {
                     val resubmit = synchronized(target.lock) {
                         if (target.resubmits < SETTING_GUARD_FRAMES) { target.resubmits++; true }
                         else false
@@ -818,7 +853,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                 fastResults[ts] = result
                 synchronized(fastResultLock) { fastResultLock.notifyAll() }
                 // Same settling-slot replacement as captureFast, per shot.
-                if (!scheduler.matches(target.expected, actual)) {
+                if (!scheduler.matches(target.expected!!, actual)) {
                     val resubmit = synchronized(target.lock) {
                         if (target.resubmits < SETTING_GUARD_FRAMES) { target.resubmits++; true }
                         else false
