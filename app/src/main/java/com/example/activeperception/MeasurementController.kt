@@ -5334,11 +5334,20 @@ class MeasurementController(
      * Units are shuffled every frame, so no comparison always has the same time gap or the
      * same order. Every synthesized and real image is saved. [pipelineAB] alternates the
      * current image pipeline and the pre-2026-10-15 one frame by frame (for a static scene).
+     *
+     * [counterfactual] turns a frame into one moment of a replay record instead: the whole
+     * 5x5 lattice synthesized from captures about 100 ms apart, using only the syntheses the
+     * 2026-10-16 claim-1 analysis found faithful. 1/240 and 1/120 are captured as single
+     * frames (they cannot be synthesized from longer ones; sums of them are not faithful in
+     * the dark or in motion), 1/60 as four back-to-back frames whose sums give 1/30 and 1/15
+     * (no gaps), all at the highest ISO that does not clip, so lower ISOs come from darkening.
+     * One real cell per moment, cycling through all 25, keeps measuring synthesized vs real.
      */
     fun runCollect55(
         maxFrames: Int, pipelineAB: Boolean,
         onStatus: (String) -> Unit,
-        onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }
+        onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> },
+        counterfactual: Boolean = false
     ) {
         val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
             ?: error("collect requires TfliteYoloDetector")
@@ -5350,9 +5359,14 @@ class MeasurementController(
         val frameFloorUs = 16_750
         fun captured(gi: Int) = minOf(gains[gi], ceil)
         // Probe bursts by window-min shutter: (shutter index, frames).
-        val bursts = listOf(0 to 4, 1 to 4, 2 to 4, 3 to 2)
+        val bursts = if (counterfactual) listOf(0 to 1, 1 to 1, 2 to 4)
+            else listOf(0 to 4, 1 to 4, 2 to 4, 3 to 2)
+        // Counterfactual base: the highest rung whose 1/60 frame would clip on fewer than
+        // this fraction of the sites, predicted from the previous moment's 1/60 frame.
+        val cfClipLimit = 0.002
         val CHUNK = 10
-        startPass(if (pipelineAB) "collect_5x5_ab" else "collect_5x5", isGtReference = false,
+        startPass(if (counterfactual) "collect_cf" else if (pipelineAB) "collect_5x5_ab"
+            else "collect_5x5", isGtReference = false,
             withFrames = false, methodParams = JSONObject()
                 .put("purpose", "claim 1: every image prop_c synthesizes, beside the real " +
                     "capture of the same setting and a real-vs-real yardstick")
@@ -5372,7 +5386,25 @@ class MeasurementController(
                     else "frame index mod $nG")
                 .put("cell_id", "gain_idx * $nS + shutter_idx")
                 .put("class_filter", "none: every COCO class, 0.01 decode floor")
-                .put("white_reference", "white minus black, for synthesized and real alike"))
+                .put("white_reference", "white minus black, for synthesized and real alike")
+                .apply {
+                    if (counterfactual) {
+                        put("purpose", "counterfactual record for offline replay: the whole " +
+                            "5x5 lattice synthesized from one moment (captures ~100 ms apart)")
+                        put("synth_rule", "1/240 and 1/120 from one frame each, 1/60, 1/30, 1/15 " +
+                            "from 1, 2, 4 back-to-back 1/60 frames; every ISO from the base by " +
+                            "digital gain (darkening below the base)")
+                        put("yardstick", "one real cell per moment right after the bursts, " +
+                            "cell = frame x 7 mod 25 (all 25 every 25 moments)")
+                        put("order", "bursts back to back, then the real cell; not shuffled")
+                        put("base_iso_rotation", "none")
+                        put("base_rule", "highest rung whose first 1/60 frame would clip on " +
+                            "fewer than $cfClipLimit of the sites, predicted from the previous " +
+                            "moment's first 1/60 frame; the first moment starts at the top rung")
+                        put("gapped_note", "1/60 sums are flagged gapped by the rule above, but " +
+                            "the gap is 83 us of 16750 (0.5%)")
+                    }
+                })
         logger.csv("collect_frames", listOf("frame", "base_gi", "base_iso", "base_iso_captured",
             "pipeline", "order", "t_request_ns", "t_first_exposure_ns", "t_last_exposure_end_ns",
             "t_done_ns", "capture_span_ms", "wait_ms", "formation_ms", "infer_ms", "log_ms",
@@ -5383,6 +5415,8 @@ class MeasurementController(
             "nominal_iso", "iso_req", "iso_applied", "exp_req_us", "exp_applied_us",
             "sensor_ts_ns", "frame_duration_ns", "taken_ns", "focus_distance", "af_state",
             "lens_state", "raw_mean", "raw_clip_frac"))
+        if (counterfactual) logger.csv("collect_base", listOf("frame", "base_gi", "next_base_gi",
+            "clip_g0", "clip_g1", "clip_g2", "clip_g3", "clip_g4"))
         logger.csv("collect_cells", listOf("frame", "pipeline", "kind", "cell", "gi", "sj",
             "nominal_iso", "exposure_us", "base_gi", "burst_sj", "source_iso_captured",
             "n_frames", "gapped", "digital_ratio", "shot", "sensor_ts_ns", "mean_luma",
@@ -5433,13 +5467,28 @@ class MeasurementController(
         raw.armNativeDecodeValidation()
         onStatus("collect 5x5: warming GPU batches…")
         tfl.warmUpAllBatches()
+        /** Fraction of a decoded frame's sampled sites (black removed) that would clip if its
+         *  gain were multiplied by [scale]. */
+        fun clipFractionAt(fr: RawFrame, scale: Double): Double {
+            val px = fr.bayer
+            val clipAt = (fr.maxDn - 4.0) / scale
+            val step = (px.size / 100_000).coerceAtLeast(1) or 1
+            var clipped = 0; var count = 0; var i = 0
+            while (i < px.size) { if (px[i] >= clipAt) clipped++; count++; i += step }
+            return if (count == 0) 0.0 else clipped.toDouble() / count
+        }
+        var cfBase = nG - 1
         var f = 0
         var failures = 0
         try {
             while (running && f < maxFrames) {
                 val tFrame = now()
                 val held = collectBaseOverride
-                val b = if (held >= 0) held % nG else f % nG
+                val b = when {
+                    counterfactual -> cfBase
+                    held >= 0 -> held % nG
+                    else -> f % nG
+                }
                 val legacy = pipelineAB && f % 2 == 1
                 val pipeline = if (legacy) "legacy" else "current"
                 raw.decodeMode = if (legacy) 1 else 0
@@ -5447,9 +5496,14 @@ class MeasurementController(
 
                 val units = ArrayList<Unit55>()
                 for ((sj, n) in bursts) units += Unit55("burst", b, sj, n)
-                for (gi in 0 until nG) for (sj in 0 until nS) units += Unit55("real", gi, sj, 1)
-                units += Unit55("repeat", b, nS - 1, 1)
-                units.shuffle(java.util.Random(f.toLong() * 7919L + 17L))
+                if (counterfactual) {
+                    val cell = (f * 7) % (nG * nS)
+                    units += Unit55("real", cell / nS, cell % nS, 1)
+                } else {
+                    for (gi in 0 until nG) for (sj in 0 until nS) units += Unit55("real", gi, sj, 1)
+                    units += Unit55("repeat", b, nS - 1, 1)
+                    units.shuffle(java.util.Random(f.toLong() * 7919L + 17L))
+                }
                 // Expand to shots, in requests of at most CHUNK shots (bursts never split). A
                 // request is issued when the previous one's last frame has been taken, so at
                 // most one request's decoded frames (12.5 MB each) wait in memory: 40 shots
@@ -5527,6 +5581,15 @@ class MeasurementController(
                         logMs += ms(tl0)
                         if (u.kind == "burst") {
                             if (s.k == 0) { burstShot = i; burstTs = meta.timestamp }
+                            if (counterfactual && s.k == 0 && u.sj == 2) {
+                                val clip = DoubleArray(nG) { g ->
+                                    clipFractionAt(frame, captured(g).toDouble() / captured(b))
+                                }
+                                val next = (nG - 1 downTo 0).firstOrNull { clip[it] < cfClipLimit } ?: 0
+                                logger.row("collect_base", listOf(f, b, next) +
+                                    clip.map { "%.5f".format(it) })
+                                cfBase = next
+                            }
                             burst += frame
                             if (s.k < u.n - 1) continue
                             // Rows prop_c makes from this burst: n = 1, 2, 4 frames.
@@ -5534,7 +5597,7 @@ class MeasurementController(
                             val laneGi = ArrayList<Int>(); val laneSj = ArrayList<Int>()
                             var n = 1; var row = u.sj
                             while (n <= u.n && row < nS) {
-                                val gis = if (n == 1) (0 until nG).toList()
+                                val gis = if (n == 1 || counterfactual) (0 until nG).toList()
                                     else (maxOf(0, b - 1)..minOf(nG - 1, b + 1)).toList()
                                 for (g in gis) {
                                     laneBurst += n; laneRatio += gains[g].toDouble() / captured(b)
@@ -5617,7 +5680,8 @@ class MeasurementController(
                 lastFrameIdx = f
                 totalFramesLogged += 1
                 preview?.let { bmp -> runCatching { onFrame(bmp, previewDets, gains[b], shutters[2]) } }
-                onStatus("COLLECT55 f=$f base ISO ${gains[b]} $pipeline | ${shots.size} shots, " +
+                onStatus((if (counterfactual) "COLLECT CF" else "COLLECT55") +
+                    " f=$f base ISO ${gains[b]} $pipeline | ${shots.size} shots, " +
                     "$nImages images | ${"%.0f".format(totalMs)}ms")
                 f++
             }

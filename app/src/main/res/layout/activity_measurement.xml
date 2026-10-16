@@ -325,6 +325,14 @@
                     android:text="Limo"
                     android:textAllCaps="false"
                     android:textSize="18sp" />
+                <Button android:id="@+id/expCollect"
+                    android:layout_width="0dp"
+                    android:layout_height="72dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:text="collect"
+                    android:textAllCaps="false"
+                    android:textSize="18sp" />
             </LinearLayout>
         </LinearLayout>
     </FrameLayout>

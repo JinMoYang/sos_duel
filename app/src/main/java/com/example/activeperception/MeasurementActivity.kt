@@ -1297,7 +1297,7 @@ class MeasurementActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.driveToExp).setOnClickListener { expPanel.visibility = View.VISIBLE }
         findViewById<Button>(R.id.expClose).setOnClickListener { expPanel.visibility = View.GONE }
-        listOf(R.id.expReadNoise, R.id.expStatic, R.id.expLimo).forEachIndexed { i, id ->
+        listOf(R.id.expReadNoise, R.id.expStatic, R.id.expLimo, R.id.expCollect).forEachIndexed { i, id ->
             val b = findViewById<Button>(id)
             b.setOnClickListener {
                 // While a step runs, only its own button (stop) does anything.
@@ -1708,7 +1708,9 @@ class MeasurementActivity : AppCompatActivity() {
     private val EXP_PRESETS = listOf(
         LapPreset("read noise", run = "readnoise"),
         LapPreset("question 1, still", run = "collect55_ab", cap = 30),
-        LapPreset("questions 1+2, Limo", LIMO_ROUND, 4)
+        LapPreset("questions 1+2, Limo", LIMO_ROUND, 4),
+        // The counterfactual replay record: ten Limo laps of collect_cf in one run.
+        LapPreset("counterfactual record, Limo", "collect_cf:10", 1)
     )
 
     /** Frame cap and image saving for the current auto_collect run or session. */
@@ -1739,6 +1741,7 @@ class MeasurementActivity : AppCompatActivity() {
             "shin_nm" -> "baseline: ShinNM"
             "collect55" -> "collect: 5×5"
             "collect55_ab" -> "collect: 5×5 A/B"
+            "collect_cf" -> "collect: counterfactual"
             "readnoise" -> "read noise"
             else -> method
         }
@@ -1758,22 +1761,25 @@ class MeasurementActivity : AppCompatActivity() {
         // session; on its own the run steps it every frame.
         val base = if (lapSession != null) lapCollectBlockOrdinal else -1
         val tag = when (kind) {
-            "collect55" -> "collect_5x5"; "collect55_ab" -> "collect_5x5_ab"; else -> "collect_5x3"
+            "collect55" -> "collect_5x5"; "collect55_ab" -> "collect_5x5_ab"
+            "collect_cf" -> "collect_cf"; else -> "collect_5x3"
         }
         start(tag) {
             val controller = mc!!
             controller.collectBaseOverride = base
             when (kind) {
                 // claim 1 on prop_c's lattice; _ab alternates the old and new image pipeline
-                "collect55", "collect55_ab" ->
-                    controller.runCollect55(cap, kind == "collect55_ab", ::post, ::showFrame)
+                "collect55", "collect55_ab", "collect_cf" ->
+                    controller.runCollect55(cap, kind == "collect55_ab", ::post, ::showFrame,
+                        counterfactual = kind == "collect_cf")
                 else -> controller.runCollect53(cap, ::post, ::showFrame)
             }
         }
     }
 
     private fun isCollect(method: String) =
-        method == "collect" || method == "collect55" || method == "collect55_ab"
+        method == "collect" || method == "collect55" || method == "collect55_ab" ||
+            method == "collect_cf"
 
     /** Starts a lap session, or stops the one in progress. The plan and its timeouts come
      *  from the launch intent when given, otherwise from LapSession's defaults. */
