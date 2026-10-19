@@ -1748,6 +1748,8 @@ class MeasurementActivity : AppCompatActivity() {
             else "proposed: v3cause " + if (theta.isInfinite()) "θ∞" else "θ%.2f".format(theta)
         }
         return when (method) {
+            "duel_trace" -> "proposed: Duel (trace)"
+            "duel_every" -> "proposed: Duel (every)"
             "prop_c" -> "baseline: Sense-well"
             "ae_phone" -> "baseline: AE-Phone"
             "physsweep" -> "baseline: PhysSweep"
@@ -1951,6 +1953,11 @@ class MeasurementActivity : AppCompatActivity() {
         v3Command(cmd)?.let { (theta, pilot) ->
             val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
             start(cmd) { mc!!.runV3Cause(theta, pilot, cap, ::post, ::showFrame) }
+            return
+        }
+        if (cmd == "duel_trace" || cmd == "duel_every") {
+            val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
+            start(cmd) { mc!!.runDuel(cmd == "duel_every", cap, ::post, ::showFrame) }
             return
         }
         val rid = when (cmd) {

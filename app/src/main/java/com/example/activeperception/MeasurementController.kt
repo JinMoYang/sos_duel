@@ -25,6 +25,8 @@ import com.example.activeperception.acquire.RegimeClassifier
 import com.example.activeperception.acquire.ShinMetric
 import com.example.activeperception.acquire.Signal
 import com.example.activeperception.acquire.V3Cause as V
+import com.example.activeperception.acquire.Duel
+import com.example.activeperception.acquire.SparseFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -4145,6 +4147,325 @@ class MeasurementController(
             }
         } finally {
             for (p in pending) logger.jsonl("places", p.json.put("outcome", JSONObject.NULL))
+            runCatching { raw.stopFastCapture() }
+            runCatching { src.shutdown() }
+        }
+        endPass()
+    }
+
+    /**
+     * Duel (proposed v4; docs/SPEC_proposed_v4.md). Every frame: the base image at (base ISO,
+     * base shutter) and, when the plan says so, the same ISO one shutter rung away — both in
+     * ONE capture request, detected in one batch, aligned by sparse flow and fused. Shutter:
+     * cars caught in only one of the two images are votes; the base moves one rung once the
+     * neighbour is better with 95% confidence, then keeps comparing that way until the
+     * neighbour loses. Gain: the highest ISO at which no car caught on the base would clip in
+     * 70% or more of its box — arithmetic on the base RAW, applied to the next frame.
+     * [every] = L1 (two images every frame); otherwise L0 (two images only during a line
+     * search or after a weak trace on the previous base). Starts at phone AE's setting
+     * snapped to the nearest cell. Decision rules: [com.example.activeperception.acquire.Duel].
+     *
+     * One request in flight (depth 1): each frame is planned from the previous frame's
+     * results, as for every other method; decisions.jsonl records which frame that was.
+     */
+    fun runDuel(
+        every: Boolean, maxFrames: Int,
+        onStatus: (String) -> Unit,
+        onFrame: (Bitmap, List<Detection>, Int, Int) -> Unit = { _, _, _, _ -> }
+    ) {
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+            ?: error("Duel requires TfliteYoloDetector")
+        val mode = if (every) "duel_every" else "duel_trace"
+        val lattice = Grid(gains = Duel.ISOS, exposuresUs = Duel.SHUTTERS_US, digitalBoost = 1.0)
+        val analogCeil = v2AnalogCeil()
+        // ---- start: phone AE's setting, nearest cell on each axis (AE is never used again).
+        val ae = meterAeStart(onStatus)
+        val startCell = if (ae != null) nearestCell(lattice, ae.iso, ae.expUs) else lattice.cell(2, 2)
+        val (startG, startS) = lattice.indices(startCell)
+        val seed = System.currentTimeMillis()
+        startPass(mode, isGtReference = false, methodParams = JSONObject()
+            .put("mode", mode).put("spec", "docs/SPEC_proposed_v4.md (proposed v4, named Duel)")
+            .put("isos", JSONArray(Duel.ISOS.toList())).put("shutters_us", JSONArray(Duel.SHUTTERS_US.toList()))
+            .put("analog_ceiling", analogCeil)
+            .put("tau", Duel.TAU).put("conf_move", Duel.CONF_MOVE)
+            .put("out_conf", V.OUT_THR).put("weak_conf", V.WEAK_LO)
+            .put("seen_iou", Duel.SEEN_IOU).put("cluster_iou", 0.5)
+            .put("flow", "pyramidal LK on half-res luma (each lane divided by its mean), <= 8 corners " +
+                "per box, per-axis median displacement, detector-input px; no points -> no shift")
+            .put("thompson_seed", seed)
+            .put("start", JSONObject().put("ae", ae?.json() ?: JSONObject.NULL)
+                .put("iso", Duel.ISOS[startG]).put("shutter_us", Duel.SHUTTERS_US[startS])
+                .put("rule", if (ae != null) "phone AE, nearest cell per axis (log distance)"
+                    else "AE gave nothing: ISO 400, 1/60 s"))
+            .put("pipeline_depth", 1)
+            .put("capture_template", "preview for one shot, still for two (captureFast's rule)")
+            .put("gain_clip_rule", "(site - black) x ISO_G / applied analog ISO of the base >= white - black, " +
+                "decoded sites (mean of 4 same-colour pixels)")
+            .put("detector", "yolov8n tflite, conf >= 0.05 kept, vehicles for decisions")
+            .put("input_size", 640))
+        logger.csv("duel_frames", listOf("idx", "n_images", "n_captures", "reason", "base_iso",
+            "base_shutter_us", "nb_shutter_us", "t_capture_start", "t_capture2_start",
+            "t_capture_end", "t_output", "capture_ms", "formation_ms", "flow_ms", "infer_ms",
+            "fusion_ms", "iso_applied_lag_frames", "run_lap", "nothing", "nothing_run",
+            "moved_to_shutter_us"))
+        val src = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
+        raw.armNativeDecodeValidation()
+        onStatus("warming FP16 GPU batches…")
+        tfl.warmUpAllBatches()
+
+        val pol = Duel.Policy(every, startG, startS, seed)
+        var gainNote: JSONObject = JSONObject().put("n_cars", JSONObject.NULL)
+            .put("clip_by_G", JSONObject.NULL).put("chosen", Duel.ISOS[startG]).put("changed", false)
+            .put("from_frame", JSONObject.NULL).put("rule", "start")
+        var nothingRun = 0
+        var failures = 0
+        fun jsonBox(b: DoubleArray) = JSONArray(b.toList())
+        fun median(v: List<Double>): Double {
+            val s = v.sorted(); val m = s.size
+            return if (m % 2 == 1) s[m / 2] else 0.5 * (s[m / 2 - 1] + s[m / 2])
+        }
+
+        try {
+            var f = 0
+            while (running && f < maxFrames) {
+                val t0 = now()
+                stepClock.begin()
+                // ---- 1. plan (previous frame's information only).
+                val tPlan0 = now()
+                val plan = pol.plan()
+                val gIdx = pol.baseG; val sBase = pol.baseS
+                val isoNom = Duel.ISOS[gIdx]
+                val phys = minOf(isoNom, analogCeil)
+                val ratio = isoNom.toDouble() / phys
+                val nbS = plan.nb?.let { sBase + it.step }
+                val shots = ArrayList<Pair<Int, Int>>()
+                shots += Duel.SHUTTERS_US[sBase] to phys
+                if (nbS != null) shots += Duel.SHUTTERS_US[nbS] to phys
+                var planMs = ms(tPlan0)
+                // ---- 3. capture: one request, one or two shots.
+                val got = ArrayList<Pair<RawFrame, RawSensorCapturer.RawMeta>>()
+                val handle = raw.beginBracketSequence(shots,
+                    if (shots.size == 1) android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW
+                    else android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE)
+                val okCapture = runCatching {
+                    for (i in shots.indices) got += raw.takeBracketFrame(handle, i)
+                }.isSuccess
+                if (!okCapture) {
+                    raw.abortBracketSequence(handle)
+                    failures++
+                    onStatus("Duel: capture failed ($failures)")
+                    if (failures >= 5) break
+                    continue
+                }
+                failures = 0
+                if (f == 0) writeDecodeCheck()
+                val metas = got.map { it.second }
+                val frames = got.map { it.first }
+                stepClock.captured(metas)
+                val tCap = now()
+                val captureMs = msBetween(t0, tCap)
+                val n = frames.size
+
+                // ---- 4. detect: one lane per shot, the same digital residual on each.
+                val tensor = src.formFramesTensor(frames, IntArray(n) { it }, DoubleArray(n) { ratio })
+                stepClock.formed()
+                val dets = tfl.detectTensorBatchOptimized(tensor.batch)
+                stepClock.detected()
+                val inferMs = tfl.lastRunMs + tfl.lastDecodeMs
+                val formMs = ms(tCap) - inferMs
+                val samplers = frames.mapIndexed { i, fr ->
+                    com.example.activeperception.acquire.RawBoxSampler(fr, metas[i].blackLevels, metas[i].white.toDouble())
+                }
+                val per = (0 until n).map { a ->
+                    V.perImage(dets[a].filter { it.confidence >= 0.05f }.map { d ->
+                        V.D(d.confidence.toDouble(), DoubleArray(4) { d.xyxy[it].toDouble() }, d.classId)
+                    })
+                }
+
+                // ---- 5. output; 6-7. learn and move (two images only).
+                var flowMs = 0.0
+                var fusionMs = 0.0
+                var wl: IntArray? = null
+                var movedTo: Int? = null
+                val flowLog = JSONArray()
+                val clusters: List<V.Cluster>
+                if (n == 1) {
+                    clusters = emptyList()
+                } else {
+                    val tFlow0 = now()
+                    val mp = tensor.batch.transforms[0]
+                    val grayB = SparseFlow.pyramid(tensorGrayHalf(tensor, 0))
+                    val grayN = SparseFlow.pyramid(tensorGrayHalf(tensor, 1))
+                    /** Median per-axis displacement (detector-input px) of [box]'s content from
+                     *  image [from] to image [to], and how many points it rests on. */
+                    fun shiftOf(box: DoubleArray, from: List<SparseFlow.Img>, to: List<SparseFlow.Img>): DoubleArray {
+                        val gx0 = (box[0] * mp.scale + mp.padX) / 2; val gy0 = (box[1] * mp.scale + mp.padY) / 2
+                        val gx1 = (box[2] * mp.scale + mp.padX) / 2; val gy1 = (box[3] * mp.scale + mp.padY) / 2
+                        val pts = SparseFlow.corners(from[0], gx0, gy0, gx1, gy1)
+                        if (pts.isEmpty()) return doubleArrayOf(0.0, 0.0, 0.0)
+                        // track(prev, cur): where cur's points sit in prev, as prev - cur.
+                        val tr = SparseFlow.track(to, from, pts).filterNotNull()
+                        if (tr.isEmpty()) return doubleArrayOf(0.0, 0.0, 0.0)
+                        return doubleArrayOf(median(tr.map { it[0] }) * 2.0 / mp.scale,
+                            median(tr.map { it[1] }) * 2.0 / mp.scale, tr.size.toDouble())
+                    }
+                    fun moved(b: DoubleArray, s: DoubleArray) =
+                        doubleArrayOf(b[0] + s[0], b[1] + s[1], b[2] + s[0], b[3] + s[1])
+                    // Neighbour boxes to the base's time (each by the flow inside it).
+                    val shiftNb = java.util.IdentityHashMap<V.D, DoubleArray>()
+                    for (d in per[1].low + per[1].out) shiftNb.getOrPut(d) {
+                        shiftOf(d.box, grayN, grayB).also { s ->
+                            flowLog.put(JSONObject().put("nb_box", jsonBox(d.box))
+                                .put("dx", s[0]).put("dy", s[1]).put("n_pts", s[2].toInt()))
+                        }
+                    }
+                    fun toBase(d: V.D) = V.D(d.conf, moved(d.box, shiftNb[d]!!), d.cls)
+                    val nbOutB = per[1].out.map(::toBase)
+                    val nbLowB = per[1].low.map(::toBase)
+                    // Base-time boxes to the neighbour's time; fusion and discord ask for the
+                    // same boxes, so each is tracked once.
+                    val shiftB = java.util.IdentityHashMap<DoubleArray, DoubleArray>()
+                    fun toNb(b: DoubleArray) = moved(b, shiftB.getOrPut(b) { shiftOf(b, grayB, grayN) })
+                    flowMs = ms(tFlow0)
+                    val tFuse0 = now()
+                    clusters = V.fuse(listOf(
+                        V.FuseImage(per[0].out, per[0].low) { box -> samplers[0].satFrac(box, ratio) },
+                        V.FuseImage(nbOutB, nbLowB) { box -> samplers[1].satFrac(toNb(box), ratio) }))
+                    fusionMs = ms(tFuse0)
+                    val tLearn0 = now()
+                    wl = Duel.discord(clusters.filter { it.status == "kept" }.map { it.box },
+                        per[0].out, per[1].out, ::toNb)
+                    movedTo = pol.afterCompare(plan.nb, wl[0], wl[1])
+                    planMs += ms(tLearn0)
+                }
+                val kept = clusters.filter { it.status == "kept" }
+                val outDets = if (n == 1) per[0].out.map { d ->
+                    Detection(FloatArray(4) { d.box[it].toFloat() }, d.conf.toFloat(), d.cls)
+                } else kept.map { c ->
+                    Detection(FloatArray(4) { c.box[it].toFloat() }, c.evidence.toFloat(), c.cls)
+                }
+                val tOutputNs = StepClock.nowNs()
+
+                // ---- 2 (for the next frame). Gain from the cars caught on this base.
+                val tGain0 = now()
+                val cars = per[0].out
+                val usedGainNote = gainNote
+                if (cars.isEmpty()) {
+                    gainNote = JSONObject().put("n_cars", 0).put("clip_by_G", JSONObject.NULL)
+                        .put("chosen", Duel.ISOS[pol.baseG]).put("changed", false).put("from_frame", f)
+                        .put("rule", "no cars: keep")
+                } else {
+                    val applied = metas[0].appliedIso.toDouble().coerceAtLeast(1.0)
+                    val scales = DoubleArray(Duel.ISOS.size) { Duel.ISOS[it] / applied }
+                    val maxClip = DoubleArray(Duel.ISOS.size)
+                    for (c in cars) {
+                        val fr = samplers[0].stats(c.box, scales).satFrac
+                        for (g in maxClip.indices) maxClip[g] = maxOf(maxClip[g], fr[g])
+                    }
+                    val chosen = Duel.gainRule(maxClip)!!
+                    val clipJson = JSONObject()
+                    for (g in Duel.ISOS.indices) clipJson.put(Duel.ISOS[g].toString(), maxClip[g])
+                    gainNote = JSONObject().put("n_cars", cars.size).put("clip_by_G", clipJson)
+                        .put("chosen", Duel.ISOS[chosen]).put("changed", chosen != pol.baseG)
+                        .put("from_frame", f).put("rule", "highest ISO with every car < tau")
+                    pol.baseG = chosen
+                }
+                planMs += ms(tGain0)
+                // ---- 8. record for the next plan.
+                val trace = per[0].weak.isNotEmpty()
+                pol.prevTrace = trace
+                val nothing = per[0].out.isEmpty() && per[0].weak.isEmpty()
+                nothingRun = if (nothing) nothingRun + 1 else 0
+                stepClock.decided()
+                val totalMs = ms(t0)
+
+                // ---- records (spec 5).
+                val roles = if (n == 1) listOf("base") else listOf("base", "neighbor")
+                for (a in 0 until n) {
+                    val arr = JSONArray()
+                    for (d in dets[a]) {
+                        if (d.confidence < 0.05f) continue
+                        val box = DoubleArray(4) { d.xyxy[it].toDouble() }
+                        arr.put(JSONObject().put("xyxy", jsonBox(box)).put("conf", d.confidence.toDouble())
+                            .put("class", d.classId).put("sat", samplers[a].satFrac(box, ratio)))
+                    }
+                    val m = metas[a]
+                    logger.jsonl("candidate_dets", JSONObject().put("frame", f).put("role", roles[a])
+                        .put("iso", isoNom).put("analog_gain", m.appliedIso).put("analog_gain_req", m.requestedIso)
+                        .put("digital_gain", ratio).put("exposure_us", m.appliedExpUs)
+                        .put("exposure_us_req", m.requestedExpUs).put("sensor_ts", m.timestamp)
+                        .put("dets", arr))
+                    logger.jsonl("noise_profile", JSONObject().put("frame", f).put("role", roles[a])
+                        .put("iso", isoNom).put("analog_gain", m.appliedIso).put("exposure_us", m.appliedExpUs)
+                        .put("noise_profile", m.noiseProfile?.let { JSONArray(it.toList()) } ?: JSONObject.NULL))
+                }
+                val outArr = JSONArray(); val dropArr = JSONArray()
+                if (n == 1) for (d in per[0].out) outArr.put(JSONObject().put("xyxy", jsonBox(d.box))
+                    .put("evidence", d.conf).put("class", d.cls).put("from", "base"))
+                for (c in clusters) {
+                    val o = JSONObject().put("xyxy", jsonBox(c.box)).put("evidence", c.evidence)
+                        .put("peak", c.peak).put("class", c.cls).put("n_pic", c.nPic)
+                        .put("r", JSONArray(c.r.toList())).put("w", JSONArray(c.w.toList()))
+                    if (c.status == "kept") outArr.put(o) else dropArr.put(o.put("reason", c.status))
+                }
+                logger.jsonl("dets", JSONObject().put("frame", f).put("method", mode)
+                    .put("roles", JSONArray(roles)).put("dets", outArr).put("dropped", dropArr)
+                    .put("nb_flow", flowLog))
+                fun votes(d: Duel.Dir) = JSONArray(listOf(pol.w[d.ordinal], pol.l[d.ordinal]))
+                logger.jsonl("decisions", JSONObject().put("frame", f).put("mode", mode)
+                    .put("info_from_frame", if (f == 0) JSONObject.NULL else f - 1).put("depth", 1)
+                    .put("plan", JSONObject().put("reason", plan.reason)
+                        .put("nb_dir", plan.nb?.key ?: JSONObject.NULL)
+                        .put("thompson_draws", plan.draws?.let { dr ->
+                            JSONObject().apply { for ((k, v) in dr) put(k.key, v) } } ?: JSONObject.NULL))
+                    .put("base", JSONObject().put("g_req", isoNom).put("g_analog_req", phys)
+                        .put("g_applied", metas[0].appliedIso).put("digital", ratio)
+                        .put("s_req", Duel.SHUTTERS_US[sBase]).put("s_applied", metas[0].appliedExpUs))
+                    .put("gain", usedGainNote)
+                    .put("images", JSONArray((0 until n).map { a ->
+                        JSONObject().put("role", roles[a]).put("exposure_us", metas[a].appliedExpUs)
+                            .put("iso", isoNom).put("analog", metas[a].appliedIso).put("digital", ratio) }))
+                    .put("discord", wl?.let { JSONObject().put("w_t", it[0]).put("l_t", it[1]) } ?: JSONObject.NULL)
+                    .put("votes_after", JSONObject().put("short", votes(Duel.Dir.SHORT)).put("long", votes(Duel.Dir.LONG)))
+                    .put("p_better", JSONObject().put("short", pol.pBetterNow(Duel.Dir.SHORT))
+                        .put("long", pol.pBetterNow(Duel.Dir.LONG)))
+                    .put("move", movedTo?.let { JSONObject().put("from_s", Duel.SHUTTERS_US[sBase])
+                        .put("to_s", Duel.SHUTTERS_US[it]) } ?: JSONObject.NULL)
+                    .put("line_after", pol.line?.key ?: JSONObject.NULL)
+                    .put("next_base", JSONObject().put("iso", Duel.ISOS[pol.baseG]).put("shutter_us", Duel.SHUTTERS_US[pol.baseS]))
+                    .put("trace", trace).put("n_weak", per[0].weak.size).put("n_cars", per[0].out.size)
+                    .put("nothing", nothing).put("nothing_run", nothingRun))
+                val lastEnd = metas.maxOf { it.timestamp + it.appliedExpUs * 1_000L }
+                logger.row("duel_frames", listOf(f, n, shots.size, plan.reason, isoNom, Duel.SHUTTERS_US[sBase],
+                    nbS?.let { Duel.SHUTTERS_US[it] } ?: "", metas[0].timestamp, metas.getOrNull(1)?.timestamp ?: "",
+                    lastEnd, tOutputNs, "%.1f".format(captureMs), "%.1f".format(formMs),
+                    "%.1f".format(flowMs), "%.1f".format(inferMs), "%.1f".format(fusionMs),
+                    metas[0].applyDelayFrames ?: "", runLap, if (nothing) 1 else 0, nothingRun,
+                    movedTo?.let { Duel.SHUTTERS_US[it] } ?: ""))
+
+                val bmp = src.selectedTensorBitmap(tensor, 0)
+                val path = saveImage("${frameName(f)}_base", bmp)
+                if (n > 1 && saveImages) saveImage("${frameName(f)}_nb_${plan.nb!!.key}", src.selectedTensorBitmap(tensor, 1))
+                logFrame(f, mode, lattice.cell(gIdx, sBase), isoNom, Duel.SHUTTERS_US[sBase], n, n > 1,
+                    formMs, inferMs, totalMs, outDets, path,
+                    tieBreak = plan.reason, applyBoost = false, captureMs = captureMs,
+                    v3Extra = listOf(phys, per[0].weak.maxOfOrNull { it.conf }?.let { "%.4f".format(it) } ?: "",
+                        n - 1, plan.reason, plan.nb?.key ?: "", "", "", n, shots.size,
+                        metas[0].timestamp, metas.getOrNull(1)?.timestamp ?: "", lastEnd, tOutputNs,
+                        "%.1f".format(flowMs), "%.1f".format(fusionMs), "%.1f".format(planMs)),
+                    writeDetsLine = false, metaOverride = metas[0])
+                runCatching { onFrame(bmp, src.detectionsForTensorPreview(outDets, tensor, 0),
+                    isoNom, Duel.SHUTTERS_US[sBase]) }
+                onStatus("Duel[${if (every) "every" else "trace"}] f=$f ISO$isoNom 1/${1_000_000 / Duel.SHUTTERS_US[sBase]} " +
+                    "${plan.reason}${plan.nb?.let { " vs ${it.key}" } ?: ""} " +
+                    "${wl?.let { "w${it[0]} l${it[1]} " } ?: ""}${movedTo?.let { "→1/${1_000_000 / Duel.SHUTTERS_US[it]} " } ?: ""}" +
+                    "${"%.0f".format(totalMs)}ms")
+                f++
+            }
+        } finally {
             runCatching { raw.stopFastCapture() }
             runCatching { src.shutdown() }
         }

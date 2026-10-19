@@ -810,8 +810,14 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
      *
      * Take the frames in order with [takeBracketFrame]; a decoded frame is 12.5 MB, so
      * the caller should release each one before asking for many more.
+     *
+     * [template] is shared by every shot; a caller mixing one-shot and multi-shot frames can
+     * follow [captureFast]'s rule (preview for one shot, still for a burst).
      */
-    fun beginBracketSequence(shots: List<Pair<Int, Int>>): BracketHandle {
+    fun beginBracketSequence(
+        shots: List<Pair<Int, Int>>,
+        template: Int = CameraDevice.TEMPLATE_STILL_CAPTURE
+    ): BracketHandle {
         check(fastCaptureStarted) { "startFastCapture() must be called first" }
         require(shots.size in 1..MAX_IMAGES)
         val sess = session ?: error("camera session is closed")
@@ -828,7 +834,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             ids[i] = command.id
             indexOf[command.id] = i
             // One template for every shot, so nothing but exposure and ISO differs.
-            requests += manualRequest(expected, command.id, CameraDevice.TEMPLATE_STILL_CAPTURE)
+            requests += manualRequest(expected, command.id, template)
         }
         val handle = BracketHandle(ids, IntArray(shots.size) { shots[it].first },
             IntArray(shots.size) { shots[it].second }, submittedSensorNs)
