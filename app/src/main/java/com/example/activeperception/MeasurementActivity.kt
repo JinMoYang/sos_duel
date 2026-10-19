@@ -1299,8 +1299,9 @@ class MeasurementActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.driveToExp).setOnClickListener { expPanel.visibility = View.VISIBLE }
         findViewById<Button>(R.id.expClose).setOnClickListener { expPanel.visibility = View.GONE }
-        listOf(R.id.expReadNoise, R.id.expStatic, R.id.expLimo, R.id.expCollect, R.id.expAeCollect)
-            .forEachIndexed { i, id ->
+        for ((t, _) in EXP_TABS) findViewById<Button>(t).setOnClickListener { showExpTab(t) }
+        showExpTab(R.id.expTabMain)
+        for ((id, preset) in EXP_PRESETS) {
             val b = findViewById<Button>(id)
             b.setOnClickListener {
                 // While a step runs, only its own button (stop) does anything.
@@ -1308,7 +1309,7 @@ class MeasurementActivity : AppCompatActivity() {
                     activeStepButton !== b) {
                     post("busy: stop the running step first"); return@setOnClickListener
                 }
-                toggleLapSession(EXP_PRESETS[i], b)
+                toggleLapSession(preset, b)
             }
         }
         findViewById<Button>(R.id.driveAddRow).setOnClickListener { openEditor(-1) }
@@ -1692,8 +1693,20 @@ class MeasurementActivity : AppCompatActivity() {
         val label: String, val plan: String? = null, val repeats: Int = 1,
         val run: String? = null, val cap: Int? = null, val saveImages: Boolean = true,
         /** Seconds counted down on the big line before a [run] starts. */
-        val delayS: Int = 0
+        val delayS: Int = 0,
+        /** Lighting the operator declared by the button pressed; goes into every manifest. */
+        val lighting: String? = null
     )
+
+    /** The Duel experiment (docs/SPEC_proposed_v4.md): eight methods, three runs each of
+     *  three laps, one run of every method per round, the order shifted by one each round
+     *  (no method always follows the same one, slow drift spreads over all). Each run
+     *  starts fresh and keeps its state for its three laps. 24 runs, ~17 min a lighting. */
+    private val MAIN_METHODS = listOf("duel_trace", "duel_every", "ae_phone", "prop_c",
+        "physsweep", "shin_nm", "nae", "fixed_1600_240")
+    private val MAIN_PLAN = (0 until 3).flatMap { r ->
+        MAIN_METHODS.indices.map { MAIN_METHODS[(it + r) % MAIN_METHODS.size] }
+    }.joinToString(",") { "$it:3" }
 
     /** One round of the Limo step, one lap each, the method changing every lap so slow drift
      *  (light, battery, speed) falls on every method alike: five collection laps (one per
@@ -1711,20 +1724,43 @@ class MeasurementActivity : AppCompatActivity() {
      *  real photos by track position), each compared method 4.
      *  v3cause runs at theta 0.10 only; v3cause_t020, v3cause_inf and v3cause_pilot still
      *  start by name. */
-    private val EXP_PRESETS = listOf(
-        LapPreset("read noise", run = "readnoise"),
-        LapPreset("question 1, still", run = "collect55_ab", cap = 30),
-        LapPreset("questions 1+2, Limo", LIMO_ROUND, 4),
+    private val EXP_PRESETS = linkedMapOf(
+        // Main tab: the Duel experiment, one press per lighting (5 s countdown, a lead-in
+        // lap, then 24 runs; one beep at the start, three at the end).
+        R.id.expMainBright to LapPreset("main, bright", MAIN_PLAN, 1, lighting = "bright"),
+        R.id.expMainDim to LapPreset("main, dim", MAIN_PLAN, 1, lighting = "dim"),
+        R.id.expMainDark to LapPreset("main, dark", MAIN_PLAN, 1, lighting = "dark"),
+        // Check tab: Duel's two modes, one 3-lap run each (spec 7, track part).
+        R.id.expTrackTest to LapPreset("track test", "duel_trace:3,duel_every:3", 1),
+        R.id.expReadNoise to LapPreset("read noise", run = "readnoise"),
+        // Old tab: the v3 experiments' steps (2026-10-15/16).
+        R.id.expStatic to LapPreset("question 1, still", run = "collect55_ab", cap = 30),
+        R.id.expLimo to LapPreset("questions 1+2, Limo", LIMO_ROUND, 4),
         // The counterfactual replay record: one run of collect_cf, 225 moments (about 0.85 s
         // each, some 15 per lap, so about 15 laps), started 5 s after the press with no
         // lead-in lap: the record needs no lap boundaries, and the track position is in
         // every moment's yaw.
-        LapPreset("counterfactual record, Limo", run = "collect_cf", cap = 225, delayS = 5),
-        // TEMPORARY (2026-10-16): phone AE alone for ~40-50 s (300 frames, some 3-4 laps), to
-        // measure what AE chooses in a lighting the counterfactual record has but no AE run
-        // has. The replay takes AE's shutter and brightness target from it.
-        LapPreset("phone AE alone, Limo", run = "ae_phone", cap = 300, delayS = 5)
+        R.id.expCollect to LapPreset("counterfactual record, Limo", run = "collect_cf", cap = 225, delayS = 5),
+        // Phone AE alone for ~40-50 s (300 frames, some 3-4 laps), made 2026-10-16 to measure
+        // what AE chooses in a lighting the counterfactual record has but no AE run had.
+        R.id.expAeCollect to LapPreset("phone AE alone, Limo", run = "ae_phone", cap = 300, delayS = 5)
     )
+
+    /** auto_collect's tabs and the button row each shows. */
+    private val EXP_TABS = listOf(R.id.expTabMain to R.id.expRowMain,
+        R.id.expTabCheck to R.id.expRowCheck, R.id.expTabOld to R.id.expRowOld)
+
+    private fun showExpTab(tab: Int) {
+        for ((t, row) in EXP_TABS) {
+            val on = t == tab
+            findViewById<View>(row).visibility = if (on) View.VISIBLE else View.GONE
+            findViewById<Button>(t).apply {
+                alpha = if (on) 1f else 0.45f
+                paintFlags = if (on) paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
+                    else paintFlags and android.graphics.Paint.UNDERLINE_TEXT_FLAG.inv()
+            }
+        }
+    }
 
     /** Frame cap and image saving for the current auto_collect run or session. */
     private var presetRunCap: Int? = null
@@ -1829,6 +1865,11 @@ class MeasurementActivity : AppCompatActivity() {
         }
         val plan = LapSession.parsePlan(launchLapPlan ?: preset?.plan ?: LapSession.DEFAULT_PLAN)
         if (plan.isEmpty()) { post("lap plan is empty"); return }
+        // Runs in a lap session end by laps, never by a frame cap left over from a step.
+        presetRunCap = null
+        mc?.lightingLabel = preset?.lighting.orEmpty()
+        mc?.sessionLabel = if (preset?.lighting != null)
+            "duel_main_${preset.lighting}_${System.currentTimeMillis()}" else ""
         // The x2 digital boost exists for the S25's ISO-400 analog ceiling and is folded
         // into every grid-formed image, phone AE included. The collection run sets its own
         // ratios, so leaving the boost on would make the AE laps one stop brighter than
@@ -1865,6 +1906,7 @@ class MeasurementActivity : AppCompatActivity() {
             override fun sessionEnded(completed: Boolean) {
                 lapSession = null
                 mc?.runLap = -1
+                mc?.lightingLabel = ""; mc?.sessionLabel = ""
                 clearLaunchOverrides()
                 // An aborted session can end while its last run is still winding down;
                 // the boost goes back only once no run can still be forming images.

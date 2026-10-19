@@ -187,6 +187,11 @@ class MeasurementController(
      *  every new lap, -1 again when the session ends. */
     @Volatile var runLap: Int = -1
 
+    /** The lighting the operator pressed (bright / dim / dark) and the session it belongs
+     *  to, written into every run's manifest while set; empty outside such a session. */
+    @Volatile var lightingLabel: String = ""
+    @Volatile var sessionLabel: String = ""
+
     /** proposed_v3cause's per-frame summary (device spec 6.4); blank for every other method.
      *  capture_ms / formation_ms / infer_ms are the shared columns above. */
     private val V3_FRAME_HEADERS = listOf("base_again", "weak_max", "k", "plan", "applied",
@@ -216,6 +221,8 @@ class MeasurementController(
         m.put("device_model", Build.MODEL)
         m.put("os_sdk", Build.VERSION.SDK_INT)
         if (methodParams != null) m.put("method_params", methodParams)
+        if (lightingLabel.isNotEmpty()) m.put("lighting", lightingLabel)
+        if (sessionLabel.isNotEmpty()) m.put("experiment_session", sessionLabel)
         m.put("grid", JSONObject().apply {
             put("gains", JSONArray(grid.gains.toTypedArray()))
             put("exposures_us", JSONArray(grid.exposuresUs.toTypedArray()))
