@@ -4291,6 +4291,8 @@ class MeasurementController(
                 var wl: IntArray? = null
                 var movedTo: Int? = null
                 val flowLog = JSONArray()
+                // Each base-time box's shift to the neighbour's time, logged so a replay can redo discord.
+                val shiftB = java.util.IdentityHashMap<DoubleArray, DoubleArray>()
                 val clusters: List<V.Cluster>
                 if (n == 1) {
                     clusters = emptyList()
@@ -4327,7 +4329,6 @@ class MeasurementController(
                     val nbLowB = per[1].low.map(::toBase)
                     // Base-time boxes to the neighbour's time; fusion and discord ask for the
                     // same boxes, so each is tracked once.
-                    val shiftB = java.util.IdentityHashMap<DoubleArray, DoubleArray>()
                     fun toNb(b: DoubleArray) = moved(b, shiftB.getOrPut(b) { shiftOf(b, grayB, grayN) })
                     flowMs = ms(tFlow0)
                     val tFuse0 = now()
@@ -4409,6 +4410,7 @@ class MeasurementController(
                     val o = JSONObject().put("xyxy", jsonBox(c.box)).put("evidence", c.evidence)
                         .put("peak", c.peak).put("class", c.cls).put("n_pic", c.nPic)
                         .put("r", JSONArray(c.r.toList())).put("w", JSONArray(c.w.toList()))
+                    shiftB[c.box]?.let { s -> o.put("to_nb", JSONArray(listOf(s[0], s[1], s[2]))) }
                     if (c.status == "kept") outArr.put(o) else dropArr.put(o.put("reason", c.status))
                 }
                 logger.jsonl("dets", JSONObject().put("frame", f).put("method", mode)
