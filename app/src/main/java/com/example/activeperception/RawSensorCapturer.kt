@@ -77,7 +77,11 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         val rowStrideBytes: Int,
         val pixelStrideBytes: Int,
         val whiteBalance: FloatArray,
-        val cameraToSrgb: DoubleArray
+        val cameraToSrgb: DoubleArray,
+        /** CaptureResult.SENSOR_NOISE_PROFILE flattened as S0, O0, S1, O1, … one pair per
+         *  CFA channel (noise variance = S·x + O, x = signal normalized to [0, 1]); null when
+         *  the HAL does not report it. */
+        val noiseProfile: DoubleArray? = null
     )
 
     data class CaptureProfile(
@@ -1436,7 +1440,10 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             rowStrideBytes = rowStride,
             pixelStrideBytes = pixelStride,
             whiteBalance = calibration.first.copyOf(),
-            cameraToSrgb = calibration.second.copyOf()
+            cameraToSrgb = calibration.second.copyOf(),
+            noiseProfile = result.get(CaptureResult.SENSOR_NOISE_PROFILE)?.let { p ->
+                DoubleArray(p.size * 2) { i -> if (i % 2 == 0) p[i / 2].first else p[i / 2].second }
+            }
         )
         rawTap?.let { tap ->
             runCatching {

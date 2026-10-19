@@ -175,7 +175,14 @@ class MeasurementController(
         // for any of it to mean anything: on USB the phone charges while the run drains
         // it, so a tethered run has to be rejected, not averaged in.
         "batt_charge_uah", "batt_current_ua", "batt_voltage_mv", "batt_pct", "batt_plugged"
-    ) + StepClock.HEADERS + V3_FRAME_HEADERS
+    ) + StepClock.HEADERS + V3_FRAME_HEADERS +
+        // Lap of the run this frame belongs to, 0 = the run's first lap, counted by the lap
+        // session that switches runs (blank outside a lap session: -1).
+        listOf("run_lap")
+
+    /** Set by the lap session: 0 when a block's run starts, the block's completed laps at
+     *  every new lap, -1 again when the session ends. */
+    @Volatile var runLap: Int = -1
 
     /** proposed_v3cause's per-frame summary (device spec 6.4); blank for every other method.
      *  capture_ms / formation_ms / infer_ms are the shared columns above. */
@@ -408,6 +415,42 @@ class MeasurementController(
         return Pair(gi, sj)
     }
 
+    /** Phone AE's setting when a run starts: the start point of the methods defined to start
+     *  from the camera's current exposure (Duel, ShinNM, Neural-AE). Runs AE frames on the
+     *  legacy one-shot path — so it must come before the fast pipeline opens — until two
+     *  frames in a row agree within 5% in ISO x exposure (at least 6, at most 20 frames; AE
+     *  can arrive far from the scene, e.g. from a previous dark run). */
+    private class AeStart(val iso: Int, val expUs: Long, val frames: Int, val settled: Boolean) {
+        fun json(): JSONObject = JSONObject().put("iso", iso).put("exposure_us", expUs)
+            .put("frames", frames).put("settled", settled)
+    }
+
+    private fun meterAeStart(onStatus: (String) -> Unit): AeStart? {
+        onStatus("metering the start setting with phone AE…")
+        var iso = -1; var expUs = -1L; var prev = -1.0; var n = 0
+        while (n < 20) {
+            n++
+            val m = runCatching { raw.captureAe(1) }.getOrNull()
+                ?.let { raw.lastMeta.firstOrNull() } ?: continue
+            iso = m.appliedIso; expUs = m.appliedExpUs
+            val product = iso.toDouble() * expUs
+            val settled = prev > 0 && kotlin.math.abs(product / prev - 1.0) <= 0.05
+            prev = product
+            if (n >= 6 && settled) return AeStart(iso, expUs, n, true)
+        }
+        return if (iso > 0 && expUs > 0) AeStart(iso, expUs, n, false) else null
+    }
+
+    /** Cell of [g] nearest to a continuous (iso, exposure), each axis by log distance;
+     *  values beyond the lattice land on its edge. */
+    private fun nearestCell(g: Grid, iso: Int, expUs: Long): Int {
+        val i = iso.coerceAtLeast(1).toDouble(); val e = expUs.coerceAtLeast(1L).toDouble()
+        val gi = g.gains.indices.minByOrNull { kotlin.math.abs(kotlin.math.ln(i / g.gains[it])) } ?: 0
+        val sj = g.exposuresUs.indices.minByOrNull {
+            kotlin.math.abs(kotlin.math.ln(e / g.exposuresUs[it])) } ?: 0
+        return g.cell(gi, sj)
+    }
+
     /** One imu.csv row per sensor sample, tagged by `source`, carrying only that sensor's
      *  channels and its own ns timestamp. Merging channels into one row would attach a stale
      *  timestamp to whichever sensor did not fire, which offline orientation fusion can't undo. */
@@ -498,7 +541,8 @@ class MeasurementController(
             if (healthNow.currentUA == Int.MIN_VALUE) "" else healthNow.currentUA,
             healthNow.voltageMv, healthNow.batteryPct, healthNow.pluggedState,
             *stepClock.columns(StepClock.nowNs()).toTypedArray(),
-            *(v3Extra ?: List(V3_FRAME_HEADERS.size) { "" }).map { it ?: "" }.toTypedArray()
+            *(v3Extra ?: List(V3_FRAME_HEADERS.size) { "" }).map { it ?: "" }.toTypedArray(),
+            runLap
         ))
         stepClock.reset()
         if (writeDetsLine) writeDets(idx, method, chosenCell, dets)
