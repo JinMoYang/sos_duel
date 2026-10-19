@@ -4296,6 +4296,12 @@ class MeasurementController(
                 val clusters: List<V.Cluster>
                 if (n == 1) {
                     clusters = emptyList()
+                } else if (per[0].out.isEmpty() && per[1].out.isEmpty()) {
+                    // No car in either image: nothing to align, fuse or count (0:0). The
+                    // flow pyramids alone cost ~7 ms a frame, so they are skipped.
+                    clusters = emptyList()
+                    wl = intArrayOf(0, 0)
+                    movedTo = pol.afterCompare(plan.nb, 0, 0)
                 } else {
                     val tFlow0 = now()
                     val mp = tensor.batch.transforms[0]
