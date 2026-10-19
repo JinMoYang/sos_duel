@@ -64,9 +64,13 @@ class NaeTrainer(private val seed: Long = 42L) {
      * blob's JSON header (grid metadata) is carried over verbatim. [onEpoch] gets
      * (epoch, trainLoss, valLoss) per epoch; valLoss = NaN when valFraction <= 0
      * (then there is also no early stop - final weights are returned).
+     * [heldOut], when given, is the validation set instead of a random [valFraction] of
+     * [samples] (all of which are then trained on) — for splits by time or lap, where
+     * neighbouring samples are near-duplicates and a random split would flatter val loss.
      */
     fun train(samples: List<Sample>, valFraction: Double = 0.2, epochs: Int = 60,
               batchSize: Int = 32, lr: Double = 1e-3, initWeights: ByteArray? = null,
+              heldOut: List<Sample>? = null,
               onEpoch: (Int, Double, Double) -> Unit = { _, _, _ -> }): ByteArray {
         require(samples.isNotEmpty()) { "no samples" }
         require(epochs >= 1 && batchSize >= 1) { "bad epochs/batchSize" }
@@ -74,16 +78,27 @@ class NaeTrainer(private val seed: Long = 42L) {
         val p = if (initWeights != null) decode(initWeights) else initParams(rng)
         val header = if (initWeights != null) headerOf(initWeights) else DEFAULT_HEADER
 
-        val n = samples.size
-        val y = DoubleArray(n) { samples[it].targetLogU.coerceIn(-LN10, LN10) }
+        val all = if (heldOut != null) samples + heldOut else samples
+        val n = all.size
+        val y = DoubleArray(n) { all[it].targetLogU.coerceIn(-LN10, LN10) }
         // split: shuffled index order, first nVal held out (nae_train_app's
-        // order[:n_val], here over samples - the app trains from one merged pool)
+        // order[:n_val], here over samples - the app trains from one merged pool).
+        // The shuffle runs either way so a given seed draws the same stream after it.
         val order = IntArray(n) { it }
         shuffle(order, rng)
-        val nVal = if (valFraction <= 0.0) 0
+        val nVal: Int
+        val valIdx: IntArray
+        val trIdx: IntArray
+        if (heldOut != null) {
+            nVal = heldOut.size
+            trIdx = IntArray(samples.size) { it }
+            valIdx = IntArray(nVal) { samples.size + it }
+        } else {
+            nVal = if (valFraction <= 0.0) 0
                    else max(1, (valFraction * n).roundToInt()).coerceAtMost(n - 1)
-        val valIdx = order.copyOfRange(0, nVal)
-        val trIdx = order.copyOfRange(nVal, n)
+            valIdx = order.copyOfRange(0, nVal)
+            trIdx = order.copyOfRange(nVal, n)
+        }
 
         val m = Array(p.size) { DoubleArray(p[it].size) }   // Adam 1st/2nd moments
         val v = Array(p.size) { DoubleArray(p[it].size) }
@@ -97,7 +112,7 @@ class NaeTrainer(private val seed: Long = 42L) {
             var i0 = 0
             while (i0 < trIdx.size) {
                 val i1 = min(i0 + batchSize, trIdx.size)
-                val bh = Array(i1 - i0) { samples[trIdx[i0 + it]].hist }
+                val bh = Array(i1 - i0) { all[trIdx[i0 + it]].hist }
                 val by = DoubleArray(i1 - i0) { y[trIdx[i0 + it]] }
                 val (loss, g) = lossAndGrad(p, bh, by)
                 tot += loss * (i1 - i0)                     // pre-step loss, like torch
@@ -107,7 +122,7 @@ class NaeTrainer(private val seed: Long = 42L) {
             }
             val trainLoss = tot / trIdx.size
             val valLoss = if (nVal > 0) {
-                val vh = Array(nVal) { samples[valIdx[it]].hist }
+                val vh = Array(nVal) { all[valIdx[it]].hist }
                 val vy = DoubleArray(nVal) { y[valIdx[it]] }
                 loss(p, vh, vy)
             } else Double.NaN
