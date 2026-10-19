@@ -173,11 +173,12 @@ object NaeSnap {
     }
 
     /** Eq. 6 shutter-priority split of target exposure e, snapped to the grid ->
-     *  cell id. T_MAX = the grid's longest shutter (sim used 15 ms on its 5x5). */
-    fun splitAndSnap(e: Double, gains: IntArray, exposuresUs: IntArray): Int {
-        var tMaxUs = exposuresUs[0]
-        for (u in exposuresUs) if (u > tMaxUs) tMaxUs = u
-        val tMax = tMaxUs * 1e-6
+     *  cell id. T_MAX defaults to the grid's longest shutter; the sim used 15 ms on its
+     *  5x5 ([tMaxUs] = 15_000), which the Duel experiments use too. */
+    fun splitAndSnap(e: Double, gains: IntArray, exposuresUs: IntArray, tMaxUs: Int = -1): Int {
+        var longestUs = exposuresUs[0]
+        for (u in exposuresUs) if (u > longestUs) longestUs = u
+        val tMax = (if (tMaxUs > 0) tMaxUs else longestUs) * 1e-6
         val t = min(e, tMax)
         val k = max(1.0, e / tMax)
         var sh = 0; var bestSh = Double.MAX_VALUE

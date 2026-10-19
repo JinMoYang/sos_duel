@@ -1750,6 +1750,8 @@ class MeasurementActivity : AppCompatActivity() {
         return when (method) {
             "duel_trace" -> "proposed: Duel (trace)"
             "duel_every" -> "proposed: Duel (every)"
+            "fixed_1600_240" -> "reference: fixed 1600 · 1/240"
+            "nae" -> "baseline: Neural-AE"
             "prop_c" -> "baseline: Sense-well"
             "ae_phone" -> "baseline: AE-Phone"
             "physsweep" -> "baseline: PhysSweep"
@@ -1960,6 +1962,15 @@ class MeasurementActivity : AppCompatActivity() {
             start(cmd) { mc!!.runDuel(cmd == "duel_every", cap, ::post, ::showFrame) }
             return
         }
+        // The Duel experiments' fixed reference cell: ISO 1600 x 1/240 s on the v2 lattice.
+        if (cmd == "fixed_1600_240") {
+            val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
+            start(cmd) { mc!!.runFixedLattice(1600, 4167, cap, ::post, ::showFrame) }
+            return
+        }
+        // Sense-well is compared at P = 5 (spec); the period radio is screen state that an
+        // accidental tap can change (a stray P = 10 run exists), so a named launch sets it.
+        if (cmd == "prop_c") findViewById<android.widget.RadioButton>(R.id.period5).isChecked = true
         val rid = when (cmd) {
             "fixed" -> R.id.methodFixed
             "ae_phone" -> R.id.methodAePhone

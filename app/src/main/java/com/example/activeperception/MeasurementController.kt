@@ -137,6 +137,7 @@ class MeasurementController(
 
     private fun now() = System.nanoTime()
     private fun ms(t0: Long) = (now() - t0) / 1e6
+    private fun log2Of(x: Double) = kotlin.math.ln(x) / kotlin.math.ln(2.0)
 
     /** Elapsed between two captured marks, for spans that do not end at "now" — the
      *  capture round trip is bracketed mid-step, so [ms] cannot express it. */
@@ -586,6 +587,44 @@ class MeasurementController(
         endPass()
     }
 
+    /** One cell of the v2 lattice every frame, realized as every other lattice method
+     *  realizes it ([captureV2Cell]: analog up to the ceiling, the rest digital). The Duel
+     *  experiments' reference "fixed_1600_240": the cell sos_cf_v1 found best in hindsight
+     *  in all three lightings — a reference, not a method. */
+    fun runFixedLattice(isoNominal: Int, expUs: Int, maxFrames: Int,
+                        onStatus: (String) -> Unit,
+                        onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }) {
+        val name = "fixed_${isoNominal}_${Math.round(1e6 / expUs)}"
+        val phys = minOf(isoNominal, v2AnalogCeil())
+        startPass(name, isGtReference = false, methodParams = JSONObject()
+            .put("reference", "hindsight-best fixed cell of sos_cf_v1 (not a method)")
+            .put("iso", isoNominal).put("analog_iso", phys)
+            .put("digital", isoNominal.toDouble() / phys).put("exposure_us", expUs)
+            .put("space", "v2_lattice_5x5"))
+        withFastPipeline(onStatus) { pipe ->
+            var f = 0
+            while (running && f < maxFrames) {
+                val t0 = now()
+                stepClock.begin()
+                val r = pipe.captureV2Cell(isoNominal, expUs) ?: break
+                val tf = now()
+                val (tensor, dets) = r
+                stepClock.decided()
+                val totalMs = ms(t0)
+                val bmp = pipe.bitmap(tensor, 0)
+                val path = saveImage("${frameName(f)}_${isoExpTag(isoNominal, expUs)}", bmp)
+                logFrame(f, name, -1, isoNominal, expUs, 1, false, ms(tf),
+                    pipe.inferMs, totalMs, dets, path, applyBoost = false,
+                    captureMs = msBetween(t0, tf))
+                onFrame(bmp, pipe.previewDets(dets, tensor, 0), isoNominal, expUs)
+                onStatus("Fixed ISO$isoNominal 1/${Math.round(1e6 / expUs)} f=$f ndet=${dets.size} " +
+                    "${"%.0f".format(totalMs)}ms")
+                f++
+            }
+        }
+        endPass()
+    }
+
     // ---------- PhysSweep (Lens/ATI-style physical-sweep baseline, sense/baselines.py) ----------
 
     /** Lens-style physical sweep (Baek et al., ICLR 2025; `sense.baselines.PhysSweep`):
@@ -682,8 +721,11 @@ class MeasurementController(
      *  stop space, ONE physical capture per function evaluation — the captured frame is the
      *  frame's logged output, so search cost lands on the recording exactly as deployed.
      *  Modes: hold (never re-search) / restart_int (re-search when the hold cell's mean
-     *  intensity drifts > 0.15*255 from the hold start) / always. Start point: the Proposed
-     *  cold-start cell (the sim starts at its AE metering cell; recorded in the manifest). */
+     *  intensity drifts > 0.15*255 from the hold start) / always. Start point (lattice v2,
+     *  since 2026-10-20): phone AE's setting at run start, as continuous stops — the paper
+     *  starts at the camera's current exposure and gain. Until then it started at the
+     *  (max gain, shortest shutter) corner, a leftover of the old 3x3 grid's "Proposed
+     *  cold-start cell" that happened to be the best fixed cell. The device grid keeps it. */
     fun runShinNM(mode: String, maxFrames: Int, onStatus: (String) -> Unit,
                   v2: Boolean = false,
                   onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }) {
@@ -692,13 +734,25 @@ class MeasurementController(
         fun eff(iso: Int) = if (v2) iso else effIso(iso)
         // Stop-space search assumes power-of-2 spacing on both axes.
         val uMax = maxOf(g.nGain - 1, g.nShutter - 1).toDouble()
+        // Stops are lattice indices: u = (log2(ISO / lowest ISO), log2(shutter / shortest)).
+        val ae = if (v2) meterAeStart(onStatus) else null
+        val u0 = if (ae != null) doubleArrayOf(
+            log2Of(ae.iso / g.gains[0].toDouble()).coerceIn(0.0, uMax),
+            log2Of(ae.expUs / g.exposuresUs[0].toDouble()).coerceIn(0.0, uMax))
+        else if (v2) doubleArrayOf(2.0, 2.0)
+        else doubleArrayOf((g.nGain - 1).toDouble(), 0.0)
         startPass((if (v2) "shin_nm_v2_" else "shin_nm_") + mode,
             isGtReference = false, methodParams = JSONObject()
             .put("baseline", "shin_iros19_nelder_mead").put("mode", mode).put("u_max", uMax)
             .put("space", if (v2) "v2_lattice_5x5" else "device_grid")
             .put("session", if (v2) v2SessionTag else "device_grid")
             .put("gain_rungs", JSONArray((if (v2) v2GainRungs else grid.gains).toList()))
-            .put("start_rule", "proposed_cold_start_cell (sim: AE metering cell)"))
+            .put("start_rule", when {
+                ae != null -> "phone AE at run start, continuous stops (Shin IROS'19: current exposure/gain)"
+                v2 -> "AE gave nothing: centre of the lattice"
+                else -> "proposed_cold_start_cell (device grid)" })
+            .put("ae_start", ae?.json() ?: JSONObject.NULL)
+            .put("u0", JSONArray(u0.toList())))
         logger.csv("candidates", listOf("frame", "cell", "gain", "exposure_us",
             "metric", "chosen", "tie_break"))
         withFastPipeline(onStatus) { pipe ->
@@ -706,7 +760,6 @@ class MeasurementController(
             var holdU: DoubleArray? = null
             var holdI = -1.0
             var nRestart = 0
-            val u0 = doubleArrayOf((g.nGain - 1).toDouble(), 0.0)
             var f = 0
             while (running && f < maxFrames) {
                 val t0 = now()
@@ -782,25 +835,44 @@ class MeasurementController(
     /** Neural-AE closed loop, hist_scalar/ema variant: capture the current cell (that frame
      *  is the output), build the 59x256 multi-scale histogram, predict a bounded exposure
      *  change (Eq. 4), EMA in log-exposure (Eq. 5), snap by the shutter-priority split
-     *  (Eq. 6). [weights] is the nae-bin-v1 blob trained by `sense/nae_train_app.py` from
-     *  this app's own run recordings (sumconf-surface supervision). */
+     *  (Eq. 6). [weights] is a nae-bin-v1 blob (since 2026-10-20 trained on the sos_cf_v1
+     *  record, same-moment labels; see NaeTrainSosCfTest). On lattice v2 the run starts at
+     *  phone AE's exposure (ISO x shutter) and splits with T_MAX = 15 ms, both as in the
+     *  sim; before 2026-10-20 it started at the (max gain, shortest shutter) corner and
+     *  split at the grid's longest shutter. */
     fun runNeuralAe(weights: ByteArray, maxFrames: Int, onStatus: (String) -> Unit,
                     v2: Boolean = false,
                     onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }) {
         val net = NeuralAeNet(weights)
         val g = if (v2) v2SpaceCur else grid
         fun eff(iso: Int) = if (v2) iso else effIso(iso)
+        val tMaxUs = if (v2) 15_000 else -1
+        val ae = if (v2) meterAeStart(onStatus) else null
+        val weightsSha = java.security.MessageDigest.getInstance("SHA-256").digest(weights)
+            .joinToString("") { "%02x".format(it) }.take(16)
         startPass(if (v2) "nae_v2_hist_scalar_ema" else "nae_hist_scalar_ema",
             isGtReference = false, methodParams = JSONObject()
             .put("baseline", "neural_ae_cvpr21_style").put("variant", "hist_scalar")
-            .put("mode", "ema").put("weights_bytes", weights.size)
+            .put("mode", "ema").put("weights_bytes", weights.size).put("weights_sha256_16", weightsSha)
             .put("space", if (v2) "v2_lattice_5x5" else "device_grid")
             .put("session", if (v2) v2SessionTag else "device_grid")
             .put("gain_rungs", JSONArray((if (v2) v2GainRungs else grid.gains).toList()))
-            .put("start_rule", "proposed_cold_start_cell (sim: AE metering cell)"))
+            .put("t_max_us", if (tMaxUs > 0) tMaxUs else g.exposuresUs.maxOrNull())
+            .put("start_rule", when {
+                ae != null -> "phone AE at run start: log e = ln(ISO/100 x shutter s), split and snapped"
+                v2 -> "AE gave nothing: ISO 400, 1/60 s"
+                else -> "proposed_cold_start_cell (device grid)" })
+            .put("ae_start", ae?.json() ?: JSONObject.NULL))
         withFastPipeline(onStatus) { pipe ->
-            var cell = g.cell(g.nGain - 1, 0)
-            var logE = Math.log(NaeSnap.cellE(cell, g.gains, g.exposuresUs))
+            var logE: Double
+            var cell: Int
+            if (ae != null) {
+                logE = Math.log(ae.iso / 100.0 * ae.expUs * 1e-6)
+                cell = NaeSnap.splitAndSnap(Math.exp(logE), g.gains, g.exposuresUs, tMaxUs)
+            } else {
+                cell = if (v2) g.cell(2, 2) else g.cell(g.nGain - 1, 0)
+                logE = Math.log(NaeSnap.cellE(cell, g.gains, g.exposuresUs))
+            }
             var f = 0
             while (running && f < maxFrames) {
                 val t0 = now()
@@ -837,7 +909,7 @@ class MeasurementController(
                 onStatus("NAE f=$f cell=$cell logU=${"%.3f".format(logU)} ${"%.0f".format(totalMs)}ms")
                 val target = Math.log(NaeSnap.cellE(cell, g.gains, g.exposuresUs)) + logU
                 logE = NaeSnap.emaLogE(logE, target)
-                cell = NaeSnap.splitAndSnap(Math.exp(logE), g.gains, g.exposuresUs)
+                cell = NaeSnap.splitAndSnap(Math.exp(logE), g.gains, g.exposuresUs, tMaxUs)
                 f++
             }
         }
