@@ -4234,8 +4234,9 @@ class MeasurementController(
 
     /**
      * Duel (proposed v4; docs/SPEC_proposed_v4.md). Every frame: the base image at (base ISO,
-     * base shutter) and, when the plan says so, the same ISO one shutter rung away — both in
-     * ONE capture request, detected in one batch, aligned by sparse flow and fused. Shutter:
+     * base shutter) and, when the plan says so, the same ISO one shutter rung away — both
+     * synthesized from ONE burst of two frames at the shorter of the two shutters (the longer
+     * image is the burst sum), detected in one batch, aligned by sparse flow and fused. Shutter:
      * cars caught in only one of the two images are votes; the base moves one rung once the
      * neighbour is better with 95% confidence, then keeps comparing that way until the
      * neighbour loses. Gain: the highest ISO at which no car caught on the base would clip in
@@ -4277,7 +4278,11 @@ class MeasurementController(
                 .put("rule", if (ae != null) "phone AE, nearest cell per axis (log distance)"
                     else "AE gave nothing: ISO 400, 1/60 s"))
             .put("pipeline_depth", 1)
-            .put("capture_template", "preview for one shot, still for two (captureFast's rule)")
+            .put("capture_template", "preview for one frame, still for two (captureFast's rule)")
+            .put("synthesis", "shutter neighbour by burst sum (changed from the spec's two physical " +
+                "shots, 2026-10-20): a comparison frame takes 2 frames at the shorter shutter of the " +
+                "pair; the longer image = their sum (FIRST_N), the shorter = the first frame. ISO: one " +
+                "rule (70%) sets the image ISO; analog follows it up to the ceiling, digital fills the rest")
             .put("gain_clip_rule", "(site - black) x ISO_G / applied analog ISO of the base >= white - black, " +
                 "decoded sites (mean of 4 same-colour pixels)")
             .put("detector", "yolov8n tflite, conf >= 0.05 kept, vehicles for decisions")
@@ -4320,11 +4325,18 @@ class MeasurementController(
                 val phys = minOf(isoNom, analogCeil)
                 val ratio = isoNom.toDouble() / phys
                 val nbS = plan.nb?.let { sBase + it.step }
-                val shots = ArrayList<Pair<Int, Int>>()
-                shots += Duel.SHUTTERS_US[sBase] to phys
-                if (nbS != null) shots += Duel.SHUTTERS_US[nbS] to phys
+                // Burst-sum synthesis: a comparison frame takes TWO frames at the shorter
+                // shutter of the pair; the longer image is their sum, the shorter the first.
+                // laneN = leading frames summed per image: lane 0 = base, lane 1 = neighbour.
+                val laneN = when (plan.nb) {
+                    null -> intArrayOf(1)
+                    Duel.Dir.LONG -> intArrayOf(1, 2)
+                    Duel.Dir.SHORT -> intArrayOf(2, 1)
+                }
+                val frameS = if (plan.nb == Duel.Dir.SHORT) nbS!! else sBase
+                val shots = List(laneN.maxOrNull()!!) { Duel.SHUTTERS_US[frameS] to phys }
                 var planMs = ms(tPlan0)
-                // ---- 3. capture: one request, one or two shots.
+                // ---- 3. capture: one request, one or two frames at one setting.
                 val got = ArrayList<Pair<RawFrame, RawSensorCapturer.RawMeta>>()
                 val handle = raw.beginBracketSequence(shots,
                     if (shots.size == 1) android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW
@@ -4346,17 +4358,25 @@ class MeasurementController(
                 stepClock.captured(metas)
                 val tCap = now()
                 val captureMs = msBetween(t0, tCap)
-                val n = frames.size
+                val n = laneN.size
+                val frameUs = metas[0].appliedExpUs
+                // Equivalent exposure of each image, and how it was made.
+                val imgUs = LongArray(n) { frameUs * laneN[it] }
+                val gapped = metas[0].frameDurationNs > frameUs * 1_000L + 100_000L
+                fun madeBy(a: Int) = if (laneN[a] == 1) "frame"
+                    else "sum${laneN[a]}" + if (gapped) "_gapped" else "_gapfree"
 
-                // ---- 4. detect: one lane per shot, the same digital residual on each.
-                val tensor = src.formFramesTensor(frames, IntArray(n) { it }, DoubleArray(n) { ratio })
+                // ---- 4. detect: base and neighbour formed from the same frames (FIRST_N sums),
+                // the same digital residual on each, one batch.
+                val tensor = src.formExplicitBurstTensor(frames, laneN, DoubleArray(n) { ratio })
                 stepClock.formed()
                 val dets = tfl.detectTensorBatchOptimized(tensor.batch)
                 stepClock.detected()
                 val inferMs = tfl.lastRunMs + tfl.lastDecodeMs
                 val formMs = ms(tCap) - inferMs
-                val samplers = frames.mapIndexed { i, fr ->
-                    com.example.activeperception.acquire.RawBoxSampler(fr, metas[i].blackLevels, metas[i].white.toDouble())
+                val samplers = (0 until n).map { a ->
+                    com.example.activeperception.acquire.RawBoxSampler(frames[0], metas[0].blackLevels,
+                        metas[0].white.toDouble(), frames.subList(1, laneN[a]))
                 }
                 val per = (0 until n).map { a ->
                     V.perImage(dets[a].filter { it.confidence >= 0.05f }.map { d ->
@@ -4478,13 +4498,18 @@ class MeasurementController(
                         arr.put(JSONObject().put("xyxy", jsonBox(box)).put("conf", d.confidence.toDouble())
                             .put("class", d.classId).put("sat", samplers[a].satFrac(box, ratio)))
                     }
-                    val m = metas[a]
+                    val m = metas[0]
                     logger.jsonl("candidate_dets", JSONObject().put("frame", f).put("role", roles[a])
+                        .put("made_by", madeBy(a)).put("n_frames", laneN[a])
                         .put("iso", isoNom).put("analog_gain", m.appliedIso).put("analog_gain_req", m.requestedIso)
-                        .put("digital_gain", ratio).put("exposure_us", m.appliedExpUs)
-                        .put("exposure_us_req", m.requestedExpUs).put("sensor_ts", m.timestamp)
+                        .put("digital_gain", ratio).put("exposure_us", imgUs[a])
+                        .put("frame_exposure_us", m.appliedExpUs).put("frame_exposure_us_req", m.requestedExpUs)
+                        .put("sensor_ts", m.timestamp)
                         .put("dets", arr))
-                    logger.jsonl("noise_profile", JSONObject().put("frame", f).put("role", roles[a])
+                }
+                // One noise profile per captured frame (the HAL reports it per frame).
+                metas.forEachIndexed { i, m ->
+                    logger.jsonl("noise_profile", JSONObject().put("frame", f).put("capture", i)
                         .put("iso", isoNom).put("analog_gain", m.appliedIso).put("exposure_us", m.appliedExpUs)
                         .put("noise_profile", m.noiseProfile?.let { JSONArray(it.toList()) } ?: JSONObject.NULL))
                 }
@@ -4510,11 +4535,15 @@ class MeasurementController(
                             JSONObject().apply { for ((k, v) in dr) put(k.key, v) } } ?: JSONObject.NULL))
                     .put("base", JSONObject().put("g_req", isoNom).put("g_analog_req", phys)
                         .put("g_applied", metas[0].appliedIso).put("digital", ratio)
-                        .put("s_req", Duel.SHUTTERS_US[sBase]).put("s_applied", metas[0].appliedExpUs))
+                        .put("s_req", Duel.SHUTTERS_US[sBase]).put("s_applied", imgUs[0]))
                     .put("gain", usedGainNote)
+                    .put("frames", JSONObject().put("n", shots.size).put("exposure_us_req", Duel.SHUTTERS_US[frameS])
+                        .put("exposure_us_applied", JSONArray(metas.map { it.appliedExpUs }))
+                        .put("frame_duration_ns", metas[0].frameDurationNs).put("gapped", shots.size > 1 && gapped))
                     .put("images", JSONArray((0 until n).map { a ->
-                        JSONObject().put("role", roles[a]).put("exposure_us", metas[a].appliedExpUs)
-                            .put("iso", isoNom).put("analog", metas[a].appliedIso).put("digital", ratio) }))
+                        JSONObject().put("role", roles[a]).put("made_by", madeBy(a)).put("n_frames", laneN[a])
+                            .put("exposure_us", imgUs[a])
+                            .put("iso", isoNom).put("analog", metas[0].appliedIso).put("digital", ratio) }))
                     .put("discord", wl?.let { JSONObject().put("w_t", it[0]).put("l_t", it[1]) } ?: JSONObject.NULL)
                     .put("votes_after", JSONObject().put("short", votes(Duel.Dir.SHORT)).put("long", votes(Duel.Dir.LONG)))
                     .put("p_better", JSONObject().put("short", pol.pBetterNow(Duel.Dir.SHORT))
@@ -4536,7 +4565,7 @@ class MeasurementController(
                 val bmp = src.selectedTensorBitmap(tensor, 0)
                 val path = saveImage("${frameName(f)}_base", bmp)
                 if (n > 1 && saveImages) saveImage("${frameName(f)}_nb_${plan.nb!!.key}", src.selectedTensorBitmap(tensor, 1))
-                logFrame(f, mode, lattice.cell(gIdx, sBase), isoNom, Duel.SHUTTERS_US[sBase], n, n > 1,
+                logFrame(f, mode, lattice.cell(gIdx, sBase), isoNom, Duel.SHUTTERS_US[sBase], n, shots.size > 1,
                     formMs, inferMs, totalMs, outDets, path,
                     tieBreak = plan.reason, applyBoost = false, captureMs = captureMs,
                     v3Extra = listOf(phys, per[0].weak.maxOfOrNull { it.conf }?.let { "%.4f".format(it) } ?: "",

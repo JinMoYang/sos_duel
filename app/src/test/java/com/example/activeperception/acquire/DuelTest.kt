@@ -92,6 +92,20 @@ class DuelTest {
         assertEquals(1, pl.draws!!.size)
     }
 
+    @Test fun burstSumSamplerClipsOnTheSum() {
+        // Two frames of 8x6 sites at 40 DN (white 100, black 0): each alone is far from
+        // white; their sum (80 DN, Duel's longer image) clips once scaled by 1.333.
+        val w = 8; val h = 6
+        val f0 = RawFrame(IntArray(w * h) { 40 }, w, h, "RGGB", 100.0, 0)
+        val f1 = RawFrame(IntArray(w * h) { 40 }, w, h, "RGGB", 100.0, 0)
+        val one = RawBoxSampler(f0, IntArray(4), 100.0)
+        val sum = RawBoxSampler(f0, IntArray(4), 100.0, listOf(f1))
+        val all = b(0.0, 0.0, 4.0, 3.0)
+        assertEquals(0.0, one.satFrac(all, 1.333), 1e-12)
+        assertEquals(1.0, sum.satFrac(all, 1.333), 1e-12)
+        assertEquals(80.0, sum.stats(all, doubleArrayOf(1.0)).meanDn, 1e-9)
+    }
+
     @Test fun votesAccumulateAcrossFrames() {
         val p = Duel.Policy(every = true, baseG = 4, baseS = 2, seed = 1)
         assertNull(p.afterCompare(Duel.Dir.LONG, 2, 0))

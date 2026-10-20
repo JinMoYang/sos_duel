@@ -19,7 +19,10 @@ class RawBoxSampler(
     private val frame: RawFrame,
     /** Black level per CFA position (row * 2 + col), as in RawMeta.blackLevels. */
     black: IntArray,
-    whiteDn: Double
+    whiteDn: Double,
+    /** Further frames of the same burst summed site by site with [frame] — the statistics
+     *  of a burst-sum image (Duel's synthesized longer exposure). Empty: [frame] alone. */
+    private val sumWith: List<RawFrame> = emptyList()
 ) {
     private val qw = frame.width / 2
     private val qh = frame.height / 2
@@ -60,7 +63,9 @@ class RawBoxSampler(
             var sx = sx0
             while (sx <= sx1) {
                 for (dy in 0..1) for (dx in 0..1) {
-                    val v = frame.bayer[(2 * sy + dy) * bw + 2 * sx + dx].toDouble()
+                    val idx = (2 * sy + dy) * bw + 2 * sx + dx
+                    var v = frame.bayer[idx].toDouble()
+                    for (o in sumWith) v += o.bayer[idx]
                     sum += v; n++
                     val level = satLevel[dy * 2 + dx]
                     for (k in scales.indices) if (v * scales[k] >= level) sat[k]++
