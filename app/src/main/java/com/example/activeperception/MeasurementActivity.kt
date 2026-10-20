@@ -1869,8 +1869,8 @@ class MeasurementActivity : AppCompatActivity() {
         if (plan.isEmpty()) { post("lap plan is empty"); return }
         // Runs in a lap session end by laps, never by a frame cap left over from a step.
         presetRunCap = null
-        mc?.lightingLabel = preset?.lighting.orEmpty()
-        mc?.sessionLabel = if (preset?.lighting != null)
+        ExperimentSession.lighting = preset?.lighting.orEmpty()
+        ExperimentSession.session = if (preset?.lighting != null)
             "duel_main_${preset.lighting}_${System.currentTimeMillis()}" else ""
         // The x2 digital boost exists for the S25's ISO-400 analog ceiling and is folded
         // into every grid-formed image, phone AE included. The collection run sets its own
@@ -1882,7 +1882,7 @@ class MeasurementActivity : AppCompatActivity() {
         val session = LapSession(this, sensors, object : LapSession.Host {
             override fun startBlock(method: String) {
                 if (stepButton != null) showNow(methodTitle(method))
-                mc?.runLap = 0
+                ExperimentSession.runLap = 0
                 if (isCollect(method)) {
                     // Each collection block opens one base ISO further along than the
                     // last, so the lap cut short by the block switch is not always the
@@ -1900,15 +1900,15 @@ class MeasurementActivity : AppCompatActivity() {
             override fun buzz(ms: Long) = vibrate(ms)
             override fun beep(times: Int) = playLapBeeps(times)
             override fun lapStarted(method: String, lapsInBlock: Int) {
-                mc?.runLap = lapsInBlock
+                ExperimentSession.runLap = lapsInBlock
                 // One base ISO per lap: the collection run reads this before each frame.
                 if (isCollect(method))
                     mc?.collectBaseOverride = lapsInBlock + lapCollectBlockOrdinal
             }
             override fun sessionEnded(completed: Boolean) {
                 lapSession = null
-                mc?.runLap = -1
-                mc?.lightingLabel = ""; mc?.sessionLabel = ""
+                ExperimentSession.runLap = -1
+                ExperimentSession.lighting = ""; ExperimentSession.session = ""
                 clearLaunchOverrides()
                 // An aborted session can end while its last run is still winding down;
                 // the boost goes back only once no run can still be forming images.

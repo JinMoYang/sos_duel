@@ -183,14 +183,6 @@ class MeasurementController(
         // session that switches runs (blank outside a lap session: -1).
         listOf("run_lap")
 
-    /** Set by the lap session: 0 when a block's run starts, the block's completed laps at
-     *  every new lap, -1 again when the session ends. */
-    @Volatile var runLap: Int = -1
-
-    /** The lighting the operator pressed (bright / dim / dark) and the session it belongs
-     *  to, written into every run's manifest while set; empty outside such a session. */
-    @Volatile var lightingLabel: String = ""
-    @Volatile var sessionLabel: String = ""
 
     /** proposed_v3cause's per-frame summary (device spec 6.4); blank for every other method.
      *  capture_ms / formation_ms / infer_ms are the shared columns above. */
@@ -221,8 +213,8 @@ class MeasurementController(
         m.put("device_model", Build.MODEL)
         m.put("os_sdk", Build.VERSION.SDK_INT)
         if (methodParams != null) m.put("method_params", methodParams)
-        if (lightingLabel.isNotEmpty()) m.put("lighting", lightingLabel)
-        if (sessionLabel.isNotEmpty()) m.put("experiment_session", sessionLabel)
+        if (ExperimentSession.lighting.isNotEmpty()) m.put("lighting", ExperimentSession.lighting)
+        if (ExperimentSession.session.isNotEmpty()) m.put("experiment_session", ExperimentSession.session)
         m.put("grid", JSONObject().apply {
             put("gains", JSONArray(grid.gains.toTypedArray()))
             put("exposures_us", JSONArray(grid.exposuresUs.toTypedArray()))
@@ -552,7 +544,7 @@ class MeasurementController(
             healthNow.voltageMv, healthNow.batteryPct, healthNow.pluggedState,
             *stepClock.columns(StepClock.nowNs()).toTypedArray(),
             *(v3Extra ?: List(V3_FRAME_HEADERS.size) { "" }).map { it ?: "" }.toTypedArray(),
-            runLap
+            ExperimentSession.runLap
         ))
         stepClock.reset()
         if (writeDetsLine) writeDets(idx, method, chosenCell, dets)
@@ -4559,7 +4551,7 @@ class MeasurementController(
                     nbS?.let { Duel.SHUTTERS_US[it] } ?: "", metas[0].timestamp, metas.getOrNull(1)?.timestamp ?: "",
                     lastEnd, tOutputNs, "%.1f".format(captureMs), "%.1f".format(formMs),
                     "%.1f".format(flowMs), "%.1f".format(inferMs), "%.1f".format(fusionMs),
-                    metas[0].applyDelayFrames ?: "", runLap, if (nothing) 1 else 0, nothingRun,
+                    metas[0].applyDelayFrames ?: "", ExperimentSession.runLap, if (nothing) 1 else 0, nothingRun,
                     movedTo?.let { Duel.SHUTTERS_US[it] } ?: ""))
 
                 val bmp = src.selectedTensorBitmap(tensor, 0)
@@ -6410,4 +6402,19 @@ class MeasurementController(
     }
     private fun formCells(frames: List<RawFrame>, cells: IntArray): List<Bitmap> =
         parallelFormation.formAllCells(frames, cells)
+}
+
+/**
+ * Lap-session state that the activity sets and every run reads: the activity builds a new
+ * MeasurementController for each run, so it cannot live on the controller (it did until
+ * 2026-10-20, and a run's first lap was logged as -1 and the lighting was lost).
+ */
+object ExperimentSession {
+    /** 0 when a block's run starts, the block's completed laps at every new lap, -1
+     *  outside a lap session. */
+    @Volatile var runLap: Int = -1
+    /** The lighting the operator pressed (bright / dim / dark), and the session id; written
+     *  into every run's manifest while set. */
+    @Volatile var lighting: String = ""
+    @Volatile var session: String = ""
 }
