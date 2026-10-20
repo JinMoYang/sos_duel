@@ -1755,7 +1755,9 @@ class MeasurementActivity : AppCompatActivity() {
             val on = t == tab
             findViewById<View>(row).visibility = if (on) View.VISIBLE else View.GONE
             findViewById<Button>(t).apply {
-                alpha = if (on) 1f else 0.45f
+                // Explicit colours: the theme's button text is dark purple, unreadable on the
+                // panel's black once dimmed.
+                setTextColor(if (on) android.graphics.Color.WHITE else 0xFF9E9E9E.toInt())
                 paintFlags = if (on) paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
                     else paintFlags and android.graphics.Paint.UNDERLINE_TEXT_FLAG.inv()
             }

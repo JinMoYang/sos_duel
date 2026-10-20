@@ -19,7 +19,7 @@ spec: `docs/SPEC_proposed_v4.md`. 이름은 **Duel** (모드 `duel_trace` = L0, 
 
 - frame 시간: 1 장 83 ms (capture ~65, 형성 ~4, 추론 ~12), 2 장 133 ms (capture 75~100, 추론 22~34, flow 7~10). 차가 없는 2 장 frame 은 flow 를 건너뛰도록 고침(-7 ms).
 - 두 노출의 SENSOR_TIMESTAMP 차 = 16.75 ms - (노출2 - 노출1): 노출이 끝나는 시점이 한 frame 간격.
-- noise profile: 나옴. 그러나 ISO 99 에서 네 채널 모두 S = 1.94e-4, **O = 0** — read noise 항이 0 이라 측정값이 아닌 HAL 모델로 보임. 다른 ISO 는 아직. 쓸모 없으면 spec 6.1(B) photon transfer.
+- noise profile: 나옴. 그러나 O(read noise 항)가 늘 0 이고, S 는 ISO 99 에서 1.94e-4, 795 에서 3.40e-4 로 ISO 8 배에 1.75 배만 커짐 (신호 대비 shot noise 라면 ISO 에 비례해야 함). 측정값이 아니라 HAL 모델로 보여 gain 규칙 다음 판에 쓰기 어려움 -> spec 6.1(B) photon transfer 로 재야 함.
 - AE 시작: AE ISO 89~90, 1/120 -> 시작 칸 ISO 100, 1/120 (6 frame 만에 안정).
 - 차가 없을 때 L0 는 계속 1 장 (`nothing_run` 20 까지) — 4.6 의 멈춤 상황 그대로.
 - 아직 안 잰 것: gain 반영 지연(6.3), 1/15 에서의 2 frame 시간, 차가 있을 때의 판단 경로 전부, burst 합 판의 기기 동작.
