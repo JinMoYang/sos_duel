@@ -33,6 +33,12 @@ object HowToSense {
     const val CLIP = 0.98
     /** Typical car size before the map holds any detection, px. */
     const val FIRST_SIZE = 60.0
+    /** Pyramid levels of the speed flow (half-res picture). Measured 2026-10-26 on the Duel main
+     *  runs (consecutive 1600 / 1/240 base pictures ~130 ms apart, cells under the output cars)
+     *  against the gyro: in turns (yaw 0.9-1.6 rad/s, ~470-520 px/s of rotation) 3 levels read
+     *  ~260 px/s (they lose the content), 5 levels ~420-430 px/s. A purely periodic texture can
+     *  trap the coarse levels; real scenes did not. */
+    const val FLOW_LEVELS = 5
 
     /** Inverse sRGB of each 8-bit level. */
     private val LIN = DoubleArray(256) {
@@ -91,7 +97,7 @@ object HowToSense {
      * median of the measured cells (0 if none). Returns the speeds and how many were measured.
      */
     fun speed(prev: DoubleArray, gain: Double, cur: DoubleArray, dtSec: Double,
-              need: BooleanArray, pts: Int = 4): Pair<DoubleArray, Int> {
+              need: BooleanArray, pts: Int = 4, levels: Int = FLOW_LEVELS): Pair<DoubleArray, Int> {
         val hw = W / 2; val hh = H / 2
         fun half(p: DoubleArray, g: Double): FloatArray = FloatArray(hw * hh) { i ->
             val x = 2 * (i % hw); val y = 2 * (i / hw)
@@ -101,8 +107,8 @@ object HowToSense {
         val a = half(prev, gain); val b = half(cur, 1.0)
         val m = b.average().toFloat().coerceAtLeast(1e-6f)
         for (i in a.indices) { a[i] /= m; b[i] /= m }
-        val pa = SparseFlow.pyramid(SparseFlow.Img(hw, hh, a))
-        val pb = SparseFlow.pyramid(SparseFlow.Img(hw, hh, b))
+        val pa = SparseFlow.pyramid(SparseFlow.Img(hw, hh, a), levels)
+        val pb = SparseFlow.pyramid(SparseFlow.Img(hw, hh, b), levels)
         val v = DoubleArray(N) { Double.NaN }
         val hc = CS / 2
         var measured = 0

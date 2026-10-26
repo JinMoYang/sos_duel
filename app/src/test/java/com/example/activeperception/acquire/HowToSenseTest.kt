@@ -6,6 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.sin
 
 /** How-to-Sense: hand-checked cases, then the study's own frames (s137z) when they are bundled. */
@@ -82,18 +83,42 @@ class HowToSenseTest {
         assertEquals(base, unsure.next)
     }
 
+    /** A non-periodic scene of soft blobs: a purely periodic texture can trap the coarse pyramid
+     *  levels on the wrong period, which no real scene did (see [HowToSense.FLOW_LEVELS]). */
+    private val blobs = java.util.Random(3).let { r ->
+        List(140) { doubleArrayOf(r.nextDouble() * 760 - 60, r.nextDouble() * 480, 6 + r.nextDouble() * 10, r.nextDouble()) }
+    }
+    private fun blobScene(x: Double, y: Double): Double {
+        var s = 0.2
+        for (b in blobs) { val dx = x - b[0]; val dy = y - b[1]; s += 0.25 * b[3] * exp(-(dx * dx + dy * dy) / (2 * b[2] * b[2])) }
+        return s
+    }
+
     @Test fun speedFollowsAShiftWhateverTheExposure() {
-        fun scene(x: Int, y: Int) = 0.3 + 0.1 * sin(x / 5.0) * cos(y / 6.0) + 0.05 * sin((x + y) / 9.0)
+        fun scene(x: Int, y: Int) = blobScene(x.toDouble(), y.toDouble())
         val w = HowToSense.W
         // Content moves 6 px right in 0.1 s; the previous picture had half the exposure.
         val prev = DoubleArray(w * HowToSense.H) { 0.5 * scene(it % w, it / w) }
         val cur = DoubleArray(w * HowToSense.H) { scene(it % w - 6, it / w) }
         val (v, measured) = HowToSense.speed(prev, 2.0, cur, 0.1, BooleanArray(n) { true })
-        assertEquals(n, measured)
+        assertTrue(measured >= n - 5)                              // a few cells are flat between blobs
         assertEquals(60.0, HowToSense.median(v.toList()), 3.0)
         val (only, m1) = HowToSense.speed(prev, 2.0, cur, 0.1, BooleanArray(n) { it == 50 })
         assertEquals(1, m1)
         assertTrue(only[0].isNaN())
+    }
+
+    @Test fun speedFollowsATurnSizedShift() {
+        // A Limo turn: ~450 px/s, so ~60 px between base pictures 0.13 s apart.
+        fun scene(x: Double, y: Double) = blobScene(x, y)
+        val w = HowToSense.W
+        val prev = DoubleArray(w * HowToSense.H) { scene((it % w).toDouble(), (it / w).toDouble()) }
+        val cur = DoubleArray(w * HowToSense.H) { scene((it % w).toDouble() - 60, (it / w).toDouble()) }
+        // Only the cells away from the left edge, where the content entering the picture is new.
+        val need = BooleanArray(n) { it % HowToSense.GX >= 3 }
+        val (v, measured) = HowToSense.speed(prev, 1.0, cur, 0.13, need)
+        assertTrue(measured > need.count { it } / 2)
+        assertEquals(60 / 0.13, HowToSense.median(v.filter { !it.isNaN() }), 0.1 * 60 / 0.13)
     }
 
     /**
