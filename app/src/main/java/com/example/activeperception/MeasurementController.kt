@@ -4282,8 +4282,12 @@ class MeasurementController(
             .put("two_trace", "recorded in dets.jsonl two_trace, not in the output")
             .put("out_conf", V.OUT_THR).put("weak_conf", V.WEAK_LO)
             .put("seen_iou", Duel.SEEN_IOU).put("cluster_iou", 0.5)
-            .put("flow", "pyramidal LK on half-res luma (each lane divided by its mean), <= 8 corners " +
-                "per box, per-axis median displacement, detector-input px; no points -> no shift")
+            .put("flow", "pyramidal LK on half-res luma (each lane divided by its mean), <= 4 corners " +
+                "per box, per-axis median displacement, detector-input px; no points -> no shift. " +
+                "Tracked: neighbour car boxes, weak boxes with IoU >= 0.1 to any car box, base boxes " +
+                "asked for by fusion/discord; other weak and map boxes take the matching car's shift " +
+                "(IoU >= 0.5) or the median car shift (flow_log tracked=false)")
+            .put("sat_sites", Duel.SAT_SITES)
             .put("thompson_seed", seed)
             .put("start", JSONObject().put("ae", ae?.json() ?: JSONObject.NULL)
                 .put("iso", Duel.ISOS[startG]).put("shutter_us", Duel.SHUTTERS_US[startS])
@@ -4426,7 +4430,8 @@ class MeasurementController(
                     fun shiftOf(box: DoubleArray, from: List<SparseFlow.Img>, to: List<SparseFlow.Img>): DoubleArray {
                         val gx0 = (box[0] * mp.scale + mp.padX) / 2; val gy0 = (box[1] * mp.scale + mp.padY) / 2
                         val gx1 = (box[2] * mp.scale + mp.padX) / 2; val gy1 = (box[3] * mp.scale + mp.padY) / 2
-                        val pts = SparseFlow.corners(from[0], gx0, gy0, gx1, gy1)
+                        // 4 points a box (was 8): the median of 4 holds, at half the tracking.
+                        val pts = SparseFlow.corners(from[0], gx0, gy0, gx1, gy1, 4)
                         if (pts.isEmpty()) return doubleArrayOf(0.0, 0.0, 0.0)
                         // track(prev, cur): where cur's points sit in prev, as prev - cur.
                         val tr = SparseFlow.track(to, from, pts).filterNotNull()
@@ -4436,31 +4441,52 @@ class MeasurementController(
                     }
                     fun moved(b: DoubleArray, s: DoubleArray) =
                         doubleArrayOf(b[0] + s[0], b[1] + s[1], b[2] + s[0], b[3] + s[1])
-                    // Neighbour boxes to the base's time (each by the flow inside it).
+                    // Neighbour boxes to the base's time, each by the flow inside it. Only the cars
+                    // (out) and the weak boxes near a car are tracked; every other weak box never
+                    // meets a cluster, so it takes the cars' median shift instead of its own.
                     val shiftNb = java.util.IdentityHashMap<V.D, DoubleArray>()
-                    for (d in per[1].low + per[1].out) shiftNb.getOrPut(d) {
-                        shiftOf(d.box, grayN, grayB).also { s ->
-                            flowLog.put(JSONObject().put("nb_box", jsonBox(d.box))
-                                .put("dx", s[0]).put("dy", s[1]).put("n_pts", s[2].toInt()))
+                    fun logShift(d: V.D, sh: DoubleArray, tracked: Boolean) {
+                        flowLog.put(JSONObject().put("nb_box", jsonBox(d.box)).put("dx", sh[0])
+                            .put("dy", sh[1]).put("n_pts", sh[2].toInt()).put("tracked", tracked))
+                    }
+                    for (d in per[1].out) shiftNb[d] = shiftOf(d.box, grayN, grayB).also { logShift(d, it, true) }
+                    val trackedShifts = shiftNb.values.filter { it[2] > 0 }
+                    val medianShift = if (trackedShifts.isEmpty()) doubleArrayOf(0.0, 0.0, 0.0)
+                        else doubleArrayOf(median(trackedShifts.map { it[0] }), median(trackedShifts.map { it[1] }), 0.0)
+                    val carBoxes = per[0].out.map { it.box } + per[1].out.map { it.box }
+                    for (d in per[1].low) {
+                        if (shiftNb.containsKey(d)) continue
+                        val same = per[1].out.firstOrNull { it.box.contentEquals(d.box) }
+                        shiftNb[d] = when {
+                            same != null -> shiftNb[same]!!
+                            carBoxes.any { V.iou(it, d.box) >= 0.1 } -> shiftOf(d.box, grayN, grayB).also { logShift(d, it, true) }
+                            else -> medianShift.also { logShift(d, it, false) }
                         }
                     }
                     fun toBase(d: V.D) = V.D(d.conf, moved(d.box, shiftNb[d]!!), d.cls)
                     val nbOutB = per[1].out.map(::toBase)
                     val nbLowB = per[1].low.map(::toBase)
-                    // Base-time boxes to the neighbour's time; fusion and discord ask for the
-                    // same boxes, so each is tracked once.
+                    // Base-time boxes to the neighbour's time; fusion and discord ask for the same
+                    // boxes, so each is tracked once. A box that came from the neighbour goes back
+                    // by its own shift, untracked.
+                    per[1].out.forEachIndexed { i, d ->
+                        val sh = shiftNb[d]!!; shiftB[nbOutB[i].box] = doubleArrayOf(-sh[0], -sh[1], sh[2])
+                    }
                     fun toNb(b: DoubleArray) = moved(b, shiftB.getOrPut(b) { shiftOf(b, grayB, grayN) })
                     nbWeakB = per[1].weak.map(::toBase)
                     nbAligned = true
+                    // Map boxes are the neighbour's raw detections: the shift of the car box each
+                    // belongs to, else the median.
                     nbMapB = dets[1].filter { it.classId in V.VEH && it.confidence >= V.OUT_THR }.map { d ->
                         val b = DoubleArray(4) { d.xyxy[it].toDouble() }
-                        moved(b, shiftOf(b, grayN, grayB))
+                        val own = per[1].out.maxByOrNull { V.iou(it.box, b) }?.takeIf { V.iou(it.box, b) >= 0.5 }
+                        moved(b, own?.let { shiftNb[it] } ?: medianShift)
                     }
                     flowMs = ms(tFlow0)
                     val tFuse0 = now()
                     clusters = V.fuse(listOf(
-                        V.FuseImage(per[0].out, per[0].low) { box -> samplers[0].satFrac(box, ratio) },
-                        V.FuseImage(nbOutB, nbLowB) { box -> samplers[1].satFrac(toNb(box), ratio) }))
+                        V.FuseImage(per[0].out, per[0].low) { box -> samplers[0].satFrac(box, ratio, Duel.SAT_SITES) },
+                        V.FuseImage(nbOutB, nbLowB) { box -> samplers[1].satFrac(toNb(box), ratio, Duel.SAT_SITES) }))
                     fusionMs = ms(tFuse0)
                     val tLearn0 = now()
                     wl = Duel.discord(clusters.filter { it.status == "kept" }.map { it.box },
@@ -4517,7 +4543,7 @@ class MeasurementController(
                     val (speed, nMeasured, nTried) = HowToSense.speedForMap(pp, expo / prevExpo, pic, (ts - prevTs) / 1e9, wgt)
                     val speedMs = ms(tFlow0)
                     val tStats0 = now()
-                    val st = HowToSense.stats(pic, curCell)
+                    val st = HowToSense.stats(pic, curCell, BooleanArray(HowToSense.N) { wgt[it] > 0.0 })
                     val statsMs = ms(tStats0)
                     val ch = HowToSense.choose(curve, st, speed, wgt, map.sizes(), curCell)
                     choiceNote.put("ms_parts", JSONObject().put("picture", picMs).put("speed", speedMs).put("stats", statsMs))
@@ -4555,7 +4581,7 @@ class MeasurementController(
                         if (d.confidence < 0.05f) continue
                         val box = DoubleArray(4) { d.xyxy[it].toDouble() }
                         arr.put(JSONObject().put("xyxy", jsonBox(box)).put("conf", d.confidence.toDouble())
-                            .put("class", d.classId).put("sat", samplers[a].satFrac(box, ratio)))
+                            .put("class", d.classId).put("sat", samplers[a].satFrac(box, ratio, Duel.SAT_SITES)))
                     }
                     val m = metas[0]
                     logger.jsonl("candidate_dets", JSONObject().put("frame", f).put("role", roles[a])

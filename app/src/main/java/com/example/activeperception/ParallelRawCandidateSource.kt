@@ -417,7 +417,9 @@ class ParallelRawCandidateSource(
         for ((burstN, laneIdx) in byBurst) {
             val gains = DoubleArray(laneIdx.size) { gainRatios[laneIdx[it]] }
             val bases = IntArray(laneIdx.size) { laneIdx[it] * floatsPerFrame }
-            val stripes = if (byBurst.size == 1) 4 else 1
+            // Four stripes in all: lanes of different burst counts (Duel's single frame and
+            // sum) used to run one stripe each, making a two-lane formation ~3.5x slower.
+            val stripes = maxOf(1, 4 / byBurst.size)
             repeat(stripes) { stripe ->
                 val y0 = stripe * nh / stripes; val y1 = (stripe + 1) * nh / stripes
                 futures += pool.submit<Double> {

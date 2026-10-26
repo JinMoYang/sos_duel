@@ -21,6 +21,10 @@ object Duel {
     val SHUTTERS_US = intArrayOf(4167, 8333, 16667, 33333, 66667)
     /** IoU at which a car counts as caught in an image (spec 4.3). */
     const val SEEN_IOU = 0.3
+    /** RAW sites read per box for a clipped fraction (fusion weights, records): enough for
+     *  a fraction (standard error under 1%); reading up to 40,000 per box per image made the
+     *  fusion ~15 ms a frame on the phone. */
+    const val SAT_SITES = 4_096
 
     enum class Dir(val step: Int, val key: String) { SHORT(-1, "short"), LONG(+1, "long") }
 

@@ -78,6 +78,6 @@ class RawBoxSampler(
             DoubleArray(scales.size) { if (n > 0) sat[it].toDouble() / n else 0.0 })
     }
 
-    fun satFrac(box: DoubleArray, scale: Double = 1.0): Double =
-        stats(box, doubleArrayOf(scale)).satFrac[0]
+    fun satFrac(box: DoubleArray, scale: Double = 1.0, maxSites: Int = 40_000): Double =
+        stats(box, doubleArrayOf(scale), maxSites).satFrac[0]
 }

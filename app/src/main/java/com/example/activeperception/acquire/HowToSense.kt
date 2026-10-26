@@ -64,22 +64,36 @@ object HowToSense {
      *  L r >= [CLIP], where r = the lattice cell's exposure over the base's. */
     class Stats(val bright: Array<DoubleArray>, val clip: Array<DoubleArray>)
 
-    fun stats(pic: DoubleArray, base: Int): Stats {
+    /** [cells] limits the work to those grid cells (the others stay 0): [choose] reads only
+     *  the cells the map weights, so passing them changes nothing but the time. */
+    fun stats(pic: DoubleArray, base: Int, cells: BooleanArray? = null): Stats {
         val byRatio = HashMap<Double, Array<DoubleArray>>()
-        val per = Array(25) { c -> byRatio.getOrPut(exposure(c) / exposure(base)) { gridOf(pic, exposure(c) / exposure(base)) } }
+        val per = Array(25) { c -> byRatio.getOrPut(exposure(c) / exposure(base)) { gridOf(pic, exposure(c) / exposure(base), cells) } }
         return Stats(Array(25) { per[it][0] }, Array(25) { per[it][1] })
     }
 
-    private fun gridOf(pic: DoubleArray, r: Double): Array<DoubleArray> {
+    private fun gridOf(pic: DoubleArray, r: Double, cells: BooleanArray?): Array<DoubleArray> {
         val b = DoubleArray(N)
         val s = DoubleArray(N)
-        for (y in 0 until H) {
-            val row = (y / CS) * GX
-            for (x in 0 until W) {
-                val v = pic[y * W + x] * r
-                val k = row + x / CS
-                b[k] += min(v, 1.0)
-                if (v >= CLIP) s[k] += 1.0
+        if (cells == null) {
+            for (y in 0 until H) {
+                val row = (y / CS) * GX
+                for (x in 0 until W) {
+                    val v = pic[y * W + x] * r
+                    val k = row + x / CS
+                    b[k] += min(v, 1.0)
+                    if (v >= CLIP) s[k] += 1.0
+                }
+            }
+        } else {
+            for (k in 0 until N) {
+                if (!cells[k]) continue
+                val x0 = (k % GX) * CS; val y0 = (k / GX) * CS
+                for (y in y0 until y0 + CS) for (x in x0 until x0 + CS) {
+                    val v = pic[y * W + x] * r
+                    b[k] += min(v, 1.0)
+                    if (v >= CLIP) s[k] += 1.0
+                }
             }
         }
         val n = (CS * CS).toDouble()
