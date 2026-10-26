@@ -320,6 +320,14 @@
                     android:text="Check"
                     android:textAllCaps="false"
                     android:textSize="17sp" />
+                <Button android:id="@+id/expTabRecord"
+                    style="?android:attr/borderlessButtonStyle"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:text="Record"
+                    android:textAllCaps="false"
+                    android:textSize="17sp" />
                 <Button android:id="@+id/expTabOld"
                     style="?android:attr/borderlessButtonStyle"
                     android:layout_width="0dp"
@@ -383,6 +391,39 @@
                     android:text="read noise"
                     android:textAllCaps="false"
                     android:textSize="20sp" />
+            </LinearLayout>
+
+            <!-- Record: the counterfactual record (collect_cf, 225 moments) per lighting. -->
+            <LinearLayout android:id="@+id/expRowRecord"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:baselineAligned="false"
+                android:orientation="horizontal"
+                android:visibility="gone">
+                <Button android:id="@+id/expRecordBright"
+                    android:layout_width="0dp"
+                    android:layout_height="88dp"
+                    android:layout_weight="1"
+                    android:text="bright"
+                    android:textAllCaps="false"
+                    android:textSize="22sp" />
+                <Button android:id="@+id/expRecordDim"
+                    android:layout_width="0dp"
+                    android:layout_height="88dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:text="dim"
+                    android:textAllCaps="false"
+                    android:textSize="22sp" />
+                <Button android:id="@+id/expRecordDark"
+                    android:layout_width="0dp"
+                    android:layout_height="88dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:text="dark"
+                    android:textAllCaps="false"
+                    android:textSize="22sp" />
             </LinearLayout>
 
             <LinearLayout android:id="@+id/expRowOld"

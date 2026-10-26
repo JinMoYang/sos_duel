@@ -1685,6 +1685,7 @@ class MeasurementActivity : AppCompatActivity() {
         launchLapFallbackS = null; launchLapStartDelayS = null; launchCollectFrames = null
         launchSaveImages = null; launchFocusDiopters = null
         presetRunCap = null; presetSaveImages = null; presetRunActive = false
+        ExperimentSession.lighting = ""; ExperimentSession.session = ""
     }
 
     /** One choice of the experiment selector above the Lap session button: either a lap
@@ -1742,6 +1743,11 @@ class MeasurementActivity : AppCompatActivity() {
         // lead-in lap: the record needs no lap boundaries, and the track position is in
         // every moment's yaw.
         R.id.expCollect to LapPreset("counterfactual record, Limo", run = "collect_cf", cap = 225, delayS = 5),
+        // Record tab: the same counterfactual record (225 moments, ~15 laps, ~4 min) with the
+        // pressed lighting in every manifest, as Main does.
+        R.id.expRecordBright to LapPreset("record, bright", run = "collect_cf", cap = 225, delayS = 5, lighting = "bright"),
+        R.id.expRecordDim to LapPreset("record, dim", run = "collect_cf", cap = 225, delayS = 5, lighting = "dim"),
+        R.id.expRecordDark to LapPreset("record, dark", run = "collect_cf", cap = 225, delayS = 5, lighting = "dark"),
         // Phone AE alone for ~40-50 s (300 frames, some 3-4 laps), made 2026-10-16 to measure
         // what AE chooses in a lighting the counterfactual record has but no AE run had.
         R.id.expAeCollect to LapPreset("phone AE alone, Limo", run = "ae_phone", cap = 300, delayS = 5)
@@ -1749,7 +1755,8 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** auto_collect's tabs and the button row each shows. */
     private val EXP_TABS = listOf(R.id.expTabMain to R.id.expRowMain,
-        R.id.expTabCheck to R.id.expRowCheck, R.id.expTabOld to R.id.expRowOld)
+        R.id.expTabCheck to R.id.expRowCheck, R.id.expTabRecord to R.id.expRowRecord,
+        R.id.expTabOld to R.id.expRowOld)
 
     private fun showExpTab(tab: Int) {
         for ((t, row) in EXP_TABS) {
@@ -1846,6 +1853,7 @@ class MeasurementActivity : AppCompatActivity() {
             // Pressed again during the countdown: nothing has started, so just cancel.
             countdownHandler.removeCallbacks(it); countdownTick = null
             presetRunActive = false; presetRunCap = null
+            ExperimentSession.lighting = ""; ExperimentSession.session = ""
             restoreStepButton(false); showNow("stopped")
             return
         }
@@ -1862,12 +1870,25 @@ class MeasurementActivity : AppCompatActivity() {
         if (preset?.run != null) {
             presetRunCap = preset.cap
             presetRunActive = true
+            // A labelled step (the Record tab) writes its lighting into the run's manifest too.
+            ExperimentSession.lighting = preset.lighting.orEmpty()
+            ExperimentSession.session = if (preset.lighting != null)
+                "${preset.run}_${preset.lighting}_${System.currentTimeMillis()}" else ""
             stepButton?.text = "■ stop"
             startAfterCountdown(preset.delayS, preset.run)
             return
         }
         val plan = LapSession.parsePlan(launchLapPlan ?: preset?.plan ?: LapSession.DEFAULT_PLAN)
         if (plan.isEmpty()) { post("lap plan is empty"); return }
+        // Duel2 cannot start without its tolerance curve; refuse the whole session up front
+        // rather than let its blocks silently not start while the laps are counted.
+        if (plan.any { it.method.startsWith("duel2") } && runCatching {
+                HowToSense.Curve.parse(assets.open("tolerance_curve.txt").bufferedReader().use { it.readText() })
+            }.isFailure) {
+            restoreStepButton(false); showNow("no tolerance curve")
+            post("Duel2 needs assets/tolerance_curve.txt — session not started")
+            return
+        }
         // Runs in a lap session end by laps, never by a frame cap left over from a step.
         presetRunCap = null
         ExperimentSession.lighting = preset?.lighting.orEmpty()
