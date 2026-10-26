@@ -108,6 +108,26 @@ class HowToSenseTest {
         assertTrue(only[0].isNaN())
     }
 
+    @Test fun flowCellsSampleTheEmptyMapAndCapTheFullOne() {
+        val empty = HowToSense.flowCells(DoubleArray(n) { 1.0 / n })
+        assertEquals(16, empty.count { it })
+        val w = DoubleArray(n) { if (it < 100) (it + 1).toDouble() else 0.0 }
+        val top = HowToSense.flowCells(w)
+        assertEquals(HowToSense.MAX_FLOW_CELLS, top.count { it })
+        assertTrue(top[99] && !top[0] && !top[150])             // the heaviest cells, none unweighted
+    }
+
+    @Test fun speedForMapFillsTheUntrackedWeightedCells() {
+        val w = HowToSense.W
+        val prev = DoubleArray(w * HowToSense.H) { blobScene((it % w).toDouble(), (it / w).toDouble()) }
+        val cur = DoubleArray(w * HowToSense.H) { blobScene((it % w).toDouble() - 6, (it / w).toDouble()) }
+        val wt = DoubleArray(n) { 1.0 / n }
+        val (v, _, tried) = HowToSense.speedForMap(prev, 1.0, cur, 0.1, wt)
+        assertEquals(16, tried)
+        assertTrue(v.none { it.isNaN() })                        // every weighted cell has a speed
+        assertEquals(60.0, HowToSense.median(v.toList()), 3.0)
+    }
+
     @Test fun speedFollowsATurnSizedShift() {
         // A Limo turn: ~450 px/s, so ~60 px between base pictures 0.13 s apart.
         fun scene(x: Double, y: Double) = blobScene(x, y)

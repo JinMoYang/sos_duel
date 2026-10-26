@@ -126,6 +126,36 @@ object HowToSense {
         return v to measured
     }
 
+    /** Most grid cells the speed flow tracks per frame. The flow is the choice's cost (measured
+     *  2026-10-26 on the phone: ~540 ms a frame with all 192 cells); the map only grows during a
+     *  run, so without a cap it would come back to nearly every cell. */
+    const val MAX_FLOW_CELLS = 32
+
+    /** The cells whose speed is tracked: while the map is empty (uniform weights) an even 4 x 4
+     *  sample of the grid; otherwise the [max] heaviest cells of the map. */
+    fun flowCells(w: DoubleArray, max: Int = MAX_FLOW_CELLS): BooleanArray {
+        val out = BooleanArray(N)
+        if (w.all { it == w[0] }) {
+            for (gy in 1 until GY step 3) for (gx in 2 until GX step 4) out[gy * GX + gx] = true
+            return out
+        }
+        (0 until N).filter { w[it] > 0.0 }.sortedByDescending { w[it] }.take(max).forEach { out[it] = true }
+        return out
+    }
+
+    /** Speed for every cell the map weights: tracked on [flowCells], every other weighted cell
+     *  takes the median of the tracked ones (0 if none). Returns the speeds (NaN where the weight
+     *  is 0), how many cells were tracked successfully, and how many were tried. */
+    fun speedForMap(prev: DoubleArray, gain: Double, cur: DoubleArray, dtSec: Double,
+                    w: DoubleArray): Triple<DoubleArray, Int, Int> {
+        val sel = flowCells(w)
+        val (v, measured) = speed(prev, gain, cur, dtSec, sel)
+        val got = (0 until N).filter { sel[it] && !v[it].isNaN() }.map { v[it] }
+        val fill = if (got.isNotEmpty()) median(got) else 0.0
+        for (k in 0 until N) if (w[k] > 0.0 && v[k].isNaN()) v[k] = fill
+        return Triple(v, measured, sel.count { it })
+    }
+
     /** Where cars were detected so far: per grid cell the covered area (in cell units) of every
      *  detection added, and the long sides of the boxes that touch it. */
     class ObjectMap {

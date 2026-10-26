@@ -4500,7 +4500,9 @@ class MeasurementController(
                 for (d in dets[0]) if (d.classId in V.VEH && d.confidence >= V.OUT_THR)
                     map.add(toPic(DoubleArray(4) { d.xyxy[it].toDouble() }))
                 for (b in nbMapB) map.add(toPic(b))
+                val tPic0 = now()
                 val pic = HowToSense.picture(tensorArgbRows(tensor, 0, top))
+                val picMs = ms(tPic0)
                 val curCell = HowToSense.cell(gIdx, sBase)
                 val expo = HowToSense.exposure(curCell)
                 val ts = metas[0].timestamp
@@ -4511,9 +4513,15 @@ class MeasurementController(
                     choiceNote.put("rule", "no previous base: keep")
                 } else {
                     val wgt = map.weights()
-                    val (speed, nMeasured) = HowToSense.speed(pp, expo / prevExpo, pic, (ts - prevTs) / 1e9,
-                        BooleanArray(HowToSense.N) { wgt[it] > 0.0 })
-                    val ch = HowToSense.choose(curve, HowToSense.stats(pic, curCell), speed, wgt, map.sizes(), curCell)
+                    val tFlow0 = now()
+                    val (speed, nMeasured, nTried) = HowToSense.speedForMap(pp, expo / prevExpo, pic, (ts - prevTs) / 1e9, wgt)
+                    val speedMs = ms(tFlow0)
+                    val tStats0 = now()
+                    val st = HowToSense.stats(pic, curCell)
+                    val statsMs = ms(tStats0)
+                    val ch = HowToSense.choose(curve, st, speed, wgt, map.sizes(), curCell)
+                    choiceNote.put("ms_parts", JSONObject().put("picture", picMs).put("speed", speedMs).put("stats", statsMs))
+                        .put("flow_cells_tried", nTried)
                     moved = ch.next != curCell
                     pol.baseG = ch.next / 5
                     pol.baseS = ch.next % 5
