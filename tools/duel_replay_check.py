@@ -6,17 +6,17 @@ records and compare with what the app logged.
 Reads manifest.json, decisions.jsonl, candidate_dets.jsonl and dets.jsonl. Recomputed per
 frame: the plan (reason, neighbour direction; Thompson picks from the logged draws), the base
 setting, the per-image outputs and weak traces, discord (fused boxes moved by the logged
-to_nb shifts), the votes, the move and line search, and the next ISO (from the logged
-clip_by_G, which is RAW arithmetic the JPEGs cannot redo). Fusion itself is not redone:
-the kept boxes are taken from dets.jsonl. No dependencies beyond the standard library.
+to_nb shifts), the votes, and the next base from the logged How-to-Sense E values and
+threshold (E itself needs the base picture before JPEG, so the JVM test checks it against
+the study instead). Fusion itself is not redone: the kept boxes are taken from dets.jsonl.
+No dependencies beyond the standard library.
 """
 import json
-import math
 import sys
 from collections import Counter, defaultdict
 
 VEH = {1, 2, 3, 5, 7}
-OUT_THR, WEAK_LO, TAU, CONF_MOVE, SEEN_IOU = 0.25, 0.05, 0.7, 0.95, 0.3
+OUT_THR, WEAK_LO, SEEN_IOU = 0.25, 0.05, 0.3
 ISOS = [100, 200, 400, 800, 1600]
 SHUTTERS = [4167, 8333, 16667, 33333, 66667]
 DIRS = {"short": -1, "long": +1}
@@ -46,11 +46,6 @@ def per_image(raw):
     return out, low, weak
 
 
-def p_better(w, l):
-    n = w + l + 1
-    return sum(math.comb(n, k) for k in range(w + 1)) / 2 ** n
-
-
 def load_jsonl(path):
     with open(path, encoding="utf-8") as fh:
         return [json.loads(line) for line in fh if line.strip()]
@@ -59,7 +54,7 @@ def load_jsonl(path):
 def check(run):
     man = json.load(open(f"{run}/manifest.json", encoding="utf-8"))
     mp = man.get("method_params", {})
-    every = mp.get("mode") == "duel_every"
+    every = mp.get("mode") == "duel2_every"
     g = ISOS.index(mp["start"]["iso"])
     s = SHUTTERS.index(mp["start"]["shutter_us"])
     dec = sorted(load_jsonl(f"{run}/decisions.jsonl"), key=lambda r: r["frame"])
@@ -70,7 +65,7 @@ def check(run):
 
     w = {"short": 0, "long": 0}
     l = {"short": 0, "long": 0}
-    line, prev_trace = None, False
+    prev_trace = False
     bad = Counter()
     examples = defaultdict(list)
 
@@ -85,9 +80,7 @@ def check(run):
         # ---- plan
         dirs = [d for d, st in DIRS.items() if 0 <= s + st < len(SHUTTERS)]
         draws = r["plan"]["thompson_draws"]
-        if line in dirs:
-            want = ("line", line)
-        elif every or prev_trace:
+        if every or prev_trace:
             reason = "always" if every else "trace"
             pick = max(dirs, key=lambda d: draws[d]) if draws else None
             if draws is None or sorted(draws) != sorted(dirs):
@@ -109,7 +102,7 @@ def check(run):
             mismatch("trace", f, r["trace"], trace)
         if len(b_out) != r["n_cars"]:
             mismatch("n_cars", f, r["n_cars"], len(b_out))
-        # ---- discord, votes, move, line
+        # ---- discord, votes
         if nb is not None:
             n_out, _, _ = per_image(cand[f].get("neighbor", []))
             wt = lt = 0
@@ -126,37 +119,21 @@ def check(run):
                 mismatch("discord", f, logged, (wt, lt))
             w[nb] += wt
             l[nb] += lt
-            moved = None
-            if p_better(w[nb], l[nb]) >= CONF_MOVE:
-                s += DIRS[nb]
-                w = {"short": 0, "long": 0}
-                l = {"short": 0, "long": 0}
-                line = nb
-                moved = SHUTTERS[s]
-                moves += 1
-            elif line and lt > wt:
-                line = None
-            got_mv = r["move"]["to_s"] if r["move"] else None
-            if got_mv != moved:
-                mismatch("move", f, got_mv, moved)
         votes = {d: [w[d], l[d]] for d in DIRS}
         if r["votes_after"] != votes:
             mismatch("votes", f, r["votes_after"], votes)
-        if r["line_after"] != line:
-            mismatch("line", f, r["line_after"], line)
         prev_trace = trace
-        # ---- next ISO (decided from this frame, logged on the next frame's row)
-        nxt = next((x for x in dec if x["frame"] > f), None)
-        if nxt is not None and nxt["gain"].get("from_frame") == f:
-            clip = nxt["gain"]["clip_by_G"]
-            if clip is None:
-                want_g = g
-            else:
-                ok = [i for i, iso in enumerate(ISOS) if clip[str(iso)] < TAU]
-                want_g = max(ok) if ok else 0
-            if nxt["gain"]["chosen"] != ISOS[want_g]:
-                mismatch("gain", f, nxt["gain"]["chosen"], ISOS[want_g])
-            g = want_g
+        # ---- next base: argmax E (first of equals), kept unless the gain beats the threshold
+        bc = r["base_choice"]
+        if "e" in bc:
+            e, cur = bc["e"], g * 5 + s
+            best = max(range(25), key=lambda c: (e[c], -c))
+            nxt_c = best if best != cur and e[best] - e[cur] > bc["threshold"] else cur
+            g, s = nxt_c // 5, nxt_c % 5
+            moves += nxt_c != cur
+        got_next = (r["next_base"]["iso"], r["next_base"]["shutter_us"])
+        if got_next != (ISOS[g], SHUTTERS[s]):
+            mismatch("next_base", f, got_next, (ISOS[g], SHUTTERS[s]))
         nothing = not b_out and not b_weak
         if nothing != r["nothing"]:
             mismatch("nothing", f, r["nothing"], nothing)

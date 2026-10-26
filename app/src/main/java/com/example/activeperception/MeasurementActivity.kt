@@ -36,6 +36,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.example.activeperception.acquire.Detection
 import com.example.activeperception.acquire.Grid
+import com.example.activeperception.acquire.HowToSense
 import com.example.activeperception.acquire.RAYNEO_X3_PRO_3x3
 import com.example.activeperception.acquire.REAL_3x3_INDOOR
 import com.example.activeperception.acquire.TfliteYoloDetector
@@ -1702,7 +1703,7 @@ class MeasurementActivity : AppCompatActivity() {
      *  three laps, one run of every method per round, the order shifted by one each round
      *  (no method always follows the same one, slow drift spreads over all). Each run
      *  starts fresh and keeps its state for its three laps. 24 runs, ~17 min a lighting. */
-    private val MAIN_METHODS = listOf("duel_trace", "duel_every", "ae_phone", "prop_c",
+    private val MAIN_METHODS = listOf("duel2_trace", "duel2_every", "ae_phone", "prop_c",
         "physsweep", "shin_nm", "nae", "fixed_1600_240")
     private val MAIN_PLAN = (0 until 3).flatMap { r ->
         MAIN_METHODS.indices.map { MAIN_METHODS[(it + r) % MAIN_METHODS.size] }
@@ -1731,7 +1732,7 @@ class MeasurementActivity : AppCompatActivity() {
         R.id.expMainDim to LapPreset("main, dim", MAIN_PLAN, 1, lighting = "dim"),
         R.id.expMainDark to LapPreset("main, dark", MAIN_PLAN, 1, lighting = "dark"),
         // Check tab: Duel's two modes, one 3-lap run each (spec 7, track part).
-        R.id.expTrackTest to LapPreset("track test", "duel_trace:3,duel_every:3", 1),
+        R.id.expTrackTest to LapPreset("track test", "duel2_trace:3,duel2_every:3", 1),
         R.id.expReadNoise to LapPreset("read noise", run = "readnoise"),
         // Old tab: the v3 experiments' steps (2026-10-15/16).
         R.id.expStatic to LapPreset("question 1, still", run = "collect55_ab", cap = 30),
@@ -1786,8 +1787,8 @@ class MeasurementActivity : AppCompatActivity() {
             else "proposed: v3cause " + if (theta.isInfinite()) "θ∞" else "θ%.2f".format(theta)
         }
         return when (method) {
-            "duel_trace" -> "proposed: Duel (trace)"
-            "duel_every" -> "proposed: Duel (every)"
+            "duel2_trace" -> "proposed: Duel2 (trace)"
+            "duel2_every" -> "proposed: Duel2 (every)"
             "fixed_1600_240" -> "reference: fixed 1600 · 1/240"
             "nae" -> "baseline: Neural-AE"
             "prop_c" -> "baseline: Sense-well"
@@ -1871,7 +1872,7 @@ class MeasurementActivity : AppCompatActivity() {
         presetRunCap = null
         ExperimentSession.lighting = preset?.lighting.orEmpty()
         ExperimentSession.session = if (preset?.lighting != null)
-            "duel_main_${preset.lighting}_${System.currentTimeMillis()}" else ""
+            "duel2_main_${preset.lighting}_${System.currentTimeMillis()}" else ""
         // The x2 digital boost exists for the S25's ISO-400 analog ceiling and is folded
         // into every grid-formed image, phone AE included. The collection run sets its own
         // ratios, so leaving the boost on would make the AE laps one stop brighter than
@@ -2001,9 +2002,12 @@ class MeasurementActivity : AppCompatActivity() {
             start(cmd) { mc!!.runV3Cause(theta, pilot, cap, ::post, ::showFrame) }
             return
         }
-        if (cmd == "duel_trace" || cmd == "duel_every") {
+        if (cmd == "duel2_trace" || cmd == "duel2_every") {
             val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
-            start(cmd) { mc!!.runDuel(cmd == "duel_every", cap, ::post, ::showFrame) }
+            val curve = runCatching {
+                HowToSense.Curve.parse(assets.open("tolerance_curve.txt").bufferedReader().use { it.readText() })
+            }.getOrElse { post("Duel needs assets/tolerance_curve.txt: ${it.message}"); return }
+            start(cmd) { mc!!.runDuel(cmd == "duel2_every", curve, cap, ::post, ::showFrame) }
             return
         }
         // The Duel experiments' fixed reference cell: ISO 1600 x 1/240 s on the v2 lattice.

@@ -3,6 +3,18 @@
 spec: `docs/SPEC_proposed_v4.md`. 이름은 **Duel** (모드 `duel_trace` = L0, `duel_every` = L1).
 코드: `acquire/Duel.kt` (판단 규칙, 부록 A 이식), `MeasurementController.runDuel`, 확인 스크립트 `tools/duel_replay_check.py` (spec 5.6).
 
+## 0. 10-26 base 고르기 교체 (top-down proposed, `Actdiff/revision/PROPOSED_TOPDOWN_2026-10-26.md`)
+
+바뀐 것은 base 고르기 하나. burst 구조(같은 burst read 합), L0/L1, Thompson 방향, 합치기는 그대로.
+모드 이름은 `duel2_trace` (L0), `duel2_every` (L1): 이전 Duel 기록(`duel_*`)과 섞이지 않게. 이전 판은 이 branch 에서 더 돌릴 수 없음 (`main` 에 남아 있음).
+
+- 지움: 4.5 의 gain 규칙(τ .7), 짝 비교로 shutter 옮기기(pBetter ≥ .95), 선 탐색. Thompson 의 w/l 표는 방향 고르기에만 쓰고 base 가 옮겨도 지우지 않음.
+- 새 규칙 `acquire/HowToSense.kt`: frame 마다 이번 base 사진(검출기 입력의 640×480, 8-bit)으로 다음 frame 의 base 를 정함. 16×12 칸(40 px)마다 25 칸의 밝기·포화(사진 × 노출 비율), 번짐(직전 base 와의 flow 속도 × shutter ÷ 칸의 차 크기)을 계산하고, 곡선 × 포화 인자 × 지도 무게의 합 E 가 가장 큰 칸으로, E 의 차가 곡선 표준오차보다 클 때만 옮김. 첫 frame 은 폰 AE 에 가장 가까운 칸, 직전 base 가 없는 첫 frame 다음 결정은 그대로 둠.
+- 지도: 차 종류 conf ≥ .25 검출 box(둘째 사진 것은 base 시각으로 옮겨서)의 칸 면적 누적, 칸의 차 크기 = 쌓인 box 긴 변의 중앙값.
+- 곡선 파일 `app/src/main/assets/tolerance_curve.txt` (형식은 `HowToSense.Curve` 주석). 없으면 Duel 은 시작하지 않음.
+- 확인: `HowToSenseTest.studyFramesGiveTheSameChoice` 가 `app/src/test/resources/howtosense/` 의 연구 frame(curve.txt, case_k.png/txt, 형식은 테스트 주석)과 같은 값을 내는지 봄.
+- 기록: decisions.jsonl `base_choice`(E 25 개, best, threshold, moved, speed 중앙값, 잰 칸 수, ms), `move`(ISO·shutter); duel_frames.csv `choose_ms`, `moved_to_iso`; dets.jsonl `two_trace`(두 흔적 규칙이 더했을 box, 출력에는 안 넣음).
+
 ## 1. spec과 달라진 것
 
 | 무엇 | spec | 구현 | 이유 |

@@ -38,13 +38,6 @@ class DuelTest {
         assertEquals(1, Duel.discord(listOf(car1), listOf(d(0.9, car1)), far) { it }[1])
     }
 
-    @Test fun gainRuleTakesTheHighestUnclippedIso() {
-        assertNull(Duel.gainRule(null))
-        assertEquals(4, Duel.gainRule(doubleArrayOf(0.0, 0.0, 0.1, 0.3, 0.69)))
-        assertEquals(2, Duel.gainRule(doubleArrayOf(0.0, 0.2, 0.5, 0.7, 0.9)))
-        assertEquals(0, Duel.gainRule(doubleArrayOf(0.8, 0.9, 1.0, 1.0, 1.0)))
-    }
-
     @Test fun betaVariateHasTheRightMean() {
         val rng = java.util.Random(7)
         val n = 20000
@@ -53,7 +46,7 @@ class DuelTest {
         assertEquals(5.0 / 6.0, s / n, 0.01)
     }
 
-    @Test fun l0ComparesOnlyAfterATraceOrDuringALine() {
+    @Test fun l0ComparesOnlyAfterATrace() {
         val p = Duel.Policy(every = false, baseG = 4, baseS = 2, seed = 1)
         assertEquals("none", p.plan().reason)
         assertNull(p.plan().nb)
@@ -65,28 +58,10 @@ class DuelTest {
         assertEquals("always", l1.plan().reason)
     }
 
-    @Test fun moveAfterEnoughWinsThenLineSearchUntilTheNeighbourLoses() {
-        val p = Duel.Policy(every = true, baseG = 4, baseS = 3, seed = 1)
-        // Four cars seen only in the shorter neighbour, in one frame: 4:0 -> 0.969 -> move.
-        assertEquals(2, p.afterCompare(Duel.Dir.SHORT, 4, 0))
-        assertEquals(Duel.Dir.SHORT, p.line)
-        assertEquals(0, p.w.sum() + p.l.sum())
-        // Line search: the next plan compares short again, without drawing.
-        val pl = p.plan()
-        assertEquals(Duel.Dir.SHORT, pl.nb); assertEquals("line", pl.reason)
-        // A draw keeps the line ...
-        assertNull(p.afterCompare(Duel.Dir.SHORT, 1, 1))
-        assertEquals(Duel.Dir.SHORT, p.line)
-        // ... a loss ends it.
-        assertNull(p.afterCompare(Duel.Dir.SHORT, 0, 1))
-        assertNull(p.line)
-    }
-
     @Test fun theLatticeEdgeBlocksTheDirection() {
-        val p = Duel.Policy(every = true, baseG = 4, baseS = 1, seed = 1)
-        assertEquals(0, p.afterCompare(Duel.Dir.SHORT, 5, 0))   // reaches 1/240
+        val p = Duel.Policy(every = true, baseG = 4, baseS = 0, seed = 1)   // 1/240: no shorter rung
         assertEquals(listOf(Duel.Dir.LONG), p.dirs())
-        val pl = p.plan()                                        // line blocked: falls through
+        val pl = p.plan()
         assertEquals("always", pl.reason)
         assertEquals(Duel.Dir.LONG, pl.nb)
         assertEquals(1, pl.draws!!.size)
@@ -106,11 +81,17 @@ class DuelTest {
         assertEquals(80.0, sum.stats(all, doubleArrayOf(1.0)).meanDn, 1e-9)
     }
 
-    @Test fun votesAccumulateAcrossFrames() {
+    @Test fun votesOnlyAccumulateAndNeverMoveTheBase() {
         val p = Duel.Policy(every = true, baseG = 4, baseS = 2, seed = 1)
-        assertNull(p.afterCompare(Duel.Dir.LONG, 2, 0))
-        assertNull(p.afterCompare(Duel.Dir.LONG, 1, 0))
-        assertEquals(15.0 / 16.0, p.pBetterNow(Duel.Dir.LONG), 1e-12)   // 3:0, not yet 0.95
-        assertEquals(3, p.afterCompare(Duel.Dir.LONG, 1, 0))      // 4:0 -> move
+        p.afterCompare(Duel.Dir.LONG, 2, 0)
+        p.afterCompare(Duel.Dir.LONG, 3, 0)
+        p.afterCompare(Duel.Dir.SHORT, 0, 1)
+        p.afterCompare(null, 9, 9)
+        assertEquals(2, p.baseS)                                   // the base is HowToSense's to move
+        assertEquals(5, p.w[Duel.Dir.LONG.ordinal]); assertEquals(0, p.l[Duel.Dir.LONG.ordinal])
+        assertEquals(0, p.w[Duel.Dir.SHORT.ordinal]); assertEquals(1, p.l[Duel.Dir.SHORT.ordinal])
+        // The votes survive a base move made by the caller.
+        p.baseS = 3
+        assertEquals(5, p.w[Duel.Dir.LONG.ordinal])
     }
 }
