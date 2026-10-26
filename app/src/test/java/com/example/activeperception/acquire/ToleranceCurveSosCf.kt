@@ -43,12 +43,15 @@ object ToleranceCurveSosCf {
      *  pairs (equal exposures, ~130 ms) need 5 ([HowToSense.FLOW_LEVELS]); each was checked
      *  against the same reference, the gyro, rather than forced to share a depth. */
     private const val RECORD_FLOW_LEVELS = 3
+    /** A box this close to the picture's border counts as touching it (see edgeOf). */
+    private const val EDGE_PX = 8.0
 
     private class Img(val id: String, val cell: Int, val iso: Int, val shutterUs: Int,
                       val group: String, val ts: Long, val file: File)
     private class Box(val b: DoubleArray, val conf: Double)
     private class Sample(val unit: Int, val blur: Double, val bright: Double, val clip: Double, val hit: Boolean,
-                         val cell: Int = -1)
+                         val cell: Int = -1, val edge: Boolean = false, val speed: Double = Double.NaN,
+                         val yaw: Double = Double.NaN)
 
     private fun picture(f: File): DoubleArray {
         val img = imageIoRead.invoke(null, f) ?: error("cannot read $f")
@@ -151,6 +154,10 @@ object ToleranceCurveSosCf {
             speeds += carSpeed
             val yawM = yawOf[m.toString()] ?: Double.NaN
             for (v in carSpeed) speedYaw += doubleArrayOf(yawM, v)
+            // A car touching the picture's border in any group may be entering or leaving view
+            // between the groups (~0.2 s), so a group can miss it for its time, not its exposure.
+            val edgeOf = certain.map { c -> c.values.any { it[0] <= EDGE_PX || it[1] <= EDGE_PX ||
+                it[2] >= HowToSense.W - EDGE_PX || it[3] >= HowToSense.H - EDGE_PX } }
             if (speedsOnly) continue
             val pics = HashMap<String, DoubleArray>()
             for (img in imgs) {
@@ -166,7 +173,7 @@ object ToleranceCurveSosCf {
                     val st = boxStats(pic, ref)
                     if (st[0].isNaN()) continue
                     val blur = carSpeed[ci] * (img.shutterUs / 1e6) / max(side(ref), 1.0)
-                    out += Sample(unitBase + m, blur, st[0], st[1], hit, img.cell)
+                    out += Sample(unitBase + m, blur, st[0], st[1], hit, img.cell, edgeOf[ci], carSpeed[ci], yawM)
                     used++
                 }
             }
@@ -401,6 +408,39 @@ object ToleranceCurveSosCf {
         calib("blur", curve.blurLo) { it.blur }
         calib("brightness", curve.brightLo) { it.bright }
         calib("clip", curve.clipLo) { it.clip }
+        // Where the errors come from.
+        val seqOf = mapOf(0 to "bright", 1 to "dim", 2 to "dark")
+        fun light(s: Sample) = seqOf[s.unit / 10_000]!!
+        fun line(l: List<Sample>) = if (l.isEmpty()) "      -       " else
+            "%.3f/%.3f %5d".format(l.count { it.hit }.toDouble() / l.size, l.sumOf { pred(it) } / l.size, l.size)
+        println("== per shutter, observed/predicted n: all cars | cars never touching the border | border cars")
+        for (lt in listOf("bright", "dim", "dark")) for (sj in 0 until 5) {
+            val l = all.filter { light(it) == lt && it.cell % 5 == sj }
+            println("  %-6s 1/%-4d %s | %s | %s".format(lt, HowToSense.DENS[sj], line(l), line(l.filter { !it.edge }), line(l.filter { it.edge })))
+        }
+        println("== border cars: share of samples per lighting: " + listOf("bright", "dim", "dark").joinToString { lt ->
+            val l = all.filter { light(it) == lt }; "%s %.1f%%".format(lt, 100.0 * l.count { it.edge } / l.size) })
+        println("== inside the lowest brightness bin [0, %.4f): observed/predicted n".format(curve.brightLo.getOrElse(1) { 1.0 }))
+        val sub = doubleArrayOf(0.0, 0.0005, 0.001, 0.002, 0.004)
+        for (i in sub.indices) {
+            val hi = sub.getOrElse(i + 1) { curve.brightLo.getOrElse(1) { 1.0 } }
+            println("  [%.4f, %.4f) %s".format(sub[i], hi, line(all.filter { it.bright >= sub[i] && it.bright < hi })))
+        }
+        println("== car speed (px/s, one per car and moment) by gyro yaw rate, per lighting: median (cars)")
+        val edges = doubleArrayOf(0.0, 0.15, 0.3, 0.6, 0.9, 1.2)
+        println("  yaw >=   " + edges.joinToString("") { "%-14s".format("%.2f".format(it)) })
+        for (lt in listOf("bright", "dim", "dark")) {
+            val cars = all.filter { light(it) == lt && !it.speed.isNaN() && !it.yaw.isNaN() }
+                .distinctBy { it.unit to it.speed }
+            println("  %-7s ".format(lt) + edges.indices.joinToString("") { b ->
+                val v = cars.filter { HowToSense.Curve.binOf(edges, it.yaw) == b }.map { it.speed }
+                if (v.isEmpty()) "%-14s".format("-") else "%-14s".format("%.0f (%d)".format(HowToSense.median(v), v.size)) })
+        }
+        println("== per lighting by blur bin: observed/predicted n")
+        for (lt in listOf("bright", "dim", "dark")) for (b in curve.blurLo.indices) {
+            val l = all.filter { light(it) == lt && HowToSense.Curve.binOf(curve.blurLo, it.blur) == b }
+            println("  %-6s blur >= %.4f %s".format(lt, curve.blurLo[b], line(l)))
+        }
     }
 
     @JvmStatic
