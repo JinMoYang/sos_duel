@@ -103,6 +103,17 @@ class HowToSenseTest {
      * box so far, picture px), and the expected bright and clip (25 x 192, cell-major), e (25),
      * best, threshold and next, all computed in float64.
      */
+    /** [HowToSense.W] x [HowToSense.H] packed ARGB of a PNG. javax.imageio is not on the Android
+     *  unit-test compile classpath (android.jar stands in for the JDK there) but is in the JDK
+     *  that runs the tests, so it is reached by reflection. */
+    private fun readArgb(url: java.net.URL): IntArray {
+        val img = Class.forName("javax.imageio.ImageIO").getMethod("read", java.net.URL::class.java)
+            .invoke(null, url)!!
+        val ip = Int::class.javaPrimitiveType
+        return img.javaClass.getMethod("getRGB", ip, ip, ip, ip, IntArray::class.java, ip, ip)
+            .invoke(img, 0, 0, HowToSense.W, HowToSense.H, null, 0, HowToSense.W) as IntArray
+    }
+
     @Test fun studyFramesGiveTheSameChoice() {
         val curveText = javaClass.getResource("/howtosense/curve.txt")?.readText()
         assumeTrue("study check values not bundled yet", curveText != null)
@@ -110,10 +121,9 @@ class HowToSenseTest {
         var k = 0
         while (true) {
             val txt = javaClass.getResource("/howtosense/case_$k.txt")?.readText() ?: break
-            val img = javax.imageio.ImageIO.read(javaClass.getResource("/howtosense/case_$k.png"))
             val kv = txt.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
                 .associate { l -> l.split(Regex("\\s+")).let { p -> p[0] to DoubleArray(p.size - 1) { p[it + 1].toDouble() } } }
-            val pic = HowToSense.picture(img.getRGB(0, 0, HowToSense.W, HowToSense.H, null, 0, HowToSense.W))
+            val pic = HowToSense.picture(readArgb(javaClass.getResource("/howtosense/case_$k.png")!!))
             val base = kv.getValue("base")[0].toInt()
             val st = HowToSense.stats(pic, base)
             assertArrayEquals("case $k bright", kv.getValue("bright"), DoubleArray(25 * n) { st.bright[it / n][it % n] }, 1e-9)
