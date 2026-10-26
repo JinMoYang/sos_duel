@@ -1701,14 +1701,17 @@ class MeasurementActivity : AppCompatActivity() {
     )
 
     /** The Duel experiment (docs/SPEC_proposed_v4.md): eight methods, three runs each of
-     *  three laps, one run of every method per round, the order shifted by one each round
+     *  [MAIN_LAPS] laps, one run of every method per round, the order shifted by one each round
      *  (no method always follows the same one, slow drift spreads over all). Each run
-     *  starts fresh and keeps its state for its three laps. 24 runs, ~17 min a lighting. */
+     *  starts fresh and keeps its state for its laps. 24 runs. */
     private val MAIN_METHODS = listOf("duel2_trace", "duel2_every", "ae_phone", "prop_c",
         "physsweep", "shin_nm", "nae", "fixed_1600_240")
+    /** Laps per run: 3 until the 2026-10-26 bright session; 2 since the Limo was slowed to
+     *  ~20 s a lap (that session took 24 min). */
+    private val MAIN_LAPS = 2
     private val MAIN_PLAN = (0 until 3).flatMap { r ->
         MAIN_METHODS.indices.map { MAIN_METHODS[(it + r) % MAIN_METHODS.size] }
-    }.joinToString(",") { "$it:3" }
+    }.joinToString(",") { "$it:$MAIN_LAPS" }
 
     /** One round of the Limo step, one lap each, the method changing every lap so slow drift
      *  (light, battery, speed) falls on every method alike: five collection laps (one per
