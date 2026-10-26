@@ -46,6 +46,76 @@ object ToleranceCurveSosCf {
     /** A box this close to the picture's border counts as touching it (see edgeOf). */
     private const val EDGE_PX = 8.0
 
+    /**
+     * Where blur's speed comes from (system property sos.speed):
+     * - "lk" (default): [HowToSense.speed] between the moment's 1/240 and 1/120 first frames,
+     *   one speed per car and moment;
+     * - "gyro": the camera's rotation only, from the gyro over each image's own exposure, as
+     *   image speed at the box ([rotSpeed]); blind to the Limo driving past the cars;
+     * - "hybrid": gyro rotation plus a translation constant per record ([transConst], box
+     *   lengths per second): a car passing at distance Z moves f v / Z px/s and is f L / Z px
+     *   long, so its translation blur v x shutter / L does not depend on Z.
+     */
+    private val SPEED = System.getProperty("sos.speed", "lk")
+    /** Focal length in picture px (640 x 480 picture); gyro-checked 2026-10-26 (yaw x f vs LK). */
+    private const val F_PX = 425.0
+    /** Gyro samples (~38 Hz) are averaged over the exposure padded by this much. */
+    private const val GYRO_PAD_NS = 13_000_000L
+    /** Translation term of "hybrid", 1/s; from sos.trans or the record's bright straights. */
+    private var transConst = Double.NaN
+
+    private class Gyro(val ts: LongArray, val w: Array<DoubleArray>) {
+        /** Mean rotation rate (x, y, z; rad/s, phone axes) over [t0, t1] ns; the nearest
+         *  sample when none falls inside. */
+        fun mean(t0: Long, t1: Long): DoubleArray {
+            var i = java.util.Arrays.binarySearch(ts, t0 - GYRO_PAD_NS).let { if (it < 0) -it - 1 else it }
+            val m = DoubleArray(3); var n = 0
+            while (i < ts.size && ts[i] <= t1 + GYRO_PAD_NS) { for (k in 0..2) m[k] += w[i][k]; n++; i++ }
+            if (n > 0) return DoubleArray(3) { m[it] / n }
+            val c = (t0 + t1) / 2
+            val j = java.util.Arrays.binarySearch(ts, c).let { if (it < 0) -it - 1 else it }
+            val k = listOf(j - 1, j).filter { it in ts.indices }.minByOrNull { abs(ts[it] - c) } ?: return DoubleArray(3)
+            return w[k].copyOf()
+        }
+    }
+
+    private fun gyroOf(dir: File): Gyro? {
+        val f = File(dir, "imu.csv")
+        if (!f.exists()) return null
+        val rows = csv(f).filter { it["source"] == "gyro" }
+            .map { it["ts"]!!.toLong() to doubleArrayOf(it["gx"]!!.toDouble(), it["gy"]!!.toDouble(), it["gz"]!!.toDouble()) }
+            .sortedBy { it.first }
+        return Gyro(LongArray(rows.size) { rows[it].first }, Array(rows.size) { rows[it].second })
+    }
+
+    /** Image speed (picture px/s) at box [b] from rotation rate [w]: the rear camera looks along
+     *  the phone's -z, so x and y rotation pan the picture by f |w_xy| and z rotation turns it
+     *  about the centre by |w_z| r (the cross term, whose sign depends on the mounting, is left
+     *  out). */
+    private fun rotSpeed(w: DoubleArray, b: DoubleArray): Double {
+        val cx = (b[0] + b[2]) / 2 - HowToSense.W / 2.0; val cy = (b[1] + b[3]) / 2 - HowToSense.H / 2.0
+        return kotlin.math.sqrt(F_PX * F_PX * (w[0] * w[0] + w[1] * w[1]) + w[2] * w[2] * (cx * cx + cy * cy))
+    }
+
+    /** Translation constant of [root]: over the bright sequence's certain cars on straights
+     *  (|yaw| < 0.15 rad/s), the median of (LK speed - gyro rotation speed) / box long side. */
+    private val transRef = ArrayList<Double>()
+    private fun translationConst(root: File): Double {
+        val keep = speedsOnly
+        speedsOnly = true; transRef.clear()
+        sequence(root, "bright", 0, ArrayList(), forceLk = true)
+        speedsOnly = keep
+        val c = HowToSense.median(transRef)
+        println("translation constant of ${root.name}: %.3f /s (%d straight cars)".format(c, transRef.size))
+        return c
+    }
+
+    private fun speedNote() = when (SPEED) {
+        "gyro" -> "speeds: gyro rotation only (f = $F_PX px, |w_xy| f and |w_z| r over each image's exposure)."
+        "hybrid" -> "speeds: gyro rotation (f = $F_PX px, over each image's exposure) + translation %.3f box lengths/s (bright straights, LK minus rotation).".format(transConst)
+        else -> "speeds: HowToSense.speed with $RECORD_FLOW_LEVELS pyramid levels on the 1/240 -> 1/120 first frames (gyro-checked)."
+    }
+
     private class Img(val id: String, val cell: Int, val iso: Int, val shutterUs: Int,
                       val group: String, val ts: Long, val file: File)
     private class Box(val b: DoubleArray, val conf: Double)
@@ -102,8 +172,11 @@ object ToleranceCurveSosCf {
         return out
     }
 
-    private fun sequence(root: File, seq: String, unitBase: Int, out: MutableList<Sample>): IntArray {
+    private fun sequence(root: File, seq: String, unitBase: Int, out: MutableList<Sample>,
+                         forceLk: Boolean = false): IntArray {
         val dir = File(root, "sequences/$seq")
+        val useLk = SPEED == "lk" || forceLk
+        val gyro = if (SPEED != "lk" || forceLk) gyroOf(dir) ?: error("no imu.csv gyro in $dir") else null
         val byMoment = HashMap<Int, MutableList<Img>>()
         val baseIso = HashMap<Int, Int>()
         for (r in csv(File(dir, "images.csv"))) {
@@ -146,13 +219,22 @@ object ToleranceCurveSosCf {
             val a = imgs.firstOrNull { it.group == "g240" && it.iso == bi && it.shutterUs == 4167 }
             val b = imgs.firstOrNull { it.group == "g120" && it.iso == bi && it.shutterUs == 8333 }
             if (a == null || b == null || b.ts <= a.ts) continue
-            val need = BooleanArray(HowToSense.N)
-            for (c in certain) for (k in cellsUnder(c["g240"] ?: c["g120"] ?: c.values.first())) need[k] = true
-            val (speed, _) = HowToSense.speed(picture(a.file), 2.0, picture(b.file), (b.ts - a.ts) / 1e9, need,
-                levels = RECORD_FLOW_LEVELS)
-            val carSpeed = certain.map { c -> HowToSense.median(cellsUnder(c["g240"] ?: c["g120"] ?: c.values.first()).map { speed[it] }) }
+            val carSpeed = if (!useLk) List(certain.size) { Double.NaN } else {
+                val need = BooleanArray(HowToSense.N)
+                for (c in certain) for (k in cellsUnder(c["g240"] ?: c["g120"] ?: c.values.first())) need[k] = true
+                val (speed, _) = HowToSense.speed(picture(a.file), 2.0, picture(b.file), (b.ts - a.ts) / 1e9, need,
+                    levels = RECORD_FLOW_LEVELS)
+                certain.map { c -> HowToSense.median(cellsUnder(c["g240"] ?: c["g120"] ?: c.values.first()).map { speed[it] }) }
+            }
             speeds += carSpeed
             val yawM = yawOf[m.toString()] ?: Double.NaN
+            if (speedsOnly && forceLk && gyro != null && yawM < 0.15) {
+                val w = gyro.mean(a.ts, b.ts + 8_333_000L)
+                for ((ci, c) in certain.withIndex()) {
+                    val box = c["g240"] ?: c["g120"] ?: c.values.first()
+                    if (!carSpeed[ci].isNaN()) transRef += max(0.0, carSpeed[ci] - rotSpeed(w, box)) / max(side(box), 1.0)
+                }
+            }
             for (v in carSpeed) speedYaw += doubleArrayOf(yawM, v)
             // A car touching the picture's border in any group may be entering or leaving view
             // between the groups (~0.2 s), so a group can miss it for its time, not its exposure.
@@ -172,8 +254,16 @@ object ToleranceCurveSosCf {
                     val pic = pics.getOrPut(img.id) { picture(img.file) }
                     val st = boxStats(pic, ref)
                     if (st[0].isNaN()) continue
-                    val blur = carSpeed[ci] * (img.shutterUs / 1e6) / max(side(ref), 1.0)
-                    out += Sample(unitBase + m, blur, st[0], st[1], hit, img.cell, edgeOf[ci], carSpeed[ci], yawM)
+                    val sec = img.shutterUs / 1e6
+                    val len = max(side(ref), 1.0)
+                    val blur = when (SPEED) {
+                        "lk" -> carSpeed[ci] * sec / len
+                        else -> {
+                            val rot = rotSpeed(gyro!!.mean(img.ts, img.ts + img.shutterUs * 1000L), ref) / len
+                            sec * (rot + if (SPEED == "hybrid") transConst else 0.0)
+                        }
+                    }
+                    out += Sample(unitBase + m, blur, st[0], st[1], hit, img.cell, edgeOf[ci], blur / sec * len, yawM)
                     used++
                 }
             }
@@ -371,6 +461,8 @@ object ToleranceCurveSosCf {
      */
     private fun predict(root: File, curveFile: File) {
         val curve = HowToSense.Curve.parse(curveFile.readText())
+        if (SPEED == "hybrid") transConst = System.getProperty("sos.trans")?.toDouble() ?: translationConst(root)
+        println("predict ${root.name} with ${curveFile.name}; ${speedNote()}")
         fun pred(s: Sample) = curve.p[curve.bin(s.blur, s.bright)] * curve.factor(s.clip)
         fun name(c: Int) = "ISO%d 1/%d".format(Duel.ISOS[c / 5], HowToSense.DENS[c % 5])
         val all = ArrayList<Sample>()
@@ -468,6 +560,7 @@ object ToleranceCurveSosCf {
         }
         val root = File(args[0]); val outFile = File(args[1])
         val nBoot = args.getOrNull(2)?.toInt() ?: 300
+        if (SPEED == "hybrid") transConst = System.getProperty("sos.trans")?.toDouble() ?: translationConst(root)
         val samples = ArrayList<Sample>()
         val counts = listOf("bright", "dim", "dark").mapIndexed { i, s -> s to sequence(root, s, i * 10_000, samples) }
         val low = samples.filter { it.clip < CLIP_LO[1] }
@@ -511,7 +604,7 @@ object ToleranceCurveSosCf {
             appendLine("# by ToleranceCurveSosCf (2026-10-26): leave-one-group-out certain cars, detection = conf >= 0.25,")
             appendLine("# HowToSense features (box brightness, clip share, blur = speed x shutter / long side); p, var from clip < 0.05;")
             appendLine("# var by bootstrap over moments ($nBoot); empty bins take the nearest bin's p with var 0.25.")
-            appendLine("# speeds: HowToSense.speed with $RECORD_FLOW_LEVELS pyramid levels on the 1/240 -> 1/120 first frames (gyro-checked).")
+            appendLine("# ${speedNote()}")
             appendLine("# samples ${samples.size} (clip < 0.05: ${low.size}); " + counts.joinToString("; ") { (s, c) -> "$s ${c[0]} moments ${c[1]} cars ${c[2]} samples" })
             appendLine("# n per bin (blur-major): ${n0.joinToString(" ")}")
             appendLine("# n per clip bin: ${nClip.joinToString(" ")}")
