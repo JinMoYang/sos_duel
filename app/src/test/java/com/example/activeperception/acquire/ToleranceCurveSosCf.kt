@@ -311,8 +311,32 @@ object ToleranceCurveSosCf {
             println("  >= %.1f | %4d | %5.0f | %5.0f".format(edges[i], yaws[i].size, HowToSense.median(yaws[i]) * fPx, HowToSense.median(bins[i])))
     }
 
+    /** Times each step of one How-to-Sense choice on two consecutive base pictures (JPEGs) and
+     *  prints the flow's speeds: main(curveFile, "--bench", a.jpg, b.jpg, dtSec). */
+    private fun bench(curveFile: File, a: File, b: File, dt: Double) {
+        val curve = HowToSense.Curve.parse(curveFile.readText())
+        val all = BooleanArray(HowToSense.N) { true }
+        fun t(label: String, reps: Int, f: () -> Unit) {
+            repeat(2) { f() }
+            val t0 = System.nanoTime(); repeat(reps) { f() }
+            println("  %-28s %7.1f ms".format(label, (System.nanoTime() - t0) / 1e6 / reps))
+        }
+        var pa = picture(a); var pb = picture(b)
+        t("picture (JPEG decode incl.)", 5) { pa = picture(a); pb = picture(b) }
+        var st = HowToSense.stats(pb, HowToSense.cell(3, 0))
+        t("stats (9 passes)", 5) { st = HowToSense.stats(pb, HowToSense.cell(3, 0)) }
+        for (lv in listOf(3, 5)) {
+            var sp = DoubleArray(0)
+            t("speed, 192 cells, $lv levels", 3) { sp = HowToSense.speed(pa, 1.0, pb, dt, all, levels = lv).first }
+            val s = sp.sorted()
+            println("     speeds px/s: p10 %.0f p50 %.0f p90 %.0f max %.0f".format(s[19], s[96], s[172], s.last()))
+            t("choose", 20) { HowToSense.choose(curve, st, sp, DoubleArray(HowToSense.N) { 1.0 / HowToSense.N }, DoubleArray(HowToSense.N) { 60.0 }, HowToSense.cell(3, 0)) }
+        }
+    }
+
     @JvmStatic
     fun main(args: Array<String>) {
+        if (args.getOrNull(1) == "--bench") { bench(File(args[0]), File(args[2]), File(args[3]), args[4].toDouble()); return }
         if (args.getOrNull(1) == "--gyrorecord") { gyroCheckRecord(File(args[0])); return }
         if (args.getOrNull(1) == "--rangecheck") { rangeCheck(File(args[0]), listOf(3, 5)); return }
         if (args.getOrNull(1) == "--gyrocheck") { gyroCheck(File(args[0]), listOf(3, 5), args.getOrNull(2) == "cars"); return }
