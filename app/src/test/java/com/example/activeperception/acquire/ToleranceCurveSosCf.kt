@@ -37,6 +37,12 @@ object ToleranceCurveSosCf {
     private val VEH = setOf(1, 2, 3, 5, 7)
     private const val TOP = 80                         // letterbox rows above the picture
     private val CLIP_LO = doubleArrayOf(0.0, 0.05, 0.2, 0.5, 0.8)
+    /** Pyramid levels for the record's speed pairs (1/240 -> 1/120 first frames, ~67 ms apart,
+     *  different exposures). Checked against the gyro 2026-10-26, cars in turns (~470-530 px/s
+     *  of rotation): 3 levels read ~520-530 px/s, 5 levels ~600-790 (too high). The app's own
+     *  pairs (equal exposures, ~130 ms) need 5 ([HowToSense.FLOW_LEVELS]); each was checked
+     *  against the same reference, the gyro, rather than forced to share a depth. */
+    private const val RECORD_FLOW_LEVELS = 3
 
     private class Img(val id: String, val cell: Int, val iso: Int, val shutterUs: Int,
                       val group: String, val ts: Long, val file: File)
@@ -138,7 +144,8 @@ object ToleranceCurveSosCf {
             if (a == null || b == null || b.ts <= a.ts) continue
             val need = BooleanArray(HowToSense.N)
             for (c in certain) for (k in cellsUnder(c["g240"] ?: c["g120"] ?: c.values.first())) need[k] = true
-            val (speed, _) = HowToSense.speed(picture(a.file), 2.0, picture(b.file), (b.ts - a.ts) / 1e9, need)
+            val (speed, _) = HowToSense.speed(picture(a.file), 2.0, picture(b.file), (b.ts - a.ts) / 1e9, need,
+                levels = RECORD_FLOW_LEVELS)
             val carSpeed = certain.map { c -> HowToSense.median(cellsUnder(c["g240"] ?: c["g120"] ?: c.values.first()).map { speed[it] }) }
             speeds += carSpeed
             val yawM = yawOf[m.toString()] ?: Double.NaN
@@ -370,6 +377,7 @@ object ToleranceCurveSosCf {
             appendLine("# by ToleranceCurveSosCf (2026-10-26): leave-one-group-out certain cars, detection = conf >= 0.25,")
             appendLine("# HowToSense features (box brightness, clip share, blur = speed x shutter / long side); p, var from clip < 0.05;")
             appendLine("# var by bootstrap over moments ($nBoot); empty bins take the nearest bin's p with var 0.25.")
+            appendLine("# speeds: HowToSense.speed with $RECORD_FLOW_LEVELS pyramid levels on the 1/240 -> 1/120 first frames (gyro-checked).")
             appendLine("# samples ${samples.size} (clip < 0.05: ${low.size}); " + counts.joinToString("; ") { (s, c) -> "$s ${c[0]} moments ${c[1]} cars ${c[2]} samples" })
             appendLine("# n per bin (blur-major): ${n0.joinToString(" ")}")
             appendLine("# n per clip bin: ${nClip.joinToString(" ")}")
