@@ -47,7 +47,8 @@ object ToleranceCurveSosCf {
     private class Img(val id: String, val cell: Int, val iso: Int, val shutterUs: Int,
                       val group: String, val ts: Long, val file: File)
     private class Box(val b: DoubleArray, val conf: Double)
-    private class Sample(val unit: Int, val blur: Double, val bright: Double, val clip: Double, val hit: Boolean)
+    private class Sample(val unit: Int, val blur: Double, val bright: Double, val clip: Double, val hit: Boolean,
+                         val cell: Int = -1)
 
     private fun picture(f: File): DoubleArray {
         val img = imageIoRead.invoke(null, f) ?: error("cannot read $f")
@@ -165,7 +166,7 @@ object ToleranceCurveSosCf {
                     val st = boxStats(pic, ref)
                     if (st[0].isNaN()) continue
                     val blur = carSpeed[ci] * (img.shutterUs / 1e6) / max(side(ref), 1.0)
-                    out += Sample(unitBase + m, blur, st[0], st[1], hit)
+                    out += Sample(unitBase + m, blur, st[0], st[1], hit, img.cell)
                     used++
                 }
             }
@@ -334,8 +335,77 @@ object ToleranceCurveSosCf {
         }
     }
 
+    /** Spearman rank correlation of two equally long arrays (ties take their mean rank). */
+    private fun spearman(a: DoubleArray, b: DoubleArray): Double {
+        fun ranks(v: DoubleArray): DoubleArray {
+            val idx = v.indices.sortedBy { v[it] }
+            val r = DoubleArray(v.size)
+            var i = 0
+            while (i < idx.size) {
+                var j = i
+                while (j + 1 < idx.size && v[idx[j + 1]] == v[idx[i]]) j++
+                for (k in i..j) r[idx[k]] = (i + j) / 2.0
+                i = j + 1
+            }
+            return r
+        }
+        val ra = ranks(a); val rb = ranks(b)
+        val ma = ra.average(); val mb = rb.average()
+        var sab = 0.0; var saa = 0.0; var sbb = 0.0
+        for (i in ra.indices) { sab += (ra[i] - ma) * (rb[i] - mb); saa += (ra[i] - ma) * (ra[i] - ma); sbb += (rb[i] - mb) * (rb[i] - mb) }
+        return sab / kotlin.math.sqrt(saa * sbb)
+    }
+
+    /**
+     * Does a curve predict another record? main(datasetDir, "--predict", curveFile): the same
+     * samples as the curve is measured from (certain cars, leave-one-group-out), and per lighting
+     * and lattice cell the share detected against the curve's p(blur, brightness) x clip factor,
+     * the best cells both ways, and the calibration per blur, brightness and clip bin.
+     */
+    private fun predict(root: File, curveFile: File) {
+        val curve = HowToSense.Curve.parse(curveFile.readText())
+        fun pred(s: Sample) = curve.p[curve.bin(s.blur, s.bright)] * curve.factor(s.clip)
+        fun name(c: Int) = "ISO%d 1/%d".format(Duel.ISOS[c / 5], HowToSense.DENS[c % 5])
+        val all = ArrayList<Sample>()
+        for ((i, seq) in listOf("bright", "dim", "dark").withIndex()) {
+            if (!File(root, "sequences/$seq").exists()) continue
+            val ss = ArrayList<Sample>()
+            sequence(root, seq, i * 10_000, ss)
+            all += ss
+            val byCell = ss.groupBy { it.cell }
+            val obs = DoubleArray(25) { c -> byCell[c]?.let { l -> l.count { it.hit }.toDouble() / l.size } ?: Double.NaN }
+            val prd = DoubleArray(25) { c -> byCell[c]?.let { l -> l.sumOf { pred(it) } / l.size } ?: Double.NaN }
+            println("== $seq: detected share observed / predicted (rows ISO, columns shutter)")
+            println("          " + HowToSense.DENS.joinToString("") { "%-13s".format("1/$it") })
+            for (g in 0 until 5) println("  %5d   ".format(Duel.ISOS[g]) + (0 until 5).joinToString("") { sj -> "%.2f / %.2f  ".format(obs[g * 5 + sj], prd[g * 5 + sj]) })
+            val ro = (0 until 25).sortedByDescending { obs[it] }; val rp = (0 until 25).sortedByDescending { prd[it] }
+            println("  best observed:  " + ro.take(4).joinToString { "${name(it)} %.3f".format(obs[it]) })
+            println("  best predicted: " + rp.take(4).joinToString { "${name(it)} %.3f".format(prd[it]) })
+            println("  observed share of the predicted best: %.3f (observed best %.3f)".format(obs[rp[0]], obs[ro[0]]))
+            println("  Spearman over the 25 cells %.2f; mean |observed - predicted| %.3f".format(spearman(obs, prd),
+                (0 until 25).map { abs(obs[it] - prd[it]) }.average()))
+            for (sj in 0 until 5) {
+                val l = ss.filter { it.cell % 5 == sj }
+                println("    1/%-4d n %5d  observed %.3f predicted %.3f  median blur %.4f".format(HowToSense.DENS[sj], l.size,
+                    l.count { it.hit }.toDouble() / l.size, l.sumOf { pred(it) } / l.size, HowToSense.median(l.map { it.blur })))
+            }
+        }
+        fun calib(label: String, lo: DoubleArray, f: (Sample) -> Double) {
+            println("== calibration by $label bin (all lightings): lower edge, n, observed, predicted")
+            for (b in lo.indices) {
+                val l = all.filter { HowToSense.Curve.binOf(lo, f(it)) == b }
+                if (l.isEmpty()) continue
+                println("  %8.4f %6d  %.3f  %.3f".format(lo[b], l.size, l.count { it.hit }.toDouble() / l.size, l.sumOf { pred(it) } / l.size))
+            }
+        }
+        calib("blur", curve.blurLo) { it.blur }
+        calib("brightness", curve.brightLo) { it.bright }
+        calib("clip", curve.clipLo) { it.clip }
+    }
+
     @JvmStatic
     fun main(args: Array<String>) {
+        if (args.getOrNull(1) == "--predict") { predict(File(args[0]), File(args[2])); return }
         if (args.getOrNull(1) == "--bench") { bench(File(args[0]), File(args[2]), File(args[3]), args[4].toDouble()); return }
         if (args.getOrNull(1) == "--gyrorecord") { gyroCheckRecord(File(args[0])); return }
         if (args.getOrNull(1) == "--rangecheck") { rangeCheck(File(args[0]), listOf(3, 5)); return }
