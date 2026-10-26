@@ -3793,19 +3793,16 @@ class MeasurementController(
 
     /** Luma of a formed lane at half resolution (320x320 for the 640 input), divided by its
      *  mean so a base-gain change between frames does not look like motion. */
-    /** Lane [lane]'s rows [top, top + HowToSense.H) as packed ARGB, quantised as the saved
-     *  images are (ParallelRawCandidateSource.packArgbKotlin). */
-    private fun tensorArgbRows(t: Exp21TensorResult, lane: Int, top: Int, imgsz: Int = 640): IntArray {
+    /** Lane [lane]'s rows [top, top + HowToSense.H) as float r, g, b; HowToSense.pictureRows
+     *  quantises them as the saved images are (ParallelRawCandidateSource.packArgbKotlin). */
+    private fun tensorRgbRows(t: Exp21TensorResult, lane: Int, top: Int, imgsz: Int = 640): FloatArray {
         val w = HowToSense.W; val h = HowToSense.H
         require(w == imgsz && top >= 0 && top + h <= imgsz)
         val buf = t.batch.input.duplicate().order(java.nio.ByteOrder.nativeOrder())
         buf.position((lane * imgsz * imgsz + top * imgsz) * 3 * 4)
         val f = FloatArray(w * h * 3)
         buf.asFloatBuffer().get(f)
-        fun q(v: Float) = (v * 255f).toInt().coerceIn(0, 255)
-        return IntArray(w * h) { p ->
-            (0xFF shl 24) or (q(f[3 * p]) shl 16) or (q(f[3 * p + 1]) shl 8) or q(f[3 * p + 2])
-        }
+        return f
     }
 
     private fun tensorGrayHalf(t: Exp21TensorResult, lane: Int, imgsz: Int = 640):
@@ -4279,6 +4276,11 @@ class MeasurementController(
                 "argmax over the 25 cells of E = sum over the 16x12 grid of map weight x curve(blur, " +
                 "brightness) x clip factor; moves only when E gains more than the curve's standard error")
             .put("curve", curve.note)
+            .put("choice_timing", "picture, stats (all grid cells) and the speeds of the map's flow " +
+                "cells before this frame's detections run on 4 threads while the detector runs; the " +
+                "cells this frame's detections add are measured after; same choice as serial " +
+                "(2026-10-26). ms_parts: background = that part's wall time, wait = time the frame " +
+                "waited for it")
             .put("two_trace", "recorded in dets.jsonl two_trace, not in the output")
             .put("out_conf", V.OUT_THR).put("weak_conf", V.WEAK_LO)
             .put("seen_iou", Duel.SEEN_IOU).put("cluster_iou", 0.5)
@@ -4326,6 +4328,13 @@ class MeasurementController(
             val s = v.sorted(); val m = s.size
             return if (m % 2 == 1) s[m / 2] else 0.5 * (s[m / 2 - 1] + s[m / 2])
         }
+        // How-to-Sense's detection-free part (picture, stats, speeds) runs on these threads while
+        // the detector runs: one lead and four workers (see 2a below).
+        val chooseLead = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val chooseWork = java.util.concurrent.Executors.newFixedThreadPool(4)
+        class PreChoice(val pic: DoubleArray, val picMs: Double, val flow: HowToSense.Flow?,
+                        val raw: DoubleArray?, val tried: BooleanArray?, val st: HowToSense.Stats?,
+                        val flowStatsMs: Double, val totalMs: Double)
 
         try {
             var f = 0
@@ -4385,6 +4394,56 @@ class MeasurementController(
                 // the same digital residual on each, one batch.
                 val tensor = src.formExplicitBurstTensor(frames, laneN, DoubleArray(n) { ratio })
                 stepClock.formed()
+                // ---- 2a. How-to-Sense's part that needs no detection, started before the
+                // detector and joined at 2: the base picture, its stats on every grid cell (the
+                // choice reads only weighted cells, whose values do not depend on which others are
+                // computed), and the speeds of the cells the map flows on before this frame's
+                // detections. Cells those detections add are measured at 2; each cell's speed is
+                // its own, so the choice is exactly the serial one's.
+                val mp0 = tensor.batch.transforms[0]
+                val top = mp0.padY.toInt()
+                val curCell = HowToSense.cell(gIdx, sBase)
+                val expo = HowToSense.exposure(curCell)
+                val ts = metas[0].timestamp
+                val pp = prevPic
+                val flowGain = expo / prevExpo
+                val flowDt = (ts - prevTs) / 1e9
+                val wBefore = map.weights()
+                val pre = chooseLead.submit(java.util.concurrent.Callable {
+                    val tPre0 = now()
+                    val rgb = tensorRgbRows(tensor, 0, top)
+                    val pic = DoubleArray(HowToSense.W * HowToSense.H)
+                    val band = HowToSense.H / 4
+                    val picJobs = (1 until 4).map { j ->
+                        chooseWork.submit(Runnable { HowToSense.pictureRows(rgb, pic, j * band until (j + 1) * band) })
+                    }
+                    HowToSense.pictureRows(rgb, pic, 0 until band)
+                    picJobs.forEach { it.get() }
+                    val picMs = ms(tPre0)
+                    if (pp == null) PreChoice(pic, picMs, null, null, null, null, 0.0, ms(tPre0)) else {
+                        val tFs0 = now()
+                        val flow = HowToSense.Flow(pp, flowGain, pic, flowDt)
+                        val tried = HowToSense.flowCells(wBefore)
+                        val cells = (0 until HowToSense.N).filter { tried[it] }
+                        val raw = DoubleArray(HowToSense.N) { Double.NaN }
+                        val jobs = (0 until 3).map { j ->
+                            chooseWork.submit(Runnable { for (i in j until cells.size step 3) raw[cells[i]] = flow.cellSpeed(cells[i]) })
+                        }
+                        // Stats in two halves of the grid, one on the fourth worker; each grid
+                        // cell's values are its own, so the halves join without a change.
+                        val upperHalf = BooleanArray(HowToSense.N) { it < HowToSense.N / 2 }
+                        val lowerJob = chooseWork.submit(java.util.concurrent.Callable {
+                            HowToSense.stats(pic, curCell, BooleanArray(HowToSense.N) { !upperHalf[it] })
+                        })
+                        val upper = HowToSense.stats(pic, curCell, upperHalf)
+                        val lower = lowerJob.get()
+                        fun join(a: Array<DoubleArray>, b: Array<DoubleArray>) =
+                            Array(25) { c -> DoubleArray(HowToSense.N) { k -> if (upperHalf[k]) a[c][k] else b[c][k] } }
+                        val st = HowToSense.Stats(join(upper.bright, lower.bright), join(upper.clip, lower.clip))
+                        jobs.forEach { it.get() }
+                        PreChoice(pic, picMs, flow, raw, tried, st, ms(tFs0), ms(tPre0))
+                    }
+                })
                 val dets = tfl.detectTensorBatchOptimized(tensor.batch)
                 stepClock.detected()
                 val inferMs = tfl.lastRunMs + tfl.lastDecodeMs
@@ -4519,34 +4578,32 @@ class MeasurementController(
                 // ---- 2 (for the next frame). How-to-Sense: the next base from this base picture,
                 // the speeds since the previous base and the object map (this frame included).
                 val tChoose0 = now()
-                val mp0 = tensor.batch.transforms[0]
-                val top = mp0.padY.toInt()
                 fun toPic(b: DoubleArray) = doubleArrayOf(b[0] * mp0.scale + mp0.padX, b[1] * mp0.scale + mp0.padY - top,
                     b[2] * mp0.scale + mp0.padX, b[3] * mp0.scale + mp0.padY - top)
                 for (d in dets[0]) if (d.classId in V.VEH && d.confidence >= V.OUT_THR)
                     map.add(toPic(DoubleArray(4) { d.xyxy[it].toDouble() }))
                 for (b in nbMapB) map.add(toPic(b))
-                val tPic0 = now()
-                val pic = HowToSense.picture(tensorArgbRows(tensor, 0, top))
-                val picMs = ms(tPic0)
-                val curCell = HowToSense.cell(gIdx, sBase)
-                val expo = HowToSense.exposure(curCell)
-                val ts = metas[0].timestamp
+                val tWait0 = now()
+                val pc = pre.get()
+                val waitMs = ms(tWait0)
+                val pic = pc.pic
                 val choiceNote = JSONObject().put("from_frame", f)
                 var moved = false
-                val pp = prevPic
                 if (pp == null) {
                     choiceNote.put("rule", "no previous base: keep")
                 } else {
                     val wgt = map.weights()
-                    val tFlow0 = now()
-                    val (speed, nMeasured, nTried) = HowToSense.speedForMap(pp, expo / prevExpo, pic, (ts - prevTs) / 1e9, wgt)
-                    val speedMs = ms(tFlow0)
-                    val tStats0 = now()
-                    val st = HowToSense.stats(pic, curCell, BooleanArray(HowToSense.N) { wgt[it] > 0.0 })
-                    val statsMs = ms(tStats0)
-                    val ch = HowToSense.choose(curve, st, speed, wgt, map.sizes(), curCell)
-                    choiceNote.put("ms_parts", JSONObject().put("picture", picMs).put("speed", speedMs).put("stats", statsMs))
+                    // Cells this frame's detections brought into the flow set.
+                    val sel = HowToSense.flowCells(wgt)
+                    val late = (0 until HowToSense.N).filter { sel[it] && !pc.tried!![it] }
+                    val tLate0 = now()
+                    for (k in late) pc.raw!![k] = pc.flow!!.cellSpeed(k)
+                    val lateMs = ms(tLate0)
+                    val (speed, nMeasured, nTried) = HowToSense.speedForMap(pc.raw!!, wgt)
+                    val ch = HowToSense.choose(curve, pc.st!!, speed, wgt, map.sizes(), curCell)
+                    choiceNote.put("ms_parts", JSONObject().put("picture", pc.picMs)
+                        .put("speed_stats", pc.flowStatsMs).put("background", pc.totalMs)
+                        .put("wait", waitMs).put("late_cells", late.size).put("late", lateMs))
                         .put("flow_cells_tried", nTried)
                     moved = ch.next != curCell
                     pol.baseG = ch.next / 5
@@ -4667,6 +4724,7 @@ class MeasurementController(
                 f++
             }
         } finally {
+            runCatching { chooseLead.shutdownNow(); chooseWork.shutdownNow() }
             runCatching { raw.stopFastCapture() }
             runCatching { src.shutdown() }
         }

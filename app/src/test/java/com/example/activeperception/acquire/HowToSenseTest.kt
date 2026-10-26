@@ -128,6 +128,51 @@ class HowToSenseTest {
         assertEquals(60.0, HowToSense.median(v.toList()), 3.0)
     }
 
+    @Test fun speedsMeasuredAheadGiveTheSerialResult() {
+        // Duel2 measures the flow cells of the map before a frame's detections while the
+        // detector runs, then the cells those detections add: the same speeds as measuring
+        // the final map's cells at once.
+        val w = HowToSense.W
+        val prev = DoubleArray(w * HowToSense.H) { blobScene((it % w).toDouble(), (it / w).toDouble()) }
+        val cur = DoubleArray(w * HowToSense.H) { blobScene((it % w).toDouble() - 6, (it / w).toDouble()) }
+        val before = DoubleArray(n) { if (it in 70 until 102) 1.0 else 0.0 }
+        val after = DoubleArray(n) { if (it in 60 until 110) (it - 50).toDouble() else 0.0 }
+        val serial = HowToSense.speedForMap(prev, 1.0, cur, 0.1, after)
+        val fl = HowToSense.Flow(prev, 1.0, cur, 0.1)
+        val tried = HowToSense.flowCells(before)
+        val raw = DoubleArray(n) { if (tried[it]) fl.cellSpeed(it) else Double.NaN }
+        val sel = HowToSense.flowCells(after)
+        val late = (0 until n).filter { sel[it] && !tried[it] }
+        assertTrue(late.isNotEmpty() && late.size < sel.count { it })
+        for (k in late) raw[k] = fl.cellSpeed(k)
+        val ahead = HowToSense.speedForMap(raw, after)
+        assertArrayEquals(serial.first, ahead.first, 0.0)
+        assertEquals(serial.second, ahead.second)
+        assertEquals(serial.third, ahead.third)
+    }
+
+    @Test fun pictureRowsFromFloatsMatchThePackedPath() {
+        val px = HowToSense.W * HowToSense.H
+        val rgb = FloatArray(px * 3) { ((it * 37L) % 1001).toFloat() / 1000f - 0.0005f }
+        fun q(v: Float) = (v * 255f).toInt().coerceIn(0, 255)
+        val argb = IntArray(px) { p -> (0xFF shl 24) or (q(rgb[3 * p]) shl 16) or (q(rgb[3 * p + 1]) shl 8) or q(rgb[3 * p + 2]) }
+        val rows = DoubleArray(px)
+        HowToSense.pictureRows(rgb, rows, 0 until 200)
+        HowToSense.pictureRows(rgb, rows, 200 until HowToSense.H)
+        assertArrayEquals(HowToSense.picture(argb), rows, 0.0)
+    }
+
+    @Test fun statsOnEveryCellMatchTheWeightedOnes() {
+        val pic = HowToSense.picture(IntArray(HowToSense.W * HowToSense.H) { (0xFF shl 24) or ((it * 7919) and 0xFFFFFF) })
+        val cells = BooleanArray(n) { it % 5 == 2 }
+        val all = HowToSense.stats(pic, HowToSense.cell(3, 1))
+        val some = HowToSense.stats(pic, HowToSense.cell(3, 1), cells)
+        for (c in 0 until 25) for (k in 0 until n) if (cells[k]) {
+            assertEquals(some.bright[c][k], all.bright[c][k], 0.0)
+            assertEquals(some.clip[c][k], all.clip[c][k], 0.0)
+        }
+    }
+
     @Test fun speedFollowsATurnSizedShift() {
         // A Limo turn: ~450 px/s, so ~60 px between base pictures 0.13 s apart.
         fun scene(x: Double, y: Double) = blobScene(x, y)

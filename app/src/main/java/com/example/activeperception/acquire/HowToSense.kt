@@ -60,6 +60,19 @@ object HowToSense {
         }
     }
 
+    /** [picture]'s rows [rows] into [out], straight from the detector's float input [rgb] (r, g, b
+     *  in 0..1 per pixel, [W] x [H]): each channel is quantized to 8 bits as the packed-ARGB path
+     *  does, so the values are [picture]'s. Disjoint row ranges can be filled on separate threads. */
+    fun pictureRows(rgb: FloatArray, out: DoubleArray, rows: IntRange) {
+        for (y in rows) for (x in 0 until W) {
+            val p = y * W + x
+            val r = (rgb[3 * p] * 255f).toInt().coerceIn(0, 255)
+            val g = (rgb[3 * p + 1] * 255f).toInt().coerceIn(0, 255)
+            val b = (rgb[3 * p + 2] * 255f).toInt().coerceIn(0, 255)
+            out[p] = (LIN[r] + LIN[g] + LIN[b]) / 3.0
+        }
+    }
+
     /** Per lattice cell and grid cell: mean of min(L r, 1), and the share of pixels with
      *  L r >= [CLIP], where r = the lattice cell's exposure over the base's. */
     class Stats(val bright: Array<DoubleArray>, val clip: Array<DoubleArray>)
@@ -112,29 +125,47 @@ object HowToSense {
      */
     fun speed(prev: DoubleArray, gain: Double, cur: DoubleArray, dtSec: Double,
               need: BooleanArray, pts: Int = 4, levels: Int = FLOW_LEVELS): Pair<DoubleArray, Int> {
-        val hw = W / 2; val hh = H / 2
-        fun half(p: DoubleArray, g: Double): FloatArray = FloatArray(hw * hh) { i ->
-            val x = 2 * (i % hw); val y = 2 * (i / hw)
-            (0.25 * (min(p[y * W + x] * g, 1.0) + min(p[y * W + x + 1] * g, 1.0) +
-                min(p[(y + 1) * W + x] * g, 1.0) + min(p[(y + 1) * W + x + 1] * g, 1.0))).toFloat()
+        val fl = Flow(prev, gain, cur, dtSec, pts, levels)
+        return fillSpeeds(DoubleArray(N) { if (need[it]) fl.cellSpeed(it) else Double.NaN }, need)
+    }
+
+    /** The speed flow between two base pictures (see [speed]): the pyramids are built once and
+     *  each grid cell is measured on its own, so cells can be measured in any order, on any
+     *  thread (the pyramids are only read), and [fillSpeeds] gives [speed]'s result. */
+    class Flow(prev: DoubleArray, gain: Double, cur: DoubleArray, private val dtSec: Double,
+               private val pts: Int = 4, levels: Int = FLOW_LEVELS) {
+        private val pa: List<SparseFlow.Img>
+        private val pb: List<SparseFlow.Img>
+        init {
+            val hw = W / 2; val hh = H / 2
+            fun half(p: DoubleArray, g: Double): FloatArray = FloatArray(hw * hh) { i ->
+                val x = 2 * (i % hw); val y = 2 * (i / hw)
+                (0.25 * (min(p[y * W + x] * g, 1.0) + min(p[y * W + x + 1] * g, 1.0) +
+                    min(p[(y + 1) * W + x] * g, 1.0) + min(p[(y + 1) * W + x + 1] * g, 1.0))).toFloat()
+            }
+            val a = half(prev, gain); val b = half(cur, 1.0)
+            val m = b.average().toFloat().coerceAtLeast(1e-6f)
+            for (i in a.indices) { a[i] /= m; b[i] /= m }
+            pa = SparseFlow.pyramid(SparseFlow.Img(hw, hh, a), levels)
+            pb = SparseFlow.pyramid(SparseFlow.Img(hw, hh, b), levels)
         }
-        val a = half(prev, gain); val b = half(cur, 1.0)
-        val m = b.average().toFloat().coerceAtLeast(1e-6f)
-        for (i in a.indices) { a[i] /= m; b[i] /= m }
-        val pa = SparseFlow.pyramid(SparseFlow.Img(hw, hh, a), levels)
-        val pb = SparseFlow.pyramid(SparseFlow.Img(hw, hh, b), levels)
-        val v = DoubleArray(N) { Double.NaN }
-        val hc = CS / 2
-        var measured = 0
-        for (k in 0 until N) {
-            if (!need[k]) continue
+
+        /** Grid cell [k]'s speed, px/s; NaN when no point could be tracked. */
+        fun cellSpeed(k: Int): Double {
+            val hc = CS / 2
             val x0 = (k % GX) * hc; val y0 = (k / GX) * hc
             val p = SparseFlow.corners(pb[0], x0.toDouble(), y0.toDouble(), (x0 + hc - 1).toDouble(), (y0 + hc - 1).toDouble(), pts)
             val mags = SparseFlow.track(pa, pb, p).filterNotNull().map { 2.0 * hypot(it[0], it[1]) }
-            if (mags.isEmpty()) continue
-            v[k] = median(mags) / dtSec
-            measured++
+            return if (mags.isEmpty()) Double.NaN else median(mags) / dtSec
         }
+    }
+
+    /** [speed]'s result from per-cell speeds [raw] (NaN = untracked) that cover every [need]
+     *  cell: needed cells keep theirs, untracked needed cells take the median of the tracked
+     *  ones (0 if none), all others are NaN. Returns the speeds and how many were tracked. */
+    fun fillSpeeds(raw: DoubleArray, need: BooleanArray): Pair<DoubleArray, Int> {
+        val v = DoubleArray(N) { if (need[it]) raw[it] else Double.NaN }
+        val measured = (0 until N).count { need[it] && !v[it].isNaN() }
         val fill = if (measured > 0) median((0 until N).filter { need[it] && !v[it].isNaN() }.map { v[it] }) else 0.0
         for (k in 0 until N) if (need[k] && v[k].isNaN()) v[k] = fill
         return v to measured
@@ -162,8 +193,16 @@ object HowToSense {
      *  is 0), how many cells were tracked successfully, and how many were tried. */
     fun speedForMap(prev: DoubleArray, gain: Double, cur: DoubleArray, dtSec: Double,
                     w: DoubleArray): Triple<DoubleArray, Int, Int> {
+        val fl = Flow(prev, gain, cur, dtSec)
         val sel = flowCells(w)
-        val (v, measured) = speed(prev, gain, cur, dtSec, sel)
+        return speedForMap(DoubleArray(N) { if (sel[it]) fl.cellSpeed(it) else Double.NaN }, w)
+    }
+
+    /** [speedForMap] from per-cell speeds [raw] ([Flow.cellSpeed], NaN = untracked) measured
+     *  at least on [flowCells] of [w]; cells beyond those are ignored. */
+    fun speedForMap(raw: DoubleArray, w: DoubleArray): Triple<DoubleArray, Int, Int> {
+        val sel = flowCells(w)
+        val (v, measured) = fillSpeeds(raw, sel)
         val got = (0 until N).filter { sel[it] && !v[it].isNaN() }.map { v[it] }
         val fill = if (got.isNotEmpty()) median(got) else 0.0
         for (k in 0 until N) if (w[k] > 0.0 && v[k].isNaN()) v[k] = fill
