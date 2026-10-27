@@ -1751,11 +1751,12 @@ class MeasurementActivity : AppCompatActivity() {
         // every moment's yaw.
         R.id.expCollect to LapPreset("counterfactual record, Limo", run = "collect_cf", cap = 225, delayS = 5),
         // Record tab: the counterfactual record with tracking-updated sums and digital ISO
-        // 3200/6400 (collect_cf2, 2026-10-28; 225 moments) with the pressed lighting in every
-        // manifest, as Main does. The plain collect_cf stays on the Old tab.
-        R.id.expRecordBright to LapPreset("record, bright", run = "collect_cf2", cap = 225, delayS = 5, lighting = "bright"),
-        R.id.expRecordDim to LapPreset("record, dim", run = "collect_cf2", cap = 225, delayS = 5, lighting = "dim"),
-        R.id.expRecordDark to LapPreset("record, dark", run = "collect_cf2", cap = 225, delayS = 5, lighting = "dark"),
+        // 3200/6400 (collect_cf2, 2026-10-28) with the pressed lighting in every manifest, as
+        // Main does: 150 moments (~1.7 s each, ~4.5 min, ~13 laps of the slowed Limo; the first
+        // bright record has 225). The plain collect_cf stays on the Old tab.
+        R.id.expRecordBright to LapPreset("record, bright", run = "collect_cf2", cap = 150, delayS = 5, lighting = "bright"),
+        R.id.expRecordDim to LapPreset("record, dim", run = "collect_cf2", cap = 150, delayS = 5, lighting = "dim"),
+        R.id.expRecordDark to LapPreset("record, dark", run = "collect_cf2", cap = 150, delayS = 5, lighting = "dark"),
         // Phone AE alone for ~40-50 s (300 frames, some 3-4 laps), made 2026-10-16 to measure
         // what AE chooses in a lighting the counterfactual record has but no AE run had.
         R.id.expAeCollect to LapPreset("phone AE alone, Limo", run = "ae_phone", cap = 300, delayS = 5)
