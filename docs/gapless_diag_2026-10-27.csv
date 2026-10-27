@@ -1,0 +1,1049 @@
+IDS,0;1;2;3
+CAMERA,0,physical_of=,facing=back,focal_mm=6.5,hw_level=3,caps=cap0;CONSTRAINED_HIGH_SPEED_VIDEO;RAW;cap7;cap4;READ_SENSOR_SETTINGS;MANUAL_SENSOR;BURST_CAPTURE;MANUAL_POST_PROCESSING;cap19;cap18;cap20;LOGICAL_MULTI_CAMERA,exposure_range_ns=[83542, 176094495],max_frame_duration_ns=255142810,iso_range=[9, 3200],pixel_array=4080x3060,physical_ids=2;5;6;7,tonemap_modes=0;1;2,nr_modes=0;1;2;3;4,edge_modes=1;2;0;3
+STREAM,0,default,RAW_SENSOR,4080x3060,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,RAW10,4080x3060,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,YUV_420_888,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,4000x3000,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,3648x2736,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,2992x2992,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,3840x2160,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,3648x2052,min_frame_ns=20000000,stall_ns=0
+STREAM,0,default,YUV_420_888,2736x2736,min_frame_ns=20000000,stall_ns=0
+STREAM,0,default,YUV_420_888,4000x1848,min_frame_ns=20000000,stall_ns=0
+STREAM,0,default,YUV_420_888,3648x1684,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,YUV_420_888,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,YUV_420_888,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,YUV_420_888,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,YUV_420_888,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,YUV_420_888,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,YUV_420_888,176x144,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,4000x3000,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,3648x2736,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,2992x2992,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,3840x2160,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,3648x2052,min_frame_ns=20000000,stall_ns=0
+STREAM,0,default,PRIVATE,2736x2736,min_frame_ns=20000000,stall_ns=0
+STREAM,0,default,PRIVATE,4000x1848,min_frame_ns=20000000,stall_ns=0
+STREAM,0,default,PRIVATE,3648x1684,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,PRIVATE,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,PRIVATE,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,PRIVATE,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,PRIVATE,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,0,default,PRIVATE,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,0,default,PRIVATE,176x144,min_frame_ns=33333333,stall_ns=0
+HIGH_SPEED,0,1280x720,fps=[30, 120];[120, 120];[30, 240];[240, 240]
+HIGH_SPEED,0,1920x1080,fps=[30, 120];[120, 120];[30, 240];[240, 240]
+CAMERA,2,physical_of=0,facing=back,focal_mm=2.2,hw_level=0,caps=cap0;RAW;CONSTRAINED_HIGH_SPEED_VIDEO;MANUAL_POST_PROCESSING;cap4;READ_SENSOR_SETTINGS;MANUAL_SENSOR;BURST_CAPTURE;cap7;cap18;cap19;cap20,exposure_range_ns=[83542, 176094495],max_frame_duration_ns=176159515,iso_range=[15, 3200],pixel_array=4080x3060,physical_ids=,tonemap_modes=0;1;2,nr_modes=0;1;2;3;4,edge_modes=1;2;0;3
+STREAM,2,default,RAW_SENSOR,4080x3060,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,RAW10,4080x3060,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,YUV_420_888,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,4000x3000,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,2992x2992,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,3840x2160,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,4000x1848,min_frame_ns=20000000,stall_ns=0
+STREAM,2,default,YUV_420_888,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,YUV_420_888,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,YUV_420_888,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,YUV_420_888,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,YUV_420_888,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,YUV_420_888,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,YUV_420_888,176x144,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,4000x3000,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,2992x2992,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,3840x2160,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,4000x1848,min_frame_ns=20000000,stall_ns=0
+STREAM,2,default,PRIVATE,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,PRIVATE,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,PRIVATE,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,PRIVATE,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,PRIVATE,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,2,default,PRIVATE,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,2,default,PRIVATE,176x144,min_frame_ns=33333333,stall_ns=0
+HIGH_SPEED,2,1280x720,fps=[30, 120];[120, 120];[30, 240];[240, 240]
+HIGH_SPEED,2,1920x1080,fps=[30, 120];[120, 120];[30, 240];[240, 240]
+STREAM,2,max_resolution,YUV_420_888,1920x1080,min_frame_ns=16666666,stall_ns=13478400
+STREAM,2,max_resolution,PRIVATE,1920x1080,min_frame_ns=16666666,stall_ns=13478400
+CAMERA,5,physical_of=0,facing=back,focal_mm=6.5,hw_level=3,caps=cap0;CONSTRAINED_HIGH_SPEED_VIDEO;RAW;cap7;cap4;READ_SENSOR_SETTINGS;MANUAL_SENSOR;BURST_CAPTURE;MANUAL_POST_PROCESSING;cap19;cap18;cap20,exposure_range_ns=[55006, 255098784],max_frame_duration_ns=255142810,iso_range=[9, 3200],pixel_array=4080x3060,physical_ids=,tonemap_modes=0;1;2,nr_modes=0;1;2;3;4,edge_modes=1;2;0;3
+STREAM,5,default,RAW_SENSOR,4080x3060,min_frame_ns=33322225,stall_ns=0
+STREAM,5,default,RAW10,4080x3060,min_frame_ns=33322225,stall_ns=0
+STREAM,5,default,YUV_420_888,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,2992x2992,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,3840x2160,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,4000x1848,min_frame_ns=20000000,stall_ns=0
+STREAM,5,default,YUV_420_888,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,5,default,YUV_420_888,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,5,default,YUV_420_888,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,5,default,YUV_420_888,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,5,default,YUV_420_888,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,5,default,YUV_420_888,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,YUV_420_888,176x144,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,2992x2992,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,3840x2160,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,4000x1848,min_frame_ns=20000000,stall_ns=0
+STREAM,5,default,PRIVATE,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,5,default,PRIVATE,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,5,default,PRIVATE,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,5,default,PRIVATE,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,5,default,PRIVATE,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,5,default,PRIVATE,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,5,default,PRIVATE,176x144,min_frame_ns=33333333,stall_ns=0
+HIGH_SPEED,5,1280x720,fps=[30, 120];[120, 120];[30, 240];[240, 240]
+HIGH_SPEED,5,1920x1080,fps=[30, 120];[120, 120];[30, 240];[240, 240]
+CAMERA,6,physical_of=0,facing=back,focal_mm=7.0,hw_level=0,caps=cap0;CONSTRAINED_HIGH_SPEED_VIDEO;RAW;MANUAL_SENSOR;MANUAL_POST_PROCESSING;cap4;READ_SENSOR_SETTINGS;BURST_CAPTURE;cap18;cap19;cap20,exposure_range_ns=[32611, 214436527],max_frame_duration_ns=214502507,iso_range=[23, 3200],pixel_array=3648x2736,physical_ids=,tonemap_modes=0;1;2,nr_modes=0;1;2;3;4,edge_modes=1;2;0;3
+STREAM,6,default,RAW_SENSOR,3648x2736,min_frame_ns=33222591,stall_ns=0
+STREAM,6,default,RAW12,3648x2736,min_frame_ns=33222591,stall_ns=0
+STREAM,6,default,YUV_420_888,3648x2736,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,YUV_420_888,3648x2052,min_frame_ns=20000000,stall_ns=0
+STREAM,6,default,YUV_420_888,2736x2736,min_frame_ns=20000000,stall_ns=0
+STREAM,6,default,YUV_420_888,3648x1684,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,YUV_420_888,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,YUV_420_888,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,6,default,YUV_420_888,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,6,default,YUV_420_888,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,6,default,YUV_420_888,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,6,default,YUV_420_888,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,YUV_420_888,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,YUV_420_888,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,6,default,YUV_420_888,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,YUV_420_888,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,YUV_420_888,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,YUV_420_888,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,YUV_420_888,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,YUV_420_888,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,YUV_420_888,176x144,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,3648x2736,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,3648x2052,min_frame_ns=20000000,stall_ns=0
+STREAM,6,default,PRIVATE,2736x2736,min_frame_ns=20000000,stall_ns=0
+STREAM,6,default,PRIVATE,3648x1684,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,6,default,PRIVATE,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,6,default,PRIVATE,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,6,default,PRIVATE,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,6,default,PRIVATE,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,6,default,PRIVATE,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,6,default,PRIVATE,176x144,min_frame_ns=33333333,stall_ns=0
+HIGH_SPEED,6,1280x720,fps=[30, 120];[120, 120];[30, 240];[240, 240]
+HIGH_SPEED,6,1920x1080,fps=[30, 120];[120, 120];[30, 240];[240, 240]
+CAMERA,7,physical_of=0,facing=back,focal_mm=18.6,hw_level=0,caps=cap0;CONSTRAINED_HIGH_SPEED_VIDEO;RAW;MANUAL_SENSOR;MANUAL_POST_PROCESSING;cap4;READ_SENSOR_SETTINGS;BURST_CAPTURE;cap18;cap19;cap20,exposure_range_ns=[48309, 273984151],max_frame_duration_ns=274127466,iso_range=[25, 3200],pixel_array=4080x3060,physical_ids=,tonemap_modes=0;1;2,nr_modes=0;1;2;3;4,edge_modes=1;2;0;3
+STREAM,7,default,RAW_SENSOR,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,RAW10,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,2992x2992,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,3840x2160,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,4000x1848,min_frame_ns=20000000,stall_ns=0
+STREAM,7,default,YUV_420_888,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,7,default,YUV_420_888,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,7,default,YUV_420_888,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,7,default,YUV_420_888,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,7,default,YUV_420_888,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,7,default,YUV_420_888,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,YUV_420_888,176x144,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,4080x3060,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,2992x2992,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,3840x2160,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,4000x1848,min_frame_ns=20000000,stall_ns=0
+STREAM,7,default,PRIVATE,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,7,default,PRIVATE,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,7,default,PRIVATE,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,7,default,PRIVATE,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,7,default,PRIVATE,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,7,default,PRIVATE,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,7,default,PRIVATE,176x144,min_frame_ns=33333333,stall_ns=0
+HIGH_SPEED,7,1280x720,fps=[30, 120];[120, 120];[30, 240];[240, 240]
+HIGH_SPEED,7,1920x1080,fps=[30, 120];[120, 120];[30, 240];[240, 240]
+STREAM,7,max_resolution,YUV_420_888,1920x1080,min_frame_ns=33333333,stall_ns=13478400
+STREAM,7,max_resolution,PRIVATE,1920x1080,min_frame_ns=33333333,stall_ns=13478400
+CAMERA,1,physical_of=,facing=front,focal_mm=3.3,hw_level=1,caps=cap0;CONSTRAINED_HIGH_SPEED_VIDEO;RAW;MANUAL_SENSOR;MANUAL_POST_PROCESSING;cap4;READ_SENSOR_SETTINGS;BURST_CAPTURE;cap18;cap19;cap20,exposure_range_ns=[72848, 417188152],max_frame_duration_ns=417302879,iso_range=[25, 3200],pixel_array=4000x3000,physical_ids=,tonemap_modes=0;1;2,nr_modes=0;1;2;3;4,edge_modes=1;2;0;3
+STREAM,1,default,RAW_SENSOR,4000x3000,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,RAW10,4000x3000,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,4000x3000,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,2992x2992,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,3840x2160,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,4000x1848,min_frame_ns=20000000,stall_ns=0
+STREAM,1,default,YUV_420_888,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,1,default,YUV_420_888,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,1,default,YUV_420_888,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,1,default,YUV_420_888,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,1,default,YUV_420_888,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,1,default,YUV_420_888,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,YUV_420_888,176x144,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,4000x3000,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,4000x2252,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,2992x2992,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,3840x2160,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,4000x1848,min_frame_ns=20000000,stall_ns=0
+STREAM,1,default,PRIVATE,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,1,default,PRIVATE,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,1,default,PRIVATE,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,1,default,PRIVATE,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,1,default,PRIVATE,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,1,default,PRIVATE,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,1,default,PRIVATE,176x144,min_frame_ns=33333333,stall_ns=0
+HIGH_SPEED,1,1280x720,fps=[30, 120];[120, 120]
+HIGH_SPEED,1,1920x1080,fps=[30, 120];[120, 120]
+CAMERA,3,physical_of=,facing=front,focal_mm=2.9,hw_level=1,caps=cap0;CONSTRAINED_HIGH_SPEED_VIDEO;RAW;MANUAL_SENSOR;MANUAL_POST_PROCESSING;cap4;READ_SENSOR_SETTINGS;BURST_CAPTURE;cap18;cap19;cap20,exposure_range_ns=[49030, 338965373],max_frame_duration_ns=339080100,iso_range=[25, 3200],pixel_array=3056x2296,physical_ids=,tonemap_modes=0;1;2,nr_modes=0;1;2;3;4,edge_modes=1;2;0;3
+STREAM,3,default,RAW_SENSOR,3056x2296,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,RAW10,3056x2296,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,3056x2296,min_frame_ns=20000000,stall_ns=0
+STREAM,3,default,YUV_420_888,3056x1720,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,2288x2288,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,3056x1412,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,YUV_420_888,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,YUV_420_888,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,YUV_420_888,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,YUV_420_888,1440x980,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,YUV_420_888,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,YUV_420_888,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,YUV_420_888,176x144,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,3056x2296,min_frame_ns=20000000,stall_ns=0
+STREAM,3,default,PRIVATE,3056x1720,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,2288x2288,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,3056x1412,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,2560x1440,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,1920x1440,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,PRIVATE,2336x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,PRIVATE,1920x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,PRIVATE,1440x1080,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,PRIVATE,1440x980,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,PRIVATE,1232x1008,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,1088x1088,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,1280x720,min_frame_ns=16666666,stall_ns=0
+STREAM,3,default,PRIVATE,960x720,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,720x480,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,640x480,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,640x360,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,352x288,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,320x240,min_frame_ns=33333333,stall_ns=0
+STREAM,3,default,PRIVATE,176x144,min_frame_ns=33333333,stall_ns=0
+HIGH_SPEED,3,1280x720,fps=[30, 120];[120, 120]
+HIGH_SPEED,3,1920x1080,fps=[30, 120];[120, 120]
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=exp,0,1218560799248945,,,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=exp,1,1218560815919986,16.671,12.504,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=exp,2,1218560832591236,16.671,12.505,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=exp,3,1218560849262486,16.671,12.505,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=exp,4,1218560865933736,16.671,12.505,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=exp,5,1218560882604778,16.671,12.504,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=exp,6,1218560899276028,16.671,12.505,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=exp,7,1218560915947278,16.671,12.505,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW_SENSOR 4080x3060,e240 fd=exp,reads=8,interval_med_ms=16.671,interval_min_ms=16.671,interval_max_ms=16.671,gap_med_ms=12.505,gap_max_ms=12.505,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=unset,0,1218561132672903,,,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=unset,1,1218561149344153,16.671,12.505,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=unset,2,1218561166015195,16.671,12.504,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=unset,3,1218561182686445,16.671,12.505,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=unset,4,1218561199357695,16.671,12.505,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=unset,5,1218561216028945,16.671,12.505,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=unset,6,1218561232699986,16.671,12.504,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e240 fd=unset,7,1218561249371236,16.671,12.505,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW_SENSOR 4080x3060,e240 fd=unset,reads=8,interval_med_ms=16.671,interval_min_ms=16.671,interval_max_ms=16.671,gap_med_ms=12.505,gap_max_ms=12.505,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=exp,0,1218561461931495,,,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=exp,1,1218561478602745,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=exp,2,1218561495273787,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=exp,3,1218561511945037,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=exp,4,1218561528616287,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=exp,5,1218561545287537,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=exp,6,1218561561958787,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=exp,7,1218561578629829,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW_SENSOR 4080x3060,e120 fd=exp,reads=8,interval_med_ms=16.671,interval_min_ms=16.671,interval_max_ms=16.671,gap_med_ms=8.338,gap_max_ms=8.338,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=unset,0,1218561795355454,,,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=unset,1,1218561812026704,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=unset,2,1218561828697954,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=unset,3,1218561845368995,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=unset,4,1218561862040245,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=unset,5,1218561878711495,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=unset,6,1218561895382745,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,e120 fd=unset,7,1218561912053787,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW_SENSOR 4080x3060,e120 fd=unset,reads=8,interval_med_ms=16.671,interval_min_ms=16.671,interval_max_ms=16.671,gap_med_ms=8.338,gap_max_ms=8.338,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=unset,0,1218562132944778,,,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=unset,1,1218562145450662,12.506,8.339,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=unset,2,1218562166287278,20.837,12.503,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=unset,3,1218562178793162,12.506,8.339,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=unset,4,1218562199629570,20.836,12.503,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=unset,5,1218562212135454,12.506,8.339,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=unset,6,1218562232972070,20.837,12.503,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=unset,7,1218562245477954,12.506,8.339,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW_SENSOR 4080x3060,alt fd=unset,reads=8,interval_med_ms=12.506,interval_min_ms=12.506,interval_max_ms=20.837,gap_med_ms=8.339,gap_max_ms=12.503,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=exp,0,1218562466368945,,,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=exp,1,1218562478874620,12.506,8.339,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=exp,2,1218562499711236,20.837,12.503,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=exp,3,1218562512217120,12.506,8.339,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=exp,4,1218562533053736,20.837,12.503,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=exp,5,1218562545559412,12.506,8.339,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=exp,6,1218562566396028,20.837,12.503,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW_SENSOR 4080x3060,alt fd=exp,7,1218562578901912,12.506,8.339,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW_SENSOR 4080x3060,alt fd=exp,reads=8,interval_med_ms=12.506,interval_min_ms=12.506,interval_max_ms=20.837,gap_med_ms=8.339,gap_max_ms=12.503,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 RAW10 4080x3060,e240 fd=exp,0,1218564032041028,,,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=exp,1,1218564048712278,16.671,12.505,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=exp,2,1218564065383320,16.671,12.504,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=exp,3,1218564082054570,16.671,12.505,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=exp,4,1218564098725820,16.671,12.505,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=exp,5,1218564115397070,16.671,12.505,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=exp,6,1218564132068320,16.671,12.505,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=exp,7,1218564148739361,16.671,12.504,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW10 4080x3060,e240 fd=exp,reads=8,interval_med_ms=16.671,interval_min_ms=16.671,interval_max_ms=16.671,gap_med_ms=12.505,gap_max_ms=12.505,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 RAW10 4080x3060,e240 fd=unset,0,1218564365464986,,,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=unset,1,1218564382136236,16.671,12.505,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=unset,2,1218564398807486,16.671,12.505,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=unset,3,1218564415478528,16.671,12.504,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=unset,4,1218564432149778,16.671,12.505,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=unset,5,1218564448821028,16.671,12.505,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=unset,6,1218564465492278,16.671,12.505,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e240 fd=unset,7,1218564482163320,16.671,12.504,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW10 4080x3060,e240 fd=unset,reads=8,interval_med_ms=16.671,interval_min_ms=16.671,interval_max_ms=16.671,gap_med_ms=12.505,gap_max_ms=12.505,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 RAW10 4080x3060,e120 fd=exp,0,1218564694723579,,,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=exp,1,1218564711394829,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=exp,2,1218564728066079,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=exp,3,1218564744737329,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=exp,4,1218564761408370,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=exp,5,1218564778079620,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=exp,6,1218564794750870,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=exp,7,1218564811422120,16.671,8.338,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW10 4080x3060,e120 fd=exp,reads=8,interval_med_ms=16.671,interval_min_ms=16.671,interval_max_ms=16.671,gap_med_ms=8.338,gap_max_ms=8.338,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 RAW10 4080x3060,e120 fd=unset,0,1218565028147745,,,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=unset,1,1218565044818787,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=unset,2,1218565061490037,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=unset,3,1218565078161287,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=unset,4,1218565094832537,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=unset,5,1218565111503579,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=unset,6,1218565128174829,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,e120 fd=unset,7,1218565144846079,16.671,8.338,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW10 4080x3060,e120 fd=unset,reads=8,interval_med_ms=16.671,interval_min_ms=16.671,interval_max_ms=16.671,gap_med_ms=8.338,gap_max_ms=8.338,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 RAW10 4080x3060,alt fd=unset,0,1218565365737070,,,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=unset,1,1218565378242954,12.506,8.339,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=unset,2,1218565399079361,20.836,12.503,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=unset,3,1218565411585245,12.506,8.339,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=unset,4,1218565432421861,20.837,12.503,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=unset,5,1218565444927745,12.506,8.339,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=unset,6,1218565465764153,20.836,12.503,4166,4166,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=unset,7,1218565478270037,12.506,8.339,8333,8333,unset,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW10 4080x3060,alt fd=unset,reads=8,interval_med_ms=12.506,interval_min_ms=12.506,interval_max_ms=20.837,gap_med_ms=8.339,gap_max_ms=12.503,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 RAW10 4080x3060,alt fd=exp,0,1218565699161028,,,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=exp,1,1218565711666912,12.506,8.339,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=exp,2,1218565732503320,20.836,12.503,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=exp,3,1218565745009204,12.506,8.339,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=exp,4,1218565765845820,20.837,12.503,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=exp,5,1218565778351704,12.506,8.339,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=exp,6,1218565799188320,20.837,12.503,4166,4166,4.167,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam0 RAW10 4080x3060,alt fd=exp,7,1218565811693995,12.506,8.339,8333,8333,8.333,16.667,398,15.913,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam0 RAW10 4080x3060,alt fd=exp,reads=8,interval_med_ms=12.506,interval_min_ms=12.506,interval_max_ms=20.837,gap_med_ms=8.339,gap_max_ms=12.503,skew_ms=15.913,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=exp,0,1218567332112808,,,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.785
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=exp,1,1218567348772391,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.818
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=exp,2,1218567365431766,16.659,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.835
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=exp,3,1218567382091349,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.820
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=exp,4,1218567398750933,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.857
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=exp,5,1218567415410516,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.914
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=exp,6,1218567432070099,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.920
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=exp,7,1218567448729683,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.892
+SUM,cam0 YUV_420_888 1920x1080,e240 fd=exp,reads=8,interval_med_ms=16.660,interval_min_ms=16.659,interval_max_ms=16.660,gap_med_ms=12.493,gap_max_ms=12.493,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=unset,0,1218567681963641,,,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=11.011
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=unset,1,1218567698623224,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=11.069
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=unset,2,1218567715282599,16.659,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=11.112
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=unset,3,1218567731942183,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=11.092
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=unset,4,1218567748601766,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=11.050
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=unset,5,1218567765261349,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=11.010
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=unset,6,1218567781920933,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.989
+ROW,cam0 YUV_420_888 1920x1080,e240 fd=unset,7,1218567798580516,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.919
+SUM,cam0 YUV_420_888 1920x1080,e240 fd=unset,reads=8,interval_med_ms=16.660,interval_min_ms=16.659,interval_max_ms=16.660,gap_med_ms=12.493,gap_max_ms=12.493,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=exp,0,1218568027649889,,,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.741
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=exp,1,1218568044309473,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.780
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=exp,2,1218568060968848,16.659,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.775
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=exp,3,1218568077628431,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.705
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=exp,4,1218568094288014,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.699
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=exp,5,1218568110947598,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.710
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=exp,6,1218568127607181,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.716
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=exp,7,1218568144266764,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.666
+SUM,cam0 YUV_420_888 1920x1080,e120 fd=exp,reads=8,interval_med_ms=16.660,interval_min_ms=16.659,interval_max_ms=16.660,gap_med_ms=8.326,gap_max_ms=8.326,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=unset,0,1218568377500723,,,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.635
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=unset,1,1218568394160306,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.599
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=unset,2,1218568410819889,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.623
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=unset,3,1218568427479264,16.659,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.657
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=unset,4,1218568444138848,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.680
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=unset,5,1218568460798431,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.695
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=unset,6,1218568477458014,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.716
+ROW,cam0 YUV_420_888 1920x1080,e120 fd=unset,7,1218568494117598,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.694
+SUM,cam0 YUV_420_888 1920x1080,e120 fd=unset,reads=8,interval_med_ms=16.660,interval_min_ms=16.659,interval_max_ms=16.660,gap_med_ms=8.326,gap_max_ms=8.326,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset,0,1218568748175724,,,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.763
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset,1,1218568760670514,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.716
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset,2,1218568781494683,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.682
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset,3,1218568793989681,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.649
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset,4,1218568814813849,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.875
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset,5,1218568827308848,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.709
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset,6,1218568848133016,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.784
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset,7,1218568860628014,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.615
+SUM,cam0 YUV_420_888 1920x1080,alt fd=unset,reads=8,interval_med_ms=12.495,interval_min_ms=12.495,interval_max_ms=20.824,gap_med_ms=8.328,gap_max_ms=12.491,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=1.826,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp,0,1218569098026558,,,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.651
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp,1,1218569110521348,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.669
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp,2,1218569131345516,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.886
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp,3,1218569143840514,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.693
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp,4,1218569164664683,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.884
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp,5,1218569177159681,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.735
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp,6,1218569197983849,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.767
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp,7,1218569210478848,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.628
+SUM,cam0 YUV_420_888 1920x1080,alt fd=exp,reads=8,interval_med_ms=12.495,interval_min_ms=12.495,interval_max_ms=20.824,gap_med_ms=8.328,gap_max_ms=12.491,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=1.823,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset linear,0,1218569464536974,,,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.702
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset linear,1,1218569477031764,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.647
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset linear,2,1218569497855933,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.685
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset linear,3,1218569510350931,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.641
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset linear,4,1218569531175099,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.735
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset linear,5,1218569543670098,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.670
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset linear,6,1218569564494266,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.740
+ROW,cam0 YUV_420_888 1920x1080,alt fd=unset linear,7,1218569576989264,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.666
+SUM,cam0 YUV_420_888 1920x1080,alt fd=unset linear,reads=8,interval_med_ms=12.495,interval_min_ms=12.495,interval_max_ms=20.824,gap_med_ms=8.328,gap_max_ms=12.491,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=2.131,ae=0,tonemap=0,nr=0,edge=0
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp linear,0,1218569831047183,,,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.744
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp linear,1,1218569843542181,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.719
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp linear,2,1218569864366349,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.756
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp linear,3,1218569876861348,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.715
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp linear,4,1218569897685516,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.785
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp linear,5,1218569910180514,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.711
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp linear,6,1218569931004683,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.794
+ROW,cam0 YUV_420_888 1920x1080,alt fd=exp linear,7,1218569943499681,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.731
+SUM,cam0 YUV_420_888 1920x1080,alt fd=exp linear,reads=8,interval_med_ms=12.495,interval_min_ms=12.495,interval_max_ms=20.824,gap_med_ms=8.328,gap_max_ms=12.491,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=2.101,ae=0,tonemap=0,nr=0,edge=0
+ROW,cam0 YUV_420_888 1280x720,e240 fd=exp,0,1218571461542599,,,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.693
+ROW,cam0 YUV_420_888 1280x720,e240 fd=exp,1,1218571478201974,16.659,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.753
+ROW,cam0 YUV_420_888 1280x720,e240 fd=exp,2,1218571494861558,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.771
+ROW,cam0 YUV_420_888 1280x720,e240 fd=exp,3,1218571511521141,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.761
+ROW,cam0 YUV_420_888 1280x720,e240 fd=exp,4,1218571528180724,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.796
+ROW,cam0 YUV_420_888 1280x720,e240 fd=exp,5,1218571544840308,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.831
+ROW,cam0 YUV_420_888 1280x720,e240 fd=exp,6,1218571561499891,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.870
+ROW,cam0 YUV_420_888 1280x720,e240 fd=exp,7,1218571578159474,16.660,12.493,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.830
+SUM,cam0 YUV_420_888 1280x720,e240 fd=exp,reads=8,interval_med_ms=16.660,interval_min_ms=16.659,interval_max_ms=16.660,gap_med_ms=12.493,gap_max_ms=12.493,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1280x720,e240 fd=unset,0,1218571828052808,,,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=11.001
+ROW,cam0 YUV_420_888 1280x720,e240 fd=unset,1,1218571844712391,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=11.002
+ROW,cam0 YUV_420_888 1280x720,e240 fd=unset,2,1218571861371974,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=11.035
+ROW,cam0 YUV_420_888 1280x720,e240 fd=unset,3,1218571878031558,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=11.032
+ROW,cam0 YUV_420_888 1280x720,e240 fd=unset,4,1218571894691141,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.951
+ROW,cam0 YUV_420_888 1280x720,e240 fd=unset,5,1218571911350724,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.914
+ROW,cam0 YUV_420_888 1280x720,e240 fd=unset,6,1218571928010308,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.865
+ROW,cam0 YUV_420_888 1280x720,e240 fd=unset,7,1218571944669891,16.660,12.493,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.878
+SUM,cam0 YUV_420_888 1280x720,e240 fd=unset,reads=8,interval_med_ms=16.660,interval_min_ms=16.660,interval_max_ms=16.660,gap_med_ms=12.493,gap_max_ms=12.493,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1280x720,e120 fd=exp,0,1218572190398639,,,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.972
+ROW,cam0 YUV_420_888 1280x720,e120 fd=exp,1,1218572207058223,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.853
+ROW,cam0 YUV_420_888 1280x720,e120 fd=exp,2,1218572223717806,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.892
+ROW,cam0 YUV_420_888 1280x720,e120 fd=exp,3,1218572240377389,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.879
+ROW,cam0 YUV_420_888 1280x720,e120 fd=exp,4,1218572257036973,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.842
+ROW,cam0 YUV_420_888 1280x720,e120 fd=exp,5,1218572273696556,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.851
+ROW,cam0 YUV_420_888 1280x720,e120 fd=exp,6,1218572290356139,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.831
+ROW,cam0 YUV_420_888 1280x720,e120 fd=exp,7,1218572307015723,16.660,8.326,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.823
+SUM,cam0 YUV_420_888 1280x720,e120 fd=exp,reads=8,interval_med_ms=16.660,interval_min_ms=16.660,interval_max_ms=16.660,gap_med_ms=8.326,gap_max_ms=8.326,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1280x720,e120 fd=unset,0,1218572556909056,,,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.842
+ROW,cam0 YUV_420_888 1280x720,e120 fd=unset,1,1218572573568639,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.820
+ROW,cam0 YUV_420_888 1280x720,e120 fd=unset,2,1218572590228223,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.874
+ROW,cam0 YUV_420_888 1280x720,e120 fd=unset,3,1218572606887806,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.826
+ROW,cam0 YUV_420_888 1280x720,e120 fd=unset,4,1218572623547389,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.838
+ROW,cam0 YUV_420_888 1280x720,e120 fd=unset,5,1218572640206973,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.718
+ROW,cam0 YUV_420_888 1280x720,e120 fd=unset,6,1218572656866556,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.780
+ROW,cam0 YUV_420_888 1280x720,e120 fd=unset,7,1218572673526139,16.660,8.326,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.832
+SUM,cam0 YUV_420_888 1280x720,e120 fd=unset,reads=8,interval_med_ms=16.660,interval_min_ms=16.660,interval_max_ms=16.660,gap_med_ms=8.326,gap_max_ms=8.326,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset,0,1218572910924474,,,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.951
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset,1,1218572923419473,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.966
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset,2,1218572944243641,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.870
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset,3,1218572956738639,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.865
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset,4,1218572977562808,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.885
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset,5,1218572990057806,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.886
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset,6,1218573010881974,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.897
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset,7,1218573023376973,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.948
+SUM,cam0 YUV_420_888 1280x720,alt fd=unset,reads=8,interval_med_ms=12.495,interval_min_ms=12.495,interval_max_ms=20.824,gap_med_ms=8.328,gap_max_ms=12.491,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=1.827,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp,0,1218573260775308,,,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.867
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp,1,1218573273270306,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=20.003
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp,2,1218573294094474,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.827
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp,3,1218573306589473,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.859
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp,4,1218573327413641,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.788
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp,5,1218573339908639,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.825
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp,6,1218573360732808,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=10.908
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp,7,1218573373227806,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=2,nr=2,edge=2,luma=19.949
+SUM,cam0 YUV_420_888 1280x720,alt fd=exp,reads=8,interval_med_ms=12.495,interval_min_ms=12.495,interval_max_ms=20.824,gap_med_ms=8.328,gap_max_ms=12.491,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=1.835,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset linear,0,1218573627285724,,,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.700
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset linear,1,1218573639780723,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.680
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset linear,2,1218573660604891,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.733
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset linear,3,1218573673099889,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.689
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset linear,4,1218573693924058,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.714
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset linear,5,1218573706419056,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.722
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset linear,6,1218573727243224,20.824,12.491,4166,4166,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.762
+ROW,cam0 YUV_420_888 1280x720,alt fd=unset linear,7,1218573739738223,12.495,8.328,8333,8333,unset,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.716
+SUM,cam0 YUV_420_888 1280x720,alt fd=unset linear,reads=8,interval_med_ms=12.495,interval_min_ms=12.495,interval_max_ms=20.824,gap_med_ms=8.328,gap_max_ms=12.491,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=2.143,ae=0,tonemap=0,nr=0,edge=0
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp linear,0,1218573993796141,,,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.760
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp linear,1,1218574006291139,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.739
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp linear,2,1218574027115308,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.774
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp linear,3,1218574039610306,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.756
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp linear,4,1218574060434474,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.795
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp linear,5,1218574072929473,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.756
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp linear,6,1218574093753641,20.824,12.491,4166,4166,4.167,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=1.796
+ROW,cam0 YUV_420_888 1280x720,alt fd=exp linear,7,1218574106248431,12.495,8.328,8333,8333,8.333,16.658,398,11.812,ae=0,tonemap=0,nr=0,edge=0,luma=3.773
+SUM,cam0 YUV_420_888 1280x720,alt fd=exp linear,reads=8,interval_med_ms=12.495,interval_min_ms=12.495,interval_max_ms=20.824,gap_med_ms=8.328,gap_max_ms=12.491,skew_ms=11.812,exposure_as_asked=8/8,luma_120_over_240=2.109,ae=0,tonemap=0,nr=0,edge=0
+HS_YUV_READER,cam0 HIGH_SPEED 1920x1080 120fps,configured=false,IllegalArgumentException: Surface format(35) is not for preview or hardware video encoding!
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,0,1218575708405556,,,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,1,1218575741926129,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,2,1218575775446754,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,3,1218575808967326,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,4,1218575842487899,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,5,1218575876008472,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,6,1218575909529045,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,7,1218575943049670,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,8,1218575976570243,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,9,1218576010090816,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,10,1218576043611389,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,11,1218576077131962,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,12,1218576110652535,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,13,1218576144173160,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,14,1218576177693733,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,15,1218576211214306,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,16,1218576244734879,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,17,1218576278255451,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,18,1218576311776024,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,auto,19,1218576345296649,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+SUM,cam0 HIGH_SPEED 1920x1080 120fps,auto,reads=20,interval_med_ms=33.521,interval_min_ms=33.521,interval_max_ms=33.521,gap_med_ms=25.187,gap_max_ms=25.187,skew_ms=3.617,exposure_as_asked=0/0,luma_120_over_240=,ae=1,tonemap=1,nr=1,edge=1
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,manual e=1/120,0,1218576556228706,,,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,manual e=1/120,1,1218576676408498,120.180,90.180,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,manual e=1/120,2,1218576796588289,120.180,90.180,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,manual e=1/120,3,1218576916768029,120.180,90.180,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,manual e=1/120,4,1218577036947821,120.180,90.180,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,manual e=1/120,5,1218577157127612,120.180,90.180,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+SUM,cam0 HIGH_SPEED 1920x1080 120fps,manual e=1/120,reads=6,interval_med_ms=120.180,interval_min_ms=120.180,interval_max_ms=120.180,gap_med_ms=90.180,gap_max_ms=90.180,skew_ms=3.617,exposure_as_asked=0/6,luma_120_over_240=,ae=0,tonemap=1,nr=1,edge=1
+SUM,cam0 HIGH_SPEED 1920x1080 120fps,manual e=1/240,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+ROW,cam0 HIGH_SPEED 1920x1080 120fps,manual alternating,0,1218578959824331,,,auto,30000,unset,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+SUM,cam0 HIGH_SPEED 1920x1080 120fps,manual alternating,reads=1,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=3.617,exposure_as_asked=0/0,luma_120_over_240=,ae=0,tonemap=1,nr=1,edge=1
+HS_YUV_READER,cam0 HIGH_SPEED 1920x1080 240fps,configured=false,IllegalArgumentException: Surface format(35) is not for preview or hardware video encoding!
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,0,1218580610205701,,,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,1,1218580626862993,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,2,1218580643520284,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,3,1218580660177628,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,4,1218580676834920,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,5,1218580693492211,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,6,1218580710149555,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,7,1218580726806847,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,8,1218580743464139,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,9,1218580760121482,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,10,1218580776778774,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,11,1218580793436066,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,12,1218580810093409,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,13,1218580826750701,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,14,1218580843407993,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,15,1218580860065336,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,16,1218580876722628,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,17,1218580893379920,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,18,1218580910037264,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,19,1218580926694555,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,20,1218580943351847,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,21,1218580960009191,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,22,1218580976666482,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,auto,23,1218580993323774,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+SUM,cam0 HIGH_SPEED 1920x1080 240fps,auto,reads=24,interval_med_ms=16.657,interval_min_ms=16.657,interval_max_ms=16.657,gap_med_ms=12.656,gap_max_ms=12.656,skew_ms=3.617,exposure_as_asked=0/0,luma_120_over_240=,ae=1,tonemap=1,nr=1,edge=1
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,manual e=1/240,0,1218581135689227,,,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,manual e=1/240,1,1218581255868966,120.180,90.180,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,manual e=1/240,2,1218581376048758,120.180,90.180,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,manual e=1/240,3,1218581496228550,120.180,90.180,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,manual e=1/240,4,1218581616408341,120.180,90.180,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1920x1080 240fps,manual e=1/240,5,1218581736588133,120.180,90.180,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+SUM,cam0 HIGH_SPEED 1920x1080 240fps,manual e=1/240,reads=6,interval_med_ms=120.180,interval_min_ms=120.180,interval_max_ms=120.180,gap_med_ms=90.180,gap_max_ms=90.180,skew_ms=3.617,exposure_as_asked=0/6,luma_120_over_240=,ae=0,tonemap=1,nr=1,edge=1
+SUM,cam0 HIGH_SPEED 1920x1080 240fps,manual e=1/480,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+SUM,cam0 HIGH_SPEED 1920x1080 240fps,manual alternating,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+HS_YUV_READER,cam0 HIGH_SPEED 1280x720 120fps,configured=false,IllegalArgumentException: Surface format(35) is not for preview or hardware video encoding!
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,0,1218585010393629,,,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,1,1218585043914201,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,2,1218585077434774,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,3,1218585110955347,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,4,1218585144475972,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,5,1218585177996545,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,6,1218585211517118,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,7,1218585245037691,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,8,1218585278558264,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,9,1218585312078837,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,10,1218585345599462,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,11,1218585379120035,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,12,1218585412640608,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,13,1218585446161181,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,14,1218585479681754,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,15,1218585513202326,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,16,1218585546722899,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,17,1218585580243524,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,18,1218585613764097,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,19,1218585647284670,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,auto,20,1218585680805243,33.521,25.187,auto,8333,unset,8.377,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+SUM,cam0 HIGH_SPEED 1280x720 120fps,auto,reads=21,interval_med_ms=33.521,interval_min_ms=33.521,interval_max_ms=33.521,gap_med_ms=25.187,gap_max_ms=25.187,skew_ms=3.617,exposure_as_asked=0/0,luma_120_over_240=,ae=1,tonemap=1,nr=1,edge=1
+ROW,cam0 HIGH_SPEED 1280x720 120fps,manual e=1/120,0,1218585858216727,,,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,manual e=1/120,1,1218585978396519,120.180,90.180,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,manual e=1/120,2,1218586098576310,120.180,90.180,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,manual e=1/120,3,1218586218756102,120.180,90.180,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,manual e=1/120,4,1218586338935894,120.180,90.180,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 120fps,manual e=1/120,5,1218586459115685,120.180,90.180,8333,30000,8.333,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+SUM,cam0 HIGH_SPEED 1280x720 120fps,manual e=1/120,reads=6,interval_med_ms=120.180,interval_min_ms=120.180,interval_max_ms=120.180,gap_med_ms=90.180,gap_max_ms=90.180,skew_ms=3.617,exposure_as_asked=0/6,luma_120_over_240=,ae=0,tonemap=1,nr=1,edge=1
+SUM,cam0 HIGH_SPEED 1280x720 120fps,manual e=1/240,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+SUM,cam0 HIGH_SPEED 1280x720 120fps,manual alternating,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+HS_YUV_READER,cam0 HIGH_SPEED 1280x720 240fps,configured=false,IllegalArgumentException: Surface format(35) is not for preview or hardware video encoding!
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,0,1218589962112055,,,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,1,1218589978769347,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,2,1218589995426691,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,3,1218590012083982,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,4,1218590028741274,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,5,1218590045398618,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,6,1218590062055909,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,7,1218590078713201,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,8,1218590095370545,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,9,1218590112027836,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,10,1218590128685128,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,11,1218590145342472,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,12,1218590161999764,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,13,1218590178657055,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,14,1218590195314347,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,15,1218590211971691,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,16,1218590228628982,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,17,1218590245286274,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,18,1218590261943618,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,19,1218590278600909,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,20,1218590295258201,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,21,1218590311915545,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,22,1218590328572836,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,auto,23,1218590345230128,16.657,12.656,auto,4001,unset,4.164,1535,3.617,ae=1,tonemap=1,nr=1,edge=1,luma=
+SUM,cam0 HIGH_SPEED 1280x720 240fps,auto,reads=24,interval_med_ms=16.657,interval_min_ms=16.657,interval_max_ms=16.657,gap_med_ms=12.656,gap_max_ms=12.656,skew_ms=3.617,exposure_as_asked=0/0,luma_120_over_240=,ae=1,tonemap=1,nr=1,edge=1
+ROW,cam0 HIGH_SPEED 1280x720 240fps,manual e=1/240,0,1218590487595581,,,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,manual e=1/240,1,1218590607775321,120.180,90.180,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,manual e=1/240,2,1218590727955112,120.180,90.180,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,manual e=1/240,3,1218590848134904,120.180,90.180,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,manual e=1/240,4,1218590968314696,120.180,90.180,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam0 HIGH_SPEED 1280x720 240fps,manual e=1/240,5,1218591088494435,120.180,90.180,4166,30000,4.167,30.042,99,3.617,ae=0,tonemap=1,nr=1,edge=1,luma=
+SUM,cam0 HIGH_SPEED 1280x720 240fps,manual e=1/240,reads=6,interval_med_ms=120.180,interval_min_ms=120.180,interval_max_ms=120.180,gap_med_ms=90.180,gap_max_ms=90.180,skew_ms=3.617,exposure_as_asked=0/6,luma_120_over_240=,ae=0,tonemap=1,nr=1,edge=1
+SUM,cam0 HIGH_SPEED 1280x720 240fps,manual e=1/480,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+SUM,cam0 HIGH_SPEED 1280x720 240fps,manual alternating,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=exp,0,1218594268071905,,,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=exp,1,1218594284721905,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=exp,2,1218594301371905,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=exp,3,1218594318021905,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=exp,4,1218594334671905,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=exp,5,1218594351321905,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=exp,6,1218594367971905,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=exp,7,1218594384621905,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW_SENSOR 4080x3060,e240 fd=exp,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=12.483,gap_max_ms=12.483,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=unset,0,1218594601071905,,,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=unset,1,1218594617721905,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=unset,2,1218594634371905,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=unset,3,1218594651021905,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=unset,4,1218594667671905,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=unset,5,1218594684321905,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=unset,6,1218594700971905,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e240 fd=unset,7,1218594717621905,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW_SENSOR 4080x3060,e240 fd=unset,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=12.483,gap_max_ms=12.483,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=exp,0,1218594929908054,,,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=exp,1,1218594946558054,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=exp,2,1218594963208054,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=exp,3,1218594979858054,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=exp,4,1218594996508054,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=exp,5,1218595013158054,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=exp,6,1218595029808054,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=exp,7,1218595046458054,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW_SENSOR 4080x3060,e120 fd=exp,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=8.317,gap_max_ms=8.317,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=unset,0,1218595262908054,,,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=unset,1,1218595279558054,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=unset,2,1218595296208054,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=unset,3,1218595312858054,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=unset,4,1218595329508054,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=unset,5,1218595346158054,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=unset,6,1218595362808054,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,e120 fd=unset,7,1218595379458054,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW_SENSOR 4080x3060,e120 fd=unset,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=8.317,gap_max_ms=8.317,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=unset,0,1218595600071905,,,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=unset,1,1218595612558054,12.486,8.319,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=unset,2,1218595633371905,20.814,12.481,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=unset,3,1218595645858054,12.486,8.319,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=unset,4,1218595666671905,20.814,12.481,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=unset,5,1218595679158054,12.486,8.319,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=unset,6,1218595699971905,20.814,12.481,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=unset,7,1218595712458054,12.486,8.319,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW_SENSOR 4080x3060,alt fd=unset,reads=8,interval_med_ms=12.486,interval_min_ms=12.486,interval_max_ms=20.814,gap_med_ms=8.319,gap_max_ms=12.481,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=exp,0,1218595916421905,,,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=exp,1,1218595928908054,12.486,8.319,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=exp,2,1218595949721905,20.814,12.481,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=exp,3,1218595962208054,12.486,8.319,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=exp,4,1218595983021905,20.814,12.481,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=exp,5,1218595995508054,12.486,8.319,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=exp,6,1218596016321905,20.814,12.481,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW_SENSOR 4080x3060,alt fd=exp,7,1218596028808054,12.486,8.319,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW_SENSOR 4080x3060,alt fd=exp,reads=8,interval_med_ms=12.486,interval_min_ms=12.486,interval_max_ms=20.814,gap_med_ms=8.319,gap_max_ms=12.481,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 RAW10 4080x3060,e240 fd=exp,0,1218597292880655,,,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=exp,1,1218597309530655,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=exp,2,1218597326180655,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=exp,3,1218597342830655,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=exp,4,1218597359480655,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=exp,5,1218597376130655,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=exp,6,1218597392780655,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=exp,7,1218597409430655,16.650,12.483,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW10 4080x3060,e240 fd=exp,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=12.483,gap_max_ms=12.483,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 RAW10 4080x3060,e240 fd=unset,0,1218597625880655,,,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=unset,1,1218597642530655,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=unset,2,1218597659180655,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=unset,3,1218597675830655,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=unset,4,1218597692480655,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=unset,5,1218597709130655,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=unset,6,1218597725780655,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e240 fd=unset,7,1218597742430655,16.650,12.483,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW10 4080x3060,e240 fd=unset,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=12.483,gap_max_ms=12.483,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 RAW10 4080x3060,e120 fd=exp,0,1218597938066804,,,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=exp,1,1218597954716804,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=exp,2,1218597971366804,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=exp,3,1218597988016804,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=exp,4,1218598004666804,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=exp,5,1218598021316804,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=exp,6,1218598037966804,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=exp,7,1218598054616804,16.650,8.317,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW10 4080x3060,e120 fd=exp,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=8.317,gap_max_ms=8.317,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 RAW10 4080x3060,e120 fd=unset,0,1218598271066804,,,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=unset,1,1218598287716804,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=unset,2,1218598304366804,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=unset,3,1218598321016804,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=unset,4,1218598337666804,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=unset,5,1218598354316804,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=unset,6,1218598370966804,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,e120 fd=unset,7,1218598387616804,16.650,8.317,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW10 4080x3060,e120 fd=unset,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=8.317,gap_max_ms=8.317,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 RAW10 4080x3060,alt fd=unset,0,1218598608230655,,,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=unset,1,1218598620716804,12.486,8.319,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=unset,2,1218598641530655,20.814,12.481,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=unset,3,1218598654016804,12.486,8.319,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=unset,4,1218598674830655,20.814,12.481,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=unset,5,1218598687316804,12.486,8.319,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=unset,6,1218598708130655,20.814,12.481,4166,4166,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=unset,7,1218598720616804,12.486,8.319,8333,8333,unset,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW10 4080x3060,alt fd=unset,reads=8,interval_med_ms=12.486,interval_min_ms=12.486,interval_max_ms=20.814,gap_med_ms=8.319,gap_max_ms=12.481,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 RAW10 4080x3060,alt fd=exp,0,1218598924580655,,,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=exp,1,1218598937066804,12.486,8.319,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=exp,2,1218598957880655,20.814,12.481,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=exp,3,1218598970366804,12.486,8.319,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=exp,4,1218598991180655,20.814,12.481,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=exp,5,1218599003666804,12.486,8.319,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=exp,6,1218599024480655,20.814,12.481,4166,4166,4.167,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+ROW,cam2 RAW10 4080x3060,alt fd=exp,7,1218599036966804,12.486,8.319,8333,8333,8.333,16.667,395,8.615,ae=0,tonemap=2,nr=2,edge=2,luma=
+SUM,cam2 RAW10 4080x3060,alt fd=exp,reads=8,interval_med_ms=12.486,interval_min_ms=12.486,interval_max_ms=20.814,gap_med_ms=8.319,gap_max_ms=12.481,skew_ms=8.615,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=exp,0,1218600360221424,,,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.446
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=exp,1,1218600376871215,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.439
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=exp,2,1218600393521007,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.436
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=exp,3,1218600410170799,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.442
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=exp,4,1218600426820590,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.469
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=exp,5,1218600443470174,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.474
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=exp,6,1218600460119965,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.469
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=exp,7,1218600476769757,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.499
+SUM,cam2 YUV_420_888 1920x1080,e240 fd=exp,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=12.483,gap_max_ms=12.483,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=unset,0,1218600726516007,,,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.462
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=unset,1,1218600743165799,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.443
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=unset,2,1218600759815590,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.409
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=unset,3,1218600776465174,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.404
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=unset,4,1218600793114965,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.393
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=unset,5,1218600809764757,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.404
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=unset,6,1218600826414549,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.431
+ROW,cam2 YUV_420_888 1920x1080,e240 fd=unset,7,1218600843064340,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.406
+SUM,cam2 YUV_420_888 1920x1080,e240 fd=unset,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=12.483,gap_max_ms=12.483,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=exp,0,1218601071994815,,,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=4.995
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=exp,1,1218601088644606,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.302
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=exp,2,1218601105294190,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.404
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=exp,3,1218601121943981,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.494
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=exp,4,1218601138593773,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.508
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=exp,5,1218601155243565,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.523
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=exp,6,1218601171893356,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.510
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=exp,7,1218601188542940,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.502
+SUM,cam2 YUV_420_888 1920x1080,e120 fd=exp,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=8.316,gap_max_ms=8.316,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=unset,0,1218601421639606,,,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.484
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=unset,1,1218601438289190,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.494
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=unset,2,1218601454938981,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.480
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=unset,3,1218601471588773,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.503
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=unset,4,1218601488238565,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.510
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=unset,5,1218601504888356,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.522
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=unset,6,1218601521537940,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.525
+ROW,cam2 YUV_420_888 1920x1080,e120 fd=unset,7,1218601538187731,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.511
+SUM,cam2 YUV_420_888 1920x1080,e120 fd=unset,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=8.316,gap_max_ms=8.316,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset,0,1218601775450174,,,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.844
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset,1,1218601787933981,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.222
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset,2,1218601808749757,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.798
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset,3,1218601821233565,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.185
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset,4,1218601842049340,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.864
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset,5,1218601854532940,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.171
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset,6,1218601875348715,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.849
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset,7,1218601887832523,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.189
+SUM,cam2 YUV_420_888 1920x1080,alt fd=unset,reads=8,interval_med_ms=12.484,interval_min_ms=12.484,interval_max_ms=20.816,gap_med_ms=8.317,gap_max_ms=12.482,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=1.352,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp,0,1218602125094965,,,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.882
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp,1,1218602137578773,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.091
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp,2,1218602158394549,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.821
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp,3,1218602170878356,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.118
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp,4,1218602191693924,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.776
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp,5,1218602204177731,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.181
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp,6,1218602224993507,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.808
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp,7,1218602237477315,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.225
+SUM,cam2 YUV_420_888 1920x1080,alt fd=exp,reads=8,interval_med_ms=12.484,interval_min_ms=12.484,interval_max_ms=20.816,gap_med_ms=8.317,gap_max_ms=12.482,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=1.349,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset linear,0,1218602491389549,,,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.693
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset linear,1,1218602503873356,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.834
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset linear,2,1218602524688924,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.660
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset linear,3,1218602537172731,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.837
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset linear,4,1218602557988507,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.651
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset linear,5,1218602570472315,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.844
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset linear,6,1218602591288090,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.663
+ROW,cam2 YUV_420_888 1920x1080,alt fd=unset linear,7,1218602603771690,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.844
+SUM,cam2 YUV_420_888 1920x1080,alt fd=unset linear,reads=8,interval_med_ms=12.484,interval_min_ms=12.484,interval_max_ms=20.816,gap_med_ms=8.317,gap_max_ms=12.482,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=1.260,ae=0,tonemap=0,nr=0,edge=0
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp linear,0,1218602857683924,,,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.687
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp linear,1,1218602870167731,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.865
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp linear,2,1218602890983507,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.683
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp linear,3,1218602903467315,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.878
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp linear,4,1218602924283090,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.698
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp linear,5,1218602936766690,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.901
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp linear,6,1218602957582465,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.714
+ROW,cam2 YUV_420_888 1920x1080,alt fd=exp linear,7,1218602970066273,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.920
+SUM,cam2 YUV_420_888 1920x1080,alt fd=exp linear,reads=8,interval_med_ms=12.484,interval_min_ms=12.484,interval_max_ms=20.816,gap_med_ms=8.317,gap_max_ms=12.482,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=1.281,ae=0,tonemap=0,nr=0,edge=0
+ROW,cam2 YUV_420_888 1280x720,e240 fd=exp,0,1218604332871007,,,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.373
+ROW,cam2 YUV_420_888 1280x720,e240 fd=exp,1,1218604349520799,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.358
+ROW,cam2 YUV_420_888 1280x720,e240 fd=exp,2,1218604366170590,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.364
+ROW,cam2 YUV_420_888 1280x720,e240 fd=exp,3,1218604382820382,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.381
+ROW,cam2 YUV_420_888 1280x720,e240 fd=exp,4,1218604399470174,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.396
+ROW,cam2 YUV_420_888 1280x720,e240 fd=exp,5,1218604416119757,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.436
+ROW,cam2 YUV_420_888 1280x720,e240 fd=exp,6,1218604432769549,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.455
+ROW,cam2 YUV_420_888 1280x720,e240 fd=exp,7,1218604449419340,16.650,12.483,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.440
+SUM,cam2 YUV_420_888 1280x720,e240 fd=exp,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=12.483,gap_max_ms=12.483,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1280x720,e240 fd=unset,0,1218604682515799,,,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.447
+ROW,cam2 YUV_420_888 1280x720,e240 fd=unset,1,1218604699165590,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.438
+ROW,cam2 YUV_420_888 1280x720,e240 fd=unset,2,1218604715815382,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.409
+ROW,cam2 YUV_420_888 1280x720,e240 fd=unset,3,1218604732465174,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.408
+ROW,cam2 YUV_420_888 1280x720,e240 fd=unset,4,1218604749114757,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.408
+ROW,cam2 YUV_420_888 1280x720,e240 fd=unset,5,1218604765764549,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.394
+ROW,cam2 YUV_420_888 1280x720,e240 fd=unset,6,1218604782414340,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.394
+ROW,cam2 YUV_420_888 1280x720,e240 fd=unset,7,1218604799064132,16.650,12.483,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.352
+SUM,cam2 YUV_420_888 1280x720,e240 fd=unset,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=12.483,gap_max_ms=12.483,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1280x720,e120 fd=exp,0,1218605044644398,,,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.044
+ROW,cam2 YUV_420_888 1280x720,e120 fd=exp,1,1218605061294190,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.219
+ROW,cam2 YUV_420_888 1280x720,e120 fd=exp,2,1218605077943773,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.210
+ROW,cam2 YUV_420_888 1280x720,e120 fd=exp,3,1218605094593565,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.264
+ROW,cam2 YUV_420_888 1280x720,e120 fd=exp,4,1218605111243356,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.285
+ROW,cam2 YUV_420_888 1280x720,e120 fd=exp,5,1218605127893148,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.300
+ROW,cam2 YUV_420_888 1280x720,e120 fd=exp,6,1218605144542940,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.279
+ROW,cam2 YUV_420_888 1280x720,e120 fd=exp,7,1218605161192523,16.650,8.316,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.307
+SUM,cam2 YUV_420_888 1280x720,e120 fd=exp,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=8.316,gap_max_ms=8.316,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1280x720,e120 fd=unset,0,1218605394289190,,,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.209
+ROW,cam2 YUV_420_888 1280x720,e120 fd=unset,1,1218605410938773,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.140
+ROW,cam2 YUV_420_888 1280x720,e120 fd=unset,2,1218605427588565,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.154
+ROW,cam2 YUV_420_888 1280x720,e120 fd=unset,3,1218605444238356,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.170
+ROW,cam2 YUV_420_888 1280x720,e120 fd=unset,4,1218605460888148,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.113
+ROW,cam2 YUV_420_888 1280x720,e120 fd=unset,5,1218605477537940,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.116
+ROW,cam2 YUV_420_888 1280x720,e120 fd=unset,6,1218605494187523,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.118
+ROW,cam2 YUV_420_888 1280x720,e120 fd=unset,7,1218605510837315,16.650,8.316,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.127
+SUM,cam2 YUV_420_888 1280x720,e120 fd=unset,reads=8,interval_med_ms=16.650,interval_min_ms=16.650,interval_max_ms=16.650,gap_med_ms=8.316,gap_max_ms=8.316,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset,0,1218605748099757,,,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.632
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset,1,1218605760583565,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=4.897
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset,2,1218605781399340,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.706
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset,3,1218605793883148,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=5.009
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset,4,1218605814698924,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.605
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset,5,1218605827182523,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=4.815
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset,6,1218605847998299,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.594
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset,7,1218605860482106,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=4.952
+SUM,cam2 YUV_420_888 1280x720,alt fd=unset,reads=8,interval_med_ms=12.484,interval_min_ms=12.484,interval_max_ms=20.816,gap_med_ms=8.317,gap_max_ms=12.482,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=1.353,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp,0,1218606097744549,,,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.649
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp,1,1218606110228356,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=4.891
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp,2,1218606131044132,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.652
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp,3,1218606143527940,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=4.808
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp,4,1218606164343507,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.562
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp,5,1218606176827315,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=4.661
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp,6,1218606197643090,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=3.552
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp,7,1218606210126898,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=2,nr=2,edge=2,luma=4.689
+SUM,cam2 YUV_420_888 1280x720,alt fd=exp,reads=8,interval_med_ms=12.484,interval_min_ms=12.484,interval_max_ms=20.816,gap_med_ms=8.317,gap_max_ms=12.482,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=1.321,ae=0,tonemap=2,nr=2,edge=2
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset linear,0,1218606464039132,,,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.604
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset linear,1,1218606476522940,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.747
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset linear,2,1218606497338507,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.583
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset linear,3,1218606509822315,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.753
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset linear,4,1218606530638090,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.610
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset linear,5,1218606543121898,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.768
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset linear,6,1218606563937674,20.816,12.482,4166,4166,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.626
+ROW,cam2 YUV_420_888 1280x720,alt fd=unset linear,7,1218606576421273,12.484,8.317,8333,8333,unset,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.800
+SUM,cam2 YUV_420_888 1280x720,alt fd=unset linear,reads=8,interval_med_ms=12.484,interval_min_ms=12.484,interval_max_ms=20.816,gap_med_ms=8.317,gap_max_ms=12.482,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=1.266,ae=0,tonemap=0,nr=0,edge=0
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp linear,0,1218606830333507,,,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.653
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp linear,1,1218606842817315,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.826
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp linear,2,1218606863633090,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.651
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp linear,3,1218606876116898,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.826
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp linear,4,1218606896932674,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.646
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp linear,5,1218606909416273,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.822
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp linear,6,1218606930232049,20.816,12.482,4166,4166,4.167,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.680
+ROW,cam2 YUV_420_888 1280x720,alt fd=exp linear,7,1218606942715856,12.484,8.317,8333,8333,8.333,16.667,395,6.264,ae=0,tonemap=0,nr=0,edge=0,luma=0.851
+SUM,cam2 YUV_420_888 1280x720,alt fd=exp linear,reads=8,interval_med_ms=12.484,interval_min_ms=12.484,interval_max_ms=20.816,gap_med_ms=8.317,gap_max_ms=12.482,skew_ms=6.264,exposure_as_asked=8/8,luma_120_over_240=1.264,ae=0,tonemap=0,nr=0,edge=0
+HS_YUV_READER,cam2 HIGH_SPEED 1920x1080 120fps,configured=false,IllegalArgumentException: Surface format(35) is not for preview or hardware video encoding!
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,auto,0,1218608454225655,,,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,auto,1,1218608520825655,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,auto,2,1218608587425655,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,auto,3,1218608654025655,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,auto,4,1218608720625655,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,auto,5,1218608787225655,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,auto,6,1218608853825655,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,auto,7,1218608920425655,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,auto,8,1218608987025655,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+SUM,cam2 HIGH_SPEED 1920x1080 120fps,auto,reads=9,interval_med_ms=66.600,interval_min_ms=66.600,interval_max_ms=66.600,gap_med_ms=58.266,gap_max_ms=58.266,skew_ms=8.615,exposure_as_asked=0/0,luma_120_over_240=,ae=1,tonemap=1,nr=1,edge=1
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,manual e=1/120,0,1218609538321488,,,8333,30000,8.333,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,manual e=1/120,1,1218609658471488,120.150,90.150,8333,30000,8.333,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 120fps,manual e=1/120,2,1218609778621488,120.150,90.150,8333,30000,8.333,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+SUM,cam2 HIGH_SPEED 1920x1080 120fps,manual e=1/120,reads=3,interval_med_ms=120.150,interval_min_ms=120.150,interval_max_ms=120.150,gap_med_ms=90.150,gap_max_ms=90.150,skew_ms=8.615,exposure_as_asked=0/3,luma_120_over_240=,ae=0,tonemap=1,nr=1,edge=1
+SUM,cam2 HIGH_SPEED 1920x1080 120fps,manual e=1/240,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+SUM,cam2 HIGH_SPEED 1920x1080 120fps,manual alternating,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+HS_YUV_READER,cam2 HIGH_SPEED 1920x1080 240fps,configured=false,IllegalArgumentException: Surface format(35) is not for preview or hardware video encoding!
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,auto,0,1218613144994507,,,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,auto,1,1218613211594507,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,auto,2,1218613278194507,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,auto,3,1218613344794507,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,auto,4,1218613411394507,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,auto,5,1218613477994507,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,auto,6,1218613544594507,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,auto,7,1218613611194507,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,auto,8,1218613677794507,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+SUM,cam2 HIGH_SPEED 1920x1080 240fps,auto,reads=9,interval_med_ms=66.600,interval_min_ms=66.600,interval_max_ms=66.600,gap_med_ms=62.533,gap_max_ms=62.533,skew_ms=8.615,exposure_as_asked=0/0,luma_120_over_240=,ae=1,tonemap=1,nr=1,edge=1
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,manual e=1/240,0,1218614224822322,,,4166,30000,4.167,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,manual e=1/240,1,1218614344972322,120.150,90.150,4166,30000,4.167,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1920x1080 240fps,manual e=1/240,2,1218614465122322,120.150,90.150,4166,30000,4.167,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+SUM,cam2 HIGH_SPEED 1920x1080 240fps,manual e=1/240,reads=3,interval_med_ms=120.150,interval_min_ms=120.150,interval_max_ms=120.150,gap_med_ms=90.150,gap_max_ms=90.150,skew_ms=8.615,exposure_as_asked=0/3,luma_120_over_240=,ae=0,tonemap=1,nr=1,edge=1
+SUM,cam2 HIGH_SPEED 1920x1080 240fps,manual e=1/480,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+SUM,cam2 HIGH_SPEED 1920x1080 240fps,manual alternating,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+HS_YUV_READER,cam2 HIGH_SPEED 1280x720 120fps,configured=false,IllegalArgumentException: Surface format(35) is not for preview or hardware video encoding!
+ROW,cam2 HIGH_SPEED 1280x720 120fps,auto,0,1218617817949822,,,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 120fps,auto,1,1218617884549822,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 120fps,auto,2,1218617951149822,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 120fps,auto,3,1218618017749822,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 120fps,auto,4,1218618084349822,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 120fps,auto,5,1218618150949822,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 120fps,auto,6,1218618217549822,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 120fps,auto,7,1218618284149822,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 120fps,auto,8,1218618350749822,66.600,58.266,auto,8333,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+SUM,cam2 HIGH_SPEED 1280x720 120fps,auto,reads=9,interval_med_ms=66.600,interval_min_ms=66.600,interval_max_ms=66.600,gap_med_ms=58.266,gap_max_ms=58.266,skew_ms=8.615,exposure_as_asked=0/0,luma_120_over_240=,ae=1,tonemap=1,nr=1,edge=1
+ROW,cam2 HIGH_SPEED 1280x720 120fps,manual e=1/120,0,1218618902045655,,,8333,30000,8.333,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 120fps,manual e=1/120,1,1218619022195655,120.150,90.150,8333,30000,8.333,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 120fps,manual e=1/120,2,1218619142345655,120.150,90.150,8333,30000,8.333,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+SUM,cam2 HIGH_SPEED 1280x720 120fps,manual e=1/120,reads=3,interval_med_ms=120.150,interval_min_ms=120.150,interval_max_ms=120.150,gap_med_ms=90.150,gap_max_ms=90.150,skew_ms=8.615,exposure_as_asked=0/3,luma_120_over_240=,ae=0,tonemap=1,nr=1,edge=1
+SUM,cam2 HIGH_SPEED 1280x720 120fps,manual e=1/240,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+SUM,cam2 HIGH_SPEED 1280x720 120fps,manual alternating,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+HS_YUV_READER,cam2 HIGH_SPEED 1280x720 240fps,configured=false,IllegalArgumentException: Surface format(35) is not for preview or hardware video encoding!
+ROW,cam2 HIGH_SPEED 1280x720 240fps,auto,0,1218622515903882,,,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 240fps,auto,1,1218622582503882,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 240fps,auto,2,1218622649103882,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 240fps,auto,3,1218622715703882,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 240fps,auto,4,1218622782303882,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 240fps,auto,5,1218622848903882,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 240fps,auto,6,1218622915503882,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 240fps,auto,7,1218622982103882,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 240fps,auto,8,1218623048703882,66.600,62.533,auto,4066,unset,16.667,950,8.615,ae=1,tonemap=1,nr=1,edge=1,luma=
+SUM,cam2 HIGH_SPEED 1280x720 240fps,auto,reads=9,interval_med_ms=66.600,interval_min_ms=66.600,interval_max_ms=66.600,gap_med_ms=62.533,gap_max_ms=62.533,skew_ms=8.615,exposure_as_asked=0/0,luma_120_over_240=,ae=1,tonemap=1,nr=1,edge=1
+ROW,cam2 HIGH_SPEED 1280x720 240fps,manual e=1/240,0,1218623595731697,,,4166,30000,4.167,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 240fps,manual e=1/240,1,1218623715881697,120.150,90.150,4166,30000,4.167,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+ROW,cam2 HIGH_SPEED 1280x720 240fps,manual e=1/240,2,1218623836031697,120.150,90.150,4166,30000,4.167,30.068,99,8.615,ae=0,tonemap=1,nr=1,edge=1,luma=
+SUM,cam2 HIGH_SPEED 1280x720 240fps,manual e=1/240,reads=3,interval_med_ms=120.150,interval_min_ms=120.150,interval_max_ms=120.150,gap_med_ms=90.150,gap_max_ms=90.150,skew_ms=8.615,exposure_as_asked=0/3,luma_120_over_240=,ae=0,tonemap=1,nr=1,edge=1
+SUM,cam2 HIGH_SPEED 1280x720 240fps,manual e=1/480,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+SUM,cam2 HIGH_SPEED 1280x720 240fps,manual alternating,reads=0,interval_med_ms=,interval_min_ms=,interval_max_ms=,gap_med_ms=,gap_max_ms=,skew_ms=,exposure_as_asked=0/0,luma_120_over_240=,ae=null,tonemap=null,nr=null,edge=null
+DONE
