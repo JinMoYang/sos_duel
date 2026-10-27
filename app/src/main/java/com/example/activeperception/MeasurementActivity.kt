@@ -1750,11 +1750,12 @@ class MeasurementActivity : AppCompatActivity() {
         // lead-in lap: the record needs no lap boundaries, and the track position is in
         // every moment's yaw.
         R.id.expCollect to LapPreset("counterfactual record, Limo", run = "collect_cf", cap = 225, delayS = 5),
-        // Record tab: the same counterfactual record (225 moments, ~15 laps, ~4 min) with the
-        // pressed lighting in every manifest, as Main does.
-        R.id.expRecordBright to LapPreset("record, bright", run = "collect_cf", cap = 225, delayS = 5, lighting = "bright"),
-        R.id.expRecordDim to LapPreset("record, dim", run = "collect_cf", cap = 225, delayS = 5, lighting = "dim"),
-        R.id.expRecordDark to LapPreset("record, dark", run = "collect_cf", cap = 225, delayS = 5, lighting = "dark"),
+        // Record tab: the counterfactual record with tracking-updated sums and digital ISO
+        // 3200/6400 (collect_cf2, 2026-10-28; 225 moments) with the pressed lighting in every
+        // manifest, as Main does. The plain collect_cf stays on the Old tab.
+        R.id.expRecordBright to LapPreset("record, bright", run = "collect_cf2", cap = 225, delayS = 5, lighting = "bright"),
+        R.id.expRecordDim to LapPreset("record, dim", run = "collect_cf2", cap = 225, delayS = 5, lighting = "dim"),
+        R.id.expRecordDark to LapPreset("record, dark", run = "collect_cf2", cap = 225, delayS = 5, lighting = "dark"),
         // Phone AE alone for ~40-50 s (300 frames, some 3-4 laps), made 2026-10-16 to measure
         // what AE chooses in a lighting the counterfactual record has but no AE run had.
         R.id.expAeCollect to LapPreset("phone AE alone, Limo", run = "ae_phone", cap = 300, delayS = 5)
@@ -1812,6 +1813,7 @@ class MeasurementActivity : AppCompatActivity() {
             "collect55" -> "collect: 5×5"
             "collect55_ab" -> "collect: 5×5 A/B"
             "collect_cf" -> "collect: counterfactual"
+            "collect_cf2" -> "collect: counterfactual + tracking sums"
             "readnoise" -> "read noise"
             else -> method
         }
@@ -1832,16 +1834,17 @@ class MeasurementActivity : AppCompatActivity() {
         val base = if (lapSession != null) lapCollectBlockOrdinal else -1
         val tag = when (kind) {
             "collect55" -> "collect_5x5"; "collect55_ab" -> "collect_5x5_ab"
-            "collect_cf" -> "collect_cf"; else -> "collect_5x3"
+            "collect_cf" -> "collect_cf"; "collect_cf2" -> "collect_cf2"; else -> "collect_5x3"
         }
         start(tag) {
             val controller = mc!!
             controller.collectBaseOverride = base
             when (kind) {
                 // claim 1 on prop_c's lattice; _ab alternates the old and new image pipeline
-                "collect55", "collect55_ab", "collect_cf" ->
+                "collect55", "collect55_ab", "collect_cf", "collect_cf2" ->
                     controller.runCollect55(cap, kind == "collect55_ab", ::post, ::showFrame,
-                        counterfactual = kind == "collect_cf")
+                        counterfactual = kind == "collect_cf" || kind == "collect_cf2",
+                        aligned = kind == "collect_cf2")
                 else -> controller.runCollect53(cap, ::post, ::showFrame)
             }
         }
@@ -1849,7 +1852,7 @@ class MeasurementActivity : AppCompatActivity() {
 
     private fun isCollect(method: String) =
         method == "collect" || method == "collect55" || method == "collect55_ab" ||
-            method == "collect_cf"
+            method == "collect_cf" || method == "collect_cf2"
 
     /** Starts a lap session, or stops the one in progress. The plan and its timeouts come
      *  from the launch intent when given, otherwise from LapSession's defaults. */

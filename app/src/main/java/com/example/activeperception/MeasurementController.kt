@@ -16,6 +16,7 @@ import com.example.activeperception.acquire.Grid
 import com.example.activeperception.acquire.CrossExposureRouter
 import com.example.activeperception.acquire.RoutingDecision
 import com.example.activeperception.acquire.RawFrame
+import com.example.activeperception.acquire.BurstAlign
 import com.example.activeperception.acquire.NaeFeatures
 import com.example.activeperception.acquire.NaeSnap
 import com.example.activeperception.acquire.NaeTrainer
@@ -5971,12 +5972,20 @@ class MeasurementController(
      *   never a stand-in for a real capture (not faithful in the dark or in motion).
      * - "real_check": the one real cell, cycling through all 25, against which the
      *   counterfactual images keep being measured.
+     *
+     * [aligned] (collect_cf2, 2026-10-28) adds to a counterfactual moment, from the same
+     * frames: every burst's 2- and 4-frame sums again after a tracking update
+     * ([com.example.activeperception.acquire.BurstAlign]: each later frame moved back onto
+     * the first, tile by tile, by the LK motion between consecutive frames), use "aligned";
+     * digital ISO 3200 and 6400 (gain indices 5, 6) for every single frame and aligned sum,
+     * use "gain_ext" for the single frames; and the tile motions (collect_motion.jsonl).
      */
     fun runCollect55(
         maxFrames: Int, pipelineAB: Boolean,
         onStatus: (String) -> Unit,
         onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> },
-        counterfactual: Boolean = false
+        counterfactual: Boolean = false,
+        aligned: Boolean = false
     ) {
         val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
             ?: error("collect requires TfliteYoloDetector")
@@ -5984,6 +5993,9 @@ class MeasurementController(
         val ceil = v2AnalogCeil()
         val shutters = v2ShutterRungsUs.copyOf()
         val nG = gains.size
+        // collect_cf2's digital rungs above the lattice: gain indices nG, nG + 1.
+        val gainsExt = if (aligned) gains + intArrayOf(3200, 6400) else gains
+        val nGx = gainsExt.size
         val nS = shutters.size
         val frameFloorUs = 16_750
         fun captured(gi: Int) = minOf(gains[gi], ceil)
@@ -5996,7 +6008,7 @@ class MeasurementController(
         // A counterfactual moment's 13 shots go in one request: a second request would wait
         // for the first one's last frame and open a gap in the middle of the moment.
         val CHUNK = if (counterfactual) 13 else 10
-        startPass(if (counterfactual) "collect_cf" else if (pipelineAB) "collect_5x5_ab"
+        startPass(if (aligned) "collect_cf2" else if (counterfactual) "collect_cf" else if (pipelineAB) "collect_5x5_ab"
             else "collect_5x5", isGtReference = false,
             withFrames = false, methodParams = JSONObject()
                 .put("purpose", "claim 1: every image prop_c synthesizes, beside the real " +
@@ -6043,6 +6055,20 @@ class MeasurementController(
                         put("gapped_note", "1/60 sums are flagged gapped by the rule above, but " +
                             "the gap is 83 us of 16750 (0.5%)")
                     }
+                    if (aligned) {
+                        put("gain_levels_ext", JSONArray(gainsExt.toList()))
+                        put("aligned_rule", "every burst's 2- and 4-frame sums again after a tracking " +
+                            "update: frames k = 1..n-1 moved back onto frame 0 tile by tile " +
+                            "(${BurstAlign.TX} x ${BurstAlign.TY} tiles, whole 2x2 quads, CFA kept) by the " +
+                            "accumulated LK motion between consecutive frames (quad luma at half quad " +
+                            "resolution, ${BurstAlign.PTS} corners a tile, ${BurstAlign.LEVELS} levels, " +
+                            "untracked or outlying tiles from their 3x3 neighbours), then summed as FIRST_N")
+                        put("uses_ext", JSONObject()
+                            .put("aligned", "tracking-updated sums, at every ISO incl. 3200 and 6400")
+                            .put("gain_ext", "single frames at digital ISO 3200 and 6400"))
+                        put("motion_log", "collect_motion.jsonl: per burst, the consecutive-frame tile " +
+                            "steps (dx, dy, points; half-quad px = 4 sites = 2 px of the 1020-wide image)")
+                    }
                 })
         logger.csv("collect_frames", listOf("frame", "base_gi", "base_iso", "base_iso_captured",
             "pipeline", "order", "t_request_ns", "t_first_exposure_ns", "t_last_exposure_end_ns",
@@ -6063,6 +6089,7 @@ class MeasurementController(
             "use"))
 
         val detsWriter = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val alignPool = java.util.concurrent.Executors.newFixedThreadPool(4)
         val laneBytes = 640 * 640 * 3 * 4
         val jpegPool = java.util.concurrent.Executors.newFixedThreadPool(4)
         val copyPermits = java.util.concurrent.Semaphore(12)
@@ -6107,6 +6134,30 @@ class MeasurementController(
         raw.armNativeDecodeValidation()
         onStatus("collect 5x5: warming GPU batches…")
         tfl.warmUpAllBatches()
+        /** Forms and detects lanes [laneN] x [ratio] of [frs] in chunks of at most [maxLanes]:
+         *  the source caches one tensor buffer per lane count (17 lanes = 83 MB), so few small
+         *  counts keep the 512 MB heap clear. Each lane goes to [each] (tensor, lane in that
+         *  tensor, lane in the list, its detections) while its chunk's tensor is current.
+         *  Returns the formation and inference ms. */
+        fun formAndDetect(frs: List<RawFrame>, laneN: List<Int>, ratio: List<Double>, maxLanes: Int,
+                          each: (Exp21TensorResult, Int, Int, List<Detection>) -> Unit): DoubleArray {
+            var fMs = 0.0; var iMs = 0.0
+            var start = 0
+            while (start < laneN.size) {
+                val end = minOf(laneN.size, start + maxLanes)
+                val tf = now()
+                val t = src.formExplicitBurstTensor(frs, laneN.subList(start, end).toIntArray(),
+                    ratio.subList(start, end).toDoubleArray())
+                fMs += ms(tf)
+                val d = tfl.detectTensorBatchAllClasses(t.batch)
+                iMs += tfl.lastRunMs + tfl.lastDecodeMs
+                for (l in start until end) each(t, l - start, l, d[l - start])
+                start = end
+            }
+            return doubleArrayOf(fMs, iMs)
+        }
+        // collect_cf2 forms up to 31 lanes a burst: in chunks of 7 (one 34 MB buffer).
+        val maxLanes = if (aligned) 7 else Int.MAX_VALUE
         /** Fraction of a decoded frame's sampled sites (black removed) that would clip if its
          *  gain were multiplied by [scale]. */
         fun clipFractionAt(fr: RawFrame, scale: Double): Double {
@@ -6182,7 +6233,7 @@ class MeasurementController(
                     val cell = gi * nS + sj
                     var sumAll = 0.0; var nSel = 0
                     for (d in dets) if (d.confidence >= selectConf) { sumAll += d.confidence; nSel++ }
-                    logger.row("collect_cells", listOf(f, pipeline, kind, cell, gi, sj, gains[gi],
+                    logger.row("collect_cells", listOf(f, pipeline, kind, cell, gi, sj, gainsExt[gi],
                         shutters[sj], b, burstSj, sourceIso, nFrames, if (gapped) 1 else 0,
                         "%.4f".format(ratio), shot, ts, "%.4f".format(stats[0]), "%.5f".format(stats[1]),
                         dets.size, nSel, "%.3f".format(sumConf(dets)), "%.3f".format(sumAll), imgPath,
@@ -6238,46 +6289,93 @@ class MeasurementController(
                             val laneGi = ArrayList<Int>(); val laneSj = ArrayList<Int>()
                             var n = 1; var row = u.sj
                             while (n <= u.n && row < nS) {
-                                val gis = if (n == 1 || counterfactual) (0 until nG).toList()
+                                val gis = if (n == 1 && aligned) (0 until nGx).toList()
+                                    else if (n == 1 || counterfactual) (0 until nG).toList()
                                     else (maxOf(0, b - 1)..minOf(nG - 1, b + 1)).toList()
                                 for (g in gis) {
-                                    laneBurst += n; laneRatio += gains[g].toDouble() / captured(b)
+                                    laneBurst += n; laneRatio += gainsExt[g].toDouble() / captured(b)
                                     laneGi += g; laneSj += row
                                 }
                                 n *= 2; row++
                             }
-                            val tf = now()
-                            val tensor = src.formExplicitBurstTensor(burst, laneBurst.toIntArray(),
-                                laneRatio.toDoubleArray())
-                            formMs += ms(tf)
-                            val dets = tfl.detectTensorBatchAllClasses(tensor.batch)
-                            inferMs += tfl.lastRunMs + tfl.lastDecodeMs
                             val tl = now()
-                            for (lane in laneBurst.indices) {
+                            val fi = formAndDetect(burst, laneBurst, laneRatio, maxLanes) { tensor, tLane, lane, laneDets ->
                                 val gi = laneGi[lane]; val sj = laneSj[lane]
-                                val stats = lumaAndClipFromTensorLane(tensor, lane)
+                                val stats = lumaAndClipFromTensorLane(tensor, tLane)
                                 val gapped = laneBurst[lane] > 1 && shutters[u.sj] < frameFloorUs
                                 // Sums of short frames are the proposed's imperfect probe rows.
                                 val use = when {
                                     !counterfactual -> ""
+                                    gi >= nG -> "gain_ext"
                                     laneBurst[lane] > 1 && u.sj < 2 -> "proposed_input_only"
                                     else -> "counterfactual"
                                 }
                                 val tag = when (use) {
-                                    "counterfactual" -> "cf_"; "proposed_input_only" -> "pi_"; else -> ""
+                                    "counterfactual" -> "cf_"; "proposed_input_only" -> "pi_"; "gain_ext" -> "gx_"; else -> ""
                                 }
-                                val path = saveLaneJpeg(tensor, lane, "${frameName(f)}_${tag}s${laneBurst[lane]}x" +
-                                    "${shutters[u.sj]}_b${gains[b]}_g${gains[gi]}")
+                                val path = saveLaneJpeg(tensor, tLane, "${frameName(f)}_${tag}s${laneBurst[lane]}x" +
+                                    "${shutters[u.sj]}_b${gains[b]}_g${gainsExt[gi]}")
                                 logCell("synth", gi, sj, u.sj, captured(b), laneBurst[lane], gapped,
-                                    laneRatio[lane], burstShot, burstTs, stats, dets[lane], path, use)
+                                    laneRatio[lane], burstShot, burstTs, stats, laneDets, path, use)
                                 if (laneBurst[lane] == 1 && gi == b && u.sj == 2) {
-                                    preview = src.selectedTensorBitmap(tensor, lane)
-                                    previewDets = src.detectionsForTensorPreview(dets[lane], tensor, lane)
+                                    preview = src.selectedTensorBitmap(tensor, tLane)
+                                    previewDets = src.detectionsForTensorPreview(laneDets, tensor, tLane)
                                 }
                             }
+                            formMs += fi[0]; inferMs += fi[1]
                             nImages += laneBurst.size
+                            logMs += ms(tl) - fi[0] - fi[1]
+                            if (aligned && u.n > 1) {
+                                // Tracking update: frames 1..n-1 moved back onto frame 0.
+                                val ta = now()
+                                val bw = burst[0].width; val bh = burst[0].height
+                                val pyr = burst.map { fr -> alignPool.submit(java.util.concurrent.Callable {
+                                    BurstAlign.pyramid(fr.bayer, fr.width, fr.height) }) }.map { it.get() }
+                                val steps = (1 until burst.size).map { k -> BurstAlign.step(pyr[k - 1], pyr[k], alignPool) }
+                                val acc = BurstAlign.accumulate(steps)
+                                val movedJobs = acc.withIndex().map { (k, m) -> alignPool.submit(java.util.concurrent.Callable {
+                                    BurstAlign.moveBack(burst[k + 1].bayer, bw, bh, m) }) }
+                                val moved = ArrayList<RawFrame>(burst.size)
+                                moved += burst[0]
+                                movedJobs.forEachIndexed { k, job ->
+                                    val fr = burst[k + 1]
+                                    moved += RawFrame(job.get(), fr.width, fr.height, fr.cfaPattern, fr.maxDn,
+                                        fr.sensorOrientation, fr.whiteBalance, fr.cameraToSrgb)
+                                }
+                                val alignMs = ms(ta)
+                                val aBurst = ArrayList<Int>(); val aRatio = ArrayList<Double>()
+                                val aGi = ArrayList<Int>(); val aSj = ArrayList<Int>()
+                                var an = 2; var arow = u.sj + 1
+                                while (an <= u.n && arow < nS) {
+                                    for (g in 0 until nGx) {
+                                        aBurst += an; aRatio += gainsExt[g].toDouble() / captured(b)
+                                        aGi += g; aSj += arow
+                                    }
+                                    an *= 2; arow++
+                                }
+                                val tal = now()
+                                val afi = formAndDetect(moved, aBurst, aRatio, maxLanes) { aTensor, tLane, lane, laneDets ->
+                                    val gi = aGi[lane]; val sj = aSj[lane]
+                                    val stats = lumaAndClipFromTensorLane(aTensor, tLane)
+                                    val gapped = shutters[u.sj] < frameFloorUs
+                                    val path = saveLaneJpeg(aTensor, tLane, "${frameName(f)}_al_s${aBurst[lane]}x" +
+                                        "${shutters[u.sj]}_b${gains[b]}_g${gainsExt[gi]}")
+                                    logCell("aligned", gi, sj, u.sj, captured(b), aBurst[lane], gapped,
+                                        aRatio[lane], burstShot, burstTs, stats, laneDets, path, "aligned")
+                                }
+                                formMs += afi[0]; inferMs += afi[1]
+                                nImages += aBurst.size
+                                val fr = f; val bsj = u.sj
+                                val stepJson = JSONArray(steps.map { st -> JSONArray(st.map { t ->
+                                    JSONArray(listOf(Math.round(t[0] * 1000) / 1000.0, Math.round(t[1] * 1000) / 1000.0, t[2].toInt())) }) })
+                                detsWriter.execute {
+                                    logger.jsonl("collect_motion", JSONObject().put("frame", fr).put("burst_sj", bsj)
+                                        .put("tiles", JSONArray(listOf(BurstAlign.TX, BurstAlign.TY)))
+                                        .put("align_ms", alignMs).put("steps", stepJson))
+                                }
+                                logMs += ms(tal) - afi[0] - afi[1]
+                            }
                             burst.clear()
-                            logMs += ms(tl)
                         } else {
                             val ratio = gains[u.gi].toDouble() / captured(u.gi)
                             val tf = now()
@@ -6299,6 +6397,7 @@ class MeasurementController(
                 } catch (t: Throwable) {
                     handles.forEach { h -> h?.let { raw.abortBracketSequence(it) } }
                     ok = false; failures++
+                    android.util.Log.e("SosCollect", "frame $f failed", t)
                     onStatus("collect 5x5: frame $f failed (${t.message})")
                 }
                 if (!ok) {
@@ -6330,7 +6429,7 @@ class MeasurementController(
                 lastFrameIdx = f
                 totalFramesLogged += 1
                 preview?.let { bmp -> runCatching { onFrame(bmp, previewDets, gains[b], shutters[2]) } }
-                onStatus((if (counterfactual) "COLLECT CF" else "COLLECT55") +
+                onStatus((if (aligned) "COLLECT CF2" else if (counterfactual) "COLLECT CF" else "COLLECT55") +
                     " f=$f base ISO ${gains[b]} $pipeline | ${shots.size} shots, " +
                     "$nImages images | ${"%.0f".format(totalMs)}ms")
                 f++
@@ -6341,7 +6440,7 @@ class MeasurementController(
             runCatching { raw.stopFastCapture() }
             runCatching { src.shutdown() }
             runCatching {
-                jpegPool.shutdown(); detsWriter.shutdown()
+                jpegPool.shutdown(); detsWriter.shutdown(); alignPool.shutdownNow()
                 jpegPool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)
                 detsWriter.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)
             }
