@@ -27,30 +27,37 @@ object BurstAlign {
     const val OUTLIER_PX = 6.0
 
     /** Quad luma at half the quad resolution: each pixel the mean of a 4 x 4 block of sites,
-     *  divided by the frame mean so the threshold-free LK sees the same scale in every light. */
-    fun lumaHalf(bayer: IntArray, w: Int, h: Int): SparseFlow.Img {
+     *  divided by the frame mean so the threshold-free LK sees the same scale in every light.
+     *  With [exec] the rows are filled on 4 tasks (the caller must not be one of its threads);
+     *  the mean is summed in pixel order either way, so the values are the same. */
+    fun lumaHalf(bayer: IntArray, w: Int, h: Int, exec: java.util.concurrent.ExecutorService? = null): SparseFlow.Img {
         val hw = w / 4; val hh = h / 4
         val out = FloatArray(hw * hh)
-        var total = 0.0
-        for (y in 0 until hh) {
-            val sy = 4 * y
-            for (x in 0 until hw) {
-                val sx = 4 * x
-                var s = 0L
-                for (dy in 0 until 4) {
-                    val row = (sy + dy) * w + sx
-                    s += bayer[row] + bayer[row + 1] + bayer[row + 2] + bayer[row + 3]
+        fun rows(y0: Int, y1: Int) {
+            for (y in y0 until y1) {
+                val sy = 4 * y
+                for (x in 0 until hw) {
+                    val sx = 4 * x
+                    var s = 0L
+                    for (dy in 0 until 4) {
+                        val row = (sy + dy) * w + sx
+                        s += bayer[row] + bayer[row + 1] + bayer[row + 2] + bayer[row + 3]
+                    }
+                    out[y * hw + x] = s / 16f
                 }
-                val v = s / 16f
-                out[y * hw + x] = v; total += v
             }
         }
+        if (exec == null) rows(0, hh)
+        else (0 until 4).map { j -> exec.submit(Runnable { rows(j * hh / 4, (j + 1) * hh / 4) }) }.forEach { it.get() }
+        var total = 0.0
+        for (v in out) total += v
         val m = (total / out.size).toFloat().coerceAtLeast(1e-6f)
         for (i in out.indices) out[i] /= m
         return SparseFlow.Img(hw, hh, out)
     }
 
-    fun pyramid(bayer: IntArray, w: Int, h: Int) = SparseFlow.pyramid(lumaHalf(bayer, w, h), LEVELS)
+    fun pyramid(bayer: IntArray, w: Int, h: Int, exec: java.util.concurrent.ExecutorService? = null) =
+        SparseFlow.pyramid(lumaHalf(bayer, w, h, exec), LEVELS)
 
     /** Tile [t]'s bounds in half-quad px of an image [w] x [h]: x0, y0, x1, y1 (inclusive). */
     fun tileBounds(t: Int, w: Int, h: Int): IntArray {
@@ -124,10 +131,23 @@ object BurstAlign {
      * per quad, 4 sites per half-quad px), so the CFA pattern is kept. Sources outside the
      * frame are clamped to the border site of the same CFA parity.
      */
-    fun moveBack(bayer: IntArray, w: Int, h: Int, motion: Array<DoubleArray>): IntArray {
+    fun moveBack(bayer: IntArray, w: Int, h: Int, motion: Array<DoubleArray>,
+                 exec: java.util.concurrent.ExecutorService? = null): IntArray {
         val out = IntArray(bayer.size)
         val hw = w / 4; val hh = h / 4
-        for (t in 0 until TX * TY) {
+        // Every output site is written once, so tile rows can be filled on separate tasks.
+        if (exec != null) {
+            (0 until 4).map { j -> exec.submit(Runnable { moveTiles(bayer, w, h, motion, out, hw, hh, j * TY / 4 * TX, (j + 1) * TY / 4 * TX) }) }
+                .forEach { it.get() }
+            return out
+        }
+        moveTiles(bayer, w, h, motion, out, hw, hh, 0, TX * TY)
+        return out
+    }
+
+    private fun moveTiles(bayer: IntArray, w: Int, h: Int, motion: Array<DoubleArray>, out: IntArray,
+                          hw: Int, hh: Int, t0: Int, t1: Int) {
+        for (t in t0 until t1) {
             val b = tileBounds(t, hw, hh)
             // Site bounds of the tile; the last row and column of tiles reach the frame edge.
             val sx0 = 4 * b[0]; val sy0 = 4 * b[1]
@@ -146,7 +166,6 @@ object BurstAlign {
                 }
             }
         }
-        return out
     }
 
     fun median(v: List<Double>): Double {

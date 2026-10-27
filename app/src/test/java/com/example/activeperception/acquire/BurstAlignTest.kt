@@ -71,6 +71,17 @@ class BurstAlignTest {
         assertEquals(1.0, BurstAlign.median(s.map { it[1] }), 0.25)
     }
 
+    @Test fun splittingTheWorkOverThreadsChangesNothing() {
+        val f1 = frame(6, 2)
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        try {
+            val serial = BurstAlign.lumaHalf(f1, w, h); val split = BurstAlign.lumaHalf(f1, w, h, pool)
+            assertTrue(serial.px.contentEquals(split.px))
+            val m = Array(BurstAlign.TX * BurstAlign.TY) { doubleArrayOf((it % 5) - 2.0, (it % 3) - 1.0) }
+            assertTrue(BurstAlign.moveBack(f1, w, h, m).contentEquals(BurstAlign.moveBack(f1, w, h, m, pool)))
+        } finally { pool.shutdownNow() }
+    }
+
     @Test fun cleanFillsUntrackedTilesAndOutliersFromTheirNeighbours() {
         val raw = Array(BurstAlign.TX * BurstAlign.TY) { doubleArrayOf(2.0, 1.0, 4.0) }
         raw[20] = doubleArrayOf(Double.NaN, Double.NaN, 0.0)

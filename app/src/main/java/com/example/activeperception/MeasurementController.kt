@@ -4470,15 +4470,14 @@ class MeasurementController(
                         val ta = now()
                         val cells = if (a == 0) mapTiles else BooleanArray(HowToSense.N) { mapTiles[it] || prevTraceCells[it] }
                         val tiles = sensorTiles(cells)
-                        val pyr = rs.map { fr -> alignPool.submit(java.util.concurrent.Callable {
-                            BurstAlign.pyramid(fr.bayer, fr.width, fr.height) }) }.map { it.get() }
+                        // Each step's work split over alignPool's 4 threads (rows, tiles, tile rows).
+                        val pyr = rs.map { fr -> BurstAlign.pyramid(fr.bayer, fr.width, fr.height, alignPool) }
                         val acc = BurstAlign.accumulate((1 until rs.size).map { k -> BurstAlign.step(pyr[k - 1], pyr[k], alignPool, tiles) })
                         val moved = listOf(rs[0]) + acc.withIndex().map { (k, m) ->
                             val fr = rs[k + 1]
-                            alignPool.submit(java.util.concurrent.Callable {
-                                RawFrame(BurstAlign.moveBack(fr.bayer, fr.width, fr.height, m), fr.width, fr.height,
-                                    fr.cfaPattern, fr.maxDn, fr.sensorOrientation, fr.whiteBalance, fr.cameraToSrgb) })
-                        }.map { it.get() }
+                            RawFrame(BurstAlign.moveBack(fr.bayer, fr.width, fr.height, m, alignPool), fr.width, fr.height,
+                                fr.cfaPattern, fr.maxDn, fr.sensorOrientation, fr.whiteBalance, fr.cameraToSrgb)
+                        }
                         alignMs += ms(ta)
                         moved
                     }
