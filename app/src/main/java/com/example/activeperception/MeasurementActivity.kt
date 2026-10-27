@@ -1701,7 +1701,9 @@ class MeasurementActivity : AppCompatActivity() {
         /** Seconds counted down on the big line before a [run] starts. */
         val delayS: Int = 0,
         /** Lighting the operator declared by the button pressed; goes into every manifest. */
-        val lighting: String? = null
+        val lighting: String? = null,
+        /** Prefix of the experiment_session label every run of a lighting preset carries. */
+        val sessionTag: String = "duel2_main"
     )
 
     /** The Duel experiment (docs/SPEC_proposed_v4.md): eight methods, three runs each of
@@ -1715,6 +1717,14 @@ class MeasurementActivity : AppCompatActivity() {
     private val MAIN_LAPS = 2
     private val MAIN_PLAN = (0 until 3).flatMap { r ->
         MAIN_METHODS.indices.map { MAIN_METHODS[(it + r) % MAIN_METHODS.size] }
+    }.joinToString(",") { "$it:$MAIN_LAPS" }
+
+    /** The base-image check (2026-10-28): Duel2 as it was (burst-sum images), with real single
+     *  reads, and with tracking sums, against the fixed reference; three rounds of [MAIN_LAPS]
+     *  laps, the order shifted each round. 12 runs, ~9 min. */
+    private val VERIFY_METHODS = listOf("duel2_trace", "duel2s_trace", "duel2t_trace", "fixed_1600_240")
+    private val VERIFY_PLAN = (0 until 3).flatMap { r ->
+        VERIFY_METHODS.indices.map { VERIFY_METHODS[(it + r) % VERIFY_METHODS.size] }
     }.joinToString(",") { "$it:$MAIN_LAPS" }
 
     /** One round of the Limo step, one lap each, the method changing every lap so slow drift
@@ -1741,6 +1751,9 @@ class MeasurementActivity : AppCompatActivity() {
         R.id.expMainDark to LapPreset("main, dark", MAIN_PLAN, 1, lighting = "dark"),
         // Check tab: Duel's two modes, one 3-lap run each (spec 7, track part).
         R.id.expTrackTest to LapPreset("track test", "duel2_trace:3,duel2_every:3", 1),
+        // Check tab: the base-image check in the dark (see VERIFY_PLAN).
+        R.id.expVerifyDark to LapPreset("verify base, dark", VERIFY_PLAN, 1, lighting = "dark",
+            sessionTag = "duel2_verify"),
         R.id.expReadNoise to LapPreset("read noise", run = "readnoise"),
         // Old tab: the v3 experiments' steps (2026-10-15/16).
         R.id.expStatic to LapPreset("question 1, still", run = "collect55_ab", cap = 30),
@@ -1805,6 +1818,10 @@ class MeasurementActivity : AppCompatActivity() {
         return when (method) {
             "duel2_trace" -> "proposed: Duel2 (trace)"
             "duel2_every" -> "proposed: Duel2 (every)"
+            "duel2s_trace" -> "proposed: Duel2 single reads (trace)"
+            "duel2s_every" -> "proposed: Duel2 single reads (every)"
+            "duel2t_trace" -> "proposed: Duel2 tracking sums (trace)"
+            "duel2t_every" -> "proposed: Duel2 tracking sums (every)"
             "fixed_1600_240" -> "reference: fixed 1600 · 1/240"
             "nae" -> "baseline: Neural-AE"
             "prop_c" -> "baseline: Sense-well"
@@ -1904,7 +1921,7 @@ class MeasurementActivity : AppCompatActivity() {
         presetRunCap = null
         ExperimentSession.lighting = preset?.lighting.orEmpty()
         ExperimentSession.session = if (preset?.lighting != null)
-            "duel2_main_${preset.lighting}_${System.currentTimeMillis()}" else ""
+            "${preset.sessionTag}_${preset.lighting}_${System.currentTimeMillis()}" else ""
         // The x2 digital boost exists for the S25's ISO-400 analog ceiling and is folded
         // into every grid-formed image, phone AE included. The collection run sets its own
         // ratios, so leaving the boost on would make the AE laps one stop brighter than
@@ -2034,12 +2051,19 @@ class MeasurementActivity : AppCompatActivity() {
             start(cmd) { mc!!.runV3Cause(theta, pilot, cap, ::post, ::showFrame) }
             return
         }
-        if (cmd == "duel2_trace" || cmd == "duel2_every") {
+        // duel2 = the 2026-10-26 app, duel2s = real single reads, duel2t = tracking sums.
+        val duelBase = mapOf("duel2" to "naive", "duel2s" to "single", "duel2t" to "track")
+        val duelParts = cmd.split("_")
+        if (duelParts.size == 2 && duelParts[0] in duelBase && duelParts[1] in listOf("trace", "every")) {
             val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
             val curve = runCatching {
                 HowToSense.Curve.parse(assets.open("tolerance_curve.txt").bufferedReader().use { it.readText() })
             }.getOrElse { post("Duel needs assets/tolerance_curve.txt: ${it.message}"); return }
-            start(cmd) { mc!!.runDuel(cmd == "duel2_every", curve, cap, ::post, ::showFrame) }
+            // Desk tests: --ei duel_start_cell c forces the start cell once (then forgotten).
+            val forced = intent?.getIntExtra("duel_start_cell", -1)?.takeIf { it in 0 until 25 }
+            intent?.removeExtra("duel_start_cell")
+            start(cmd) { mc!!.runDuel(duelParts[1] == "every", curve, cap, ::post, ::showFrame,
+                baseMode = duelBase.getValue(duelParts[0]), startCellOverride = forced) }
             return
         }
         // The Duel experiments' fixed reference cell: ISO 1600 x 1/240 s on the v2 lattice.

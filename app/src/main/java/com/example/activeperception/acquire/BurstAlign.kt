@@ -65,9 +65,12 @@ object BurstAlign {
      * empty too). Returns TX x TY rows of (dx, dy, points tracked).
      */
     fun step(prev: List<SparseFlow.Img>, next: List<SparseFlow.Img>,
-             exec: java.util.concurrent.ExecutorService? = null): Array<DoubleArray> {
+             exec: java.util.concurrent.ExecutorService? = null, tiles: BooleanArray? = null): Array<DoubleArray> {
         val w = prev[0].w; val h = prev[0].h
         fun one(t: Int): DoubleArray {
+            // [tiles] limits the tracking (live Duel2: the tiles the map and the traces use);
+            // the others take their neighbours' or the frame's median in [clean].
+            if (tiles != null && !tiles[t]) return doubleArrayOf(Double.NaN, Double.NaN, 0.0)
             val b = tileBounds(t, w, h)
             val p = SparseFlow.corners(prev[0], b[0].toDouble(), b[1].toDouble(), b[2].toDouble(), b[3].toDouble(), PTS)
             val tr = SparseFlow.track(next, prev, p).filterNotNull()

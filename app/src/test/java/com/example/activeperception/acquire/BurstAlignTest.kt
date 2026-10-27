@@ -62,6 +62,15 @@ class BurstAlignTest {
         assertEquals(1.0, BurstAlign.median(acc[2].map { it[1] }), 0.4)   // 2 quads
     }
 
+    @Test fun stepOnSomeTilesFillsTheRestWithTheirMotion() {
+        val f0 = frame(0, 0); val f1 = frame(6, 2)
+        val tiles = BooleanArray(BurstAlign.TX * BurstAlign.TY) { it % 7 == 3 }
+        val s = BurstAlign.step(BurstAlign.pyramid(f0, w, h), BurstAlign.pyramid(f1, w, h), tiles = tiles)
+        assertTrue(s.withIndex().all { (t, v) -> tiles[t] || v[2] == 0.0 })      // untracked ones marked
+        assertEquals(3.0, BurstAlign.median(s.map { it[0] }), 0.25)
+        assertEquals(1.0, BurstAlign.median(s.map { it[1] }), 0.25)
+    }
+
     @Test fun cleanFillsUntrackedTilesAndOutliersFromTheirNeighbours() {
         val raw = Array(BurstAlign.TX * BurstAlign.TY) { doubleArrayOf(2.0, 1.0, 4.0) }
         raw[20] = doubleArrayOf(Double.NaN, Double.NaN, 0.0)

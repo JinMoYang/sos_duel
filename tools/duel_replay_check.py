@@ -54,7 +54,11 @@ def load_jsonl(path):
 def check(run):
     man = json.load(open(f"{run}/manifest.json", encoding="utf-8"))
     mp = man.get("method_params", {})
-    every = mp.get("mode") == "duel2_every"
+    every = str(mp.get("mode", "")).endswith("_every")
+    # duel2s / duel2t (2026-10-28): no Thompson; the extra cell is the previous frame's
+    # extra_next (the curve's best away from the base shutter), else the shutter neighbour.
+    new_rule = mp.get("base_mode") in ("single", "track")
+    extra_next = None
     g = ISOS.index(mp["start"]["iso"])
     s = SHUTTERS.index(mp["start"]["shutter_us"])
     dec = sorted(load_jsonl(f"{run}/decisions.jsonl"), key=lambda r: r["frame"])
@@ -80,7 +84,16 @@ def check(run):
         # ---- plan
         dirs = [d for d, st in DIRS.items() if 0 <= s + st < len(SHUTTERS)]
         draws = r["plan"]["thompson_draws"]
-        if every or prev_trace:
+        if new_rule:
+            reason = "always" if every else ("trace" if prev_trace else "none")
+            want = (reason, None)
+            if reason != "none":
+                ex = extra_next if extra_next is not None and extra_next % 5 != s else g * 5 + (s + 1 if s + 1 < 5 else s - 1)
+                if r["plan"].get("extra_cell") != ex:
+                    mismatch("extra_cell", f, r["plan"].get("extra_cell"), ex)
+            elif r["plan"].get("extra_cell") is not None:
+                mismatch("extra_cell", f, r["plan"].get("extra_cell"), None)
+        elif every or prev_trace:
             reason = "always" if every else "trace"
             pick = max(dirs, key=lambda d: draws[d]) if draws else None
             if draws is None or sorted(draws) != sorted(dirs):
@@ -134,6 +147,15 @@ def check(run):
         got_next = (r["next_base"]["iso"], r["next_base"]["shutter_us"])
         if got_next != (ISOS[g], SHUTTERS[s]):
             mismatch("next_base", f, got_next, (ISOS[g], SHUTTERS[s]))
+        if new_rule:
+            xn = bc.get("extra_next", {})
+            if "e" in xn:
+                want_x = max((c for c in range(25) if c % 5 != s), key=lambda c: (xn["e"][c], -c))
+                if xn.get("cell") != want_x:
+                    mismatch("extra_next", f, xn.get("cell"), want_x)
+                extra_next = xn.get("cell")
+            else:
+                extra_next = None
         nothing = not b_out and not b_weak
         if nothing != r["nothing"]:
             mismatch("nothing", f, r["nothing"], nothing)

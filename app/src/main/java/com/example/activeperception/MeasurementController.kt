@@ -4257,16 +4257,31 @@ class MeasurementController(
     fun runDuel(
         every: Boolean, curve: HowToSense.Curve, maxFrames: Int,
         onStatus: (String) -> Unit,
-        onFrame: (Bitmap, List<Detection>, Int, Int) -> Unit = { _, _, _, _ -> }
+        onFrame: (Bitmap, List<Detection>, Int, Int) -> Unit = { _, _, _, _ -> },
+        baseMode: String = "naive",
+        /** Desk tests only: start at this lattice cell instead of the phone AE's. */
+        startCellOverride: Int? = null
     ) {
         val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
             ?: error("Duel requires TfliteYoloDetector")
-        val mode = if (every) "duel2_every" else "duel2_trace"
+        require(baseMode in listOf("naive", "single", "track"))
+        // 2026-10-28 base-image experiment. naive: the 2026-10-26 app (burst-sum images, Thompson
+        // neighbour, evidence-mean output). single / track: every image is real reads at its own
+        // setting (track: a cell longer than 1/240 is realised as aligned 1/240 .. 1/60 reads, see
+        // reads()), the extra image's cell is the curve's best away from the base shutter, and the
+        // output is every kept cluster (union).
+        val newRule = baseMode != "naive"
+        val mode = (if (baseMode == "single") "duel2s" else if (baseMode == "track") "duel2t" else "duel2") +
+            if (every) "_every" else "_trace"
         val lattice = Grid(gains = Duel.ISOS, exposuresUs = Duel.SHUTTERS_US, digitalBoost = 1.0)
         val analogCeil = v2AnalogCeil()
         // ---- start: phone AE's setting, nearest cell on each axis (AE is never used again).
-        val ae = meterAeStart(onStatus)
-        val startCell = if (ae != null) nearestCell(lattice, ae.iso, ae.expUs) else lattice.cell(2, 2)
+        val ae = if (startCellOverride != null) null else meterAeStart(onStatus)
+        val startCell = when {
+            startCellOverride != null -> lattice.cell(startCellOverride / 5, startCellOverride % 5)
+            ae != null -> nearestCell(lattice, ae.iso, ae.expUs)
+            else -> lattice.cell(2, 2)
+        }
         val (startG, startS) = lattice.indices(startCell)
         val seed = System.currentTimeMillis()
         startPass(mode, isGtReference = false, methodParams = JSONObject()
@@ -4294,7 +4309,8 @@ class MeasurementController(
             .put("thompson_seed", seed)
             .put("start", JSONObject().put("ae", ae?.json() ?: JSONObject.NULL)
                 .put("iso", Duel.ISOS[startG]).put("shutter_us", Duel.SHUTTERS_US[startS])
-                .put("rule", if (ae != null) "phone AE, nearest cell per axis (log distance)"
+                .put("rule", if (startCellOverride != null) "forced (desk test)"
+                    else if (ae != null) "phone AE, nearest cell per axis (log distance)"
                     else "AE gave nothing: ISO 400, 1/60 s"))
             .put("pipeline_depth", 1)
             .put("capture_template", "preview for one frame, still for two (captureFast's rule)")
@@ -4303,7 +4319,22 @@ class MeasurementController(
                 "pair; the longer image = their sum (FIRST_N), the shorter = the first frame. ISO: the " +
                 "base cell's; analog follows it up to the ceiling, digital fills the rest")
             .put("detector", "yolov8n tflite, conf >= 0.05 kept, vehicles for decisions")
-            .put("input_size", 640))
+            .put("input_size", 640)
+            .put("base_mode", baseMode)
+            .apply {
+                if (newRule) {
+                    put("synthesis", if (baseMode == "single") "none: base and extra are each one real read at its own setting"
+                        else "tracking sum for the gapped cells: 1/120 = 2 x 1/240, 1/60 = 2 x 1/120, the " +
+                            "second read moved back onto the first (BurstAlign, 16 x 12 tiles; LK only on the " +
+                            "map's flow cells and the previous frame's trace cells, other tiles from the tracked " +
+                            "ones' median) and summed; 1/240, 1/30, 1/15 are one real read")
+                    put("extra_rule", "the curve's E with weights = this frame's base traces (else the map), " +
+                        "argmax over cells whose shutter differs from the next base's; taken when " +
+                        (if (every) "always" else "the base had a trace") + "; no Thompson")
+                    put("out_rule", "union: every kept cluster (evidence ranks NMS only)")
+                    put("capture_template", "preview for one read, still for more")
+                } else put("out_rule", "kept clusters with evidence >= ${V.OUT_THR}")
+            })
         logger.csv("duel_frames", listOf("idx", "n_images", "n_captures", "reason", "base_iso",
             "base_shutter_us", "nb_shutter_us", "t_capture_start", "t_capture2_start",
             "t_capture_end", "t_output", "capture_ms", "formation_ms", "flow_ms", "infer_ms",
@@ -4319,6 +4350,16 @@ class MeasurementController(
 
         val pol = Duel.Policy(every, startG, startS, seed)
         val map = HowToSense.ObjectMap()
+        // single / track: the extra image's cell for the next frame (chosen at the end of a frame).
+        var nextExtra: Int? = null
+        val alignPool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        /** Reads that realise shutter index [s]: (read shutter index, count). track: the cells
+         *  whose shorter reads leave gaps (a read every 16.7 ms) are two reads at half the shutter,
+         *  tracking-summed: 1/120 = 2 x 1/240, 1/60 = 2 x 1/120; 1/240, 1/30, 1/15 are one read. */
+        fun reads(s: Int): Pair<Int, Int> = if (baseMode != "track") s to 1 else when (s) {
+            1 -> 0 to 2; 2 -> 1 to 2; else -> s to 1 }
+        // Grid cells of the previous frame's base traces (picture grid), for the extra lane's tiles.
+        var prevTraceCells = BooleanArray(HowToSense.N)
         var prevPic: DoubleArray? = null
         var prevExpo = 0.0
         var prevTs = 0L
@@ -4344,22 +4385,37 @@ class MeasurementController(
                 stepClock.begin()
                 // ---- 1. plan (previous frame's information only).
                 val tPlan0 = now()
-                val plan = pol.plan()
                 val gIdx = pol.baseG; val sBase = pol.baseS
+                val plan = if (!newRule) pol.plan() else Duel.Plan(null,
+                    if (every) "always" else if (pol.prevTrace) "trace" else "none", null)
                 val isoNom = Duel.ISOS[gIdx]
                 val phys = minOf(isoNom, analogCeil)
                 val ratio = isoNom.toDouble() / phys
-                val nbS = plan.nb?.let { sBase + it.step }
-                // Burst-sum synthesis: a comparison frame takes TWO frames at the shorter
+                // single / track: the extra image's cell (the previous frame's choice; the first
+                // time the shutter neighbour at the base ISO).
+                val exCell: Int? = if (!newRule || plan.reason == "none") null else
+                    nextExtra?.takeIf { it % 5 != sBase } ?: HowToSense.cell(gIdx, if (sBase + 1 < 5) sBase + 1 else sBase - 1)
+                val nbS = if (newRule) exCell?.let { it % 5 } else plan.nb?.let { sBase + it.step }
+                // Burst-sum synthesis (naive): a comparison frame takes TWO frames at the shorter
                 // shutter of the pair; the longer image is their sum, the shorter the first.
-                // laneN = leading frames summed per image: lane 0 = base, lane 1 = neighbour.
-                val laneN = when (plan.nb) {
+                // laneN = frames per image: lane 0 = base, lane 1 = neighbour / extra.
+                val laneN = if (newRule) {
+                    if (exCell == null) intArrayOf(reads(sBase).second)
+                    else intArrayOf(reads(sBase).second, reads(exCell % 5).second)
+                } else when (plan.nb) {
                     null -> intArrayOf(1)
                     Duel.Dir.LONG -> intArrayOf(1, 2)
                     Duel.Dir.SHORT -> intArrayOf(2, 1)
                 }
                 val frameS = if (plan.nb == Duel.Dir.SHORT) nbS!! else sBase
-                val shots = List(laneN.maxOrNull()!!) { Duel.SHUTTERS_US[frameS] to phys }
+                // Each lane's ISO: the base cell's, or (single / track) the extra cell's.
+                val laneIso = IntArray(laneN.size) { a -> if (a == 1 && exCell != null) Duel.ISOS[exCell / 5] else isoNom }
+                val lanePhys = IntArray(laneN.size) { minOf(laneIso[it], analogCeil) }
+                val laneRatio = DoubleArray(laneN.size) { laneIso[it].toDouble() / lanePhys[it] }
+                val laneReadS = IntArray(laneN.size) { a -> if (!newRule) frameS else reads(if (a == 0) sBase else exCell!! % 5).first }
+                val shots = if (newRule) (0 until laneN.size).flatMap { a ->
+                    List(laneN[a]) { Duel.SHUTTERS_US[laneReadS[a]] to lanePhys[a] } }
+                    else List(laneN.maxOrNull()!!) { Duel.SHUTTERS_US[frameS] to phys }
                 var planMs = ms(tPlan0)
                 // ---- 3. capture: one request, one or two frames at one setting.
                 val got = ArrayList<Pair<RawFrame, RawSensorCapturer.RawMeta>>()
@@ -4385,15 +4441,50 @@ class MeasurementController(
                 val captureMs = msBetween(t0, tCap)
                 val n = laneN.size
                 val frameUs = metas[0].appliedExpUs
+                // single / track: lane a's reads, in shot order (base reads first).
+                val laneStart = IntArray(n) { a -> if (newRule) laneN.take(a).sum() else 0 }
+                val laneMeta = List(n) { a -> metas[laneStart[a]] }
                 // Equivalent exposure of each image, and how it was made.
-                val imgUs = LongArray(n) { frameUs * laneN[it] }
+                val imgUs = LongArray(n) { a -> if (newRule) laneMeta[a].appliedExpUs * laneN[a] else frameUs * laneN[a] }
                 val gapped = metas[0].frameDurationNs > frameUs * 1_000L + 100_000L
-                fun madeBy(a: Int) = if (laneN[a] == 1) "frame"
+                fun madeBy(a: Int) = if (laneN[a] == 1) "frame" else if (baseMode == "track") "track_sum${laneN[a]}"
                     else "sum${laneN[a]}" + if (gapped) "_gapped" else "_gapfree"
 
-                // ---- 4. detect: base and neighbour formed from the same frames (FIRST_N sums),
-                // the same digital residual on each, one batch.
-                val tensor = src.formExplicitBurstTensor(frames, laneN, DoubleArray(n) { ratio })
+                // ---- 4. detect. naive: base and neighbour formed from the same frames (FIRST_N
+                // sums), the same digital residual on each. single / track: each lane from its own
+                // reads (track: reads 2..k moved back onto the first), its own ISO. One batch.
+                var alignMs = 0.0
+                // Tiles the tracking update measures: the map's flow cells, and for the extra lane
+                // the previous frame's trace cells too (picture grid -> sensor tiles; 0 and 180
+                // degrees map cell for tile, other orientations measure every tile).
+                val orient = (frames[0].sensorOrientation % 360 + 360) % 360
+                fun sensorTiles(cells: BooleanArray): BooleanArray? = when (orient) {
+                    0 -> cells.copyOf()
+                    180 -> BooleanArray(HowToSense.N) { t -> cells[HowToSense.N - 1 - t] }
+                    else -> null
+                }
+                val mapTiles = HowToSense.flowCells(map.weights())
+                val laneFrames: List<List<RawFrame>> = if (!newRule) emptyList() else (0 until n).map { a ->
+                    val rs = frames.subList(laneStart[a], laneStart[a] + laneN[a])
+                    if (rs.size == 1) rs else {
+                        val ta = now()
+                        val cells = if (a == 0) mapTiles else BooleanArray(HowToSense.N) { mapTiles[it] || prevTraceCells[it] }
+                        val tiles = sensorTiles(cells)
+                        val pyr = rs.map { fr -> alignPool.submit(java.util.concurrent.Callable {
+                            BurstAlign.pyramid(fr.bayer, fr.width, fr.height) }) }.map { it.get() }
+                        val acc = BurstAlign.accumulate((1 until rs.size).map { k -> BurstAlign.step(pyr[k - 1], pyr[k], alignPool, tiles) })
+                        val moved = listOf(rs[0]) + acc.withIndex().map { (k, m) ->
+                            val fr = rs[k + 1]
+                            alignPool.submit(java.util.concurrent.Callable {
+                                RawFrame(BurstAlign.moveBack(fr.bayer, fr.width, fr.height, m), fr.width, fr.height,
+                                    fr.cfaPattern, fr.maxDn, fr.sensorOrientation, fr.whiteBalance, fr.cameraToSrgb) })
+                        }.map { it.get() }
+                        alignMs += ms(ta)
+                        moved
+                    }
+                }
+                val tensor = if (newRule) src.formLanesTensor(laneFrames, laneRatio)
+                    else src.formExplicitBurstTensor(frames, laneN, DoubleArray(n) { ratio })
                 stepClock.formed()
                 // ---- 2a. How-to-Sense's part that needs no detection, started before the
                 // detector and joined at 2: the base picture, its stats on every grid cell (the
@@ -4450,7 +4541,9 @@ class MeasurementController(
                 val inferMs = tfl.lastRunMs + tfl.lastDecodeMs
                 val formMs = ms(tCap) - inferMs
                 val samplers = (0 until n).map { a ->
-                    com.example.activeperception.acquire.RawBoxSampler(frames[0], metas[0].blackLevels,
+                    if (newRule) com.example.activeperception.acquire.RawBoxSampler(laneFrames[a][0], metas[0].blackLevels,
+                        metas[0].white.toDouble(), laneFrames[a].drop(1))
+                    else com.example.activeperception.acquire.RawBoxSampler(frames[0], metas[0].blackLevels,
                         metas[0].white.toDouble(), frames.subList(1, laneN[a]))
                 }
                 val per = (0 until n).map { a ->
@@ -4545,8 +4638,8 @@ class MeasurementController(
                     flowMs = ms(tFlow0)
                     val tFuse0 = now()
                     clusters = V.fuse(listOf(
-                        V.FuseImage(per[0].out, per[0].low) { box -> samplers[0].satFrac(box, ratio, Duel.SAT_SITES) },
-                        V.FuseImage(nbOutB, nbLowB) { box -> samplers[1].satFrac(toNb(box), ratio, Duel.SAT_SITES) }))
+                        V.FuseImage(per[0].out, per[0].low) { box -> samplers[0].satFrac(box, laneRatio[0], Duel.SAT_SITES) },
+                        V.FuseImage(nbOutB, nbLowB) { box -> samplers[1].satFrac(toNb(box), laneRatio[1], Duel.SAT_SITES) }))
                     fusionMs = ms(tFuse0)
                     val tLearn0 = now()
                     wl = Duel.discord(clusters.filter { it.status == "kept" }.map { it.box },
@@ -4619,6 +4712,33 @@ class MeasurementController(
                         .put("speed_cells", JSONObject().put("needed", wgt.count { it > 0.0 }).put("measured", nMeasured))
                         .put("dt_ms", (ts - prevTs) / 1e6).put("map_total", map.total)
                 }
+                // single / track: the next frame's extra cell from this frame's base traces (else
+                // the map), away from the next base's shutter.
+                if (newRule) {
+                    val st = pc.st
+                    if (pp == null || st == null) {
+                        nextExtra = null
+                        choiceNote.put("extra_next", JSONObject().put("rule", "no stats yet: the shutter neighbour"))
+                    } else {
+                        val tm = HowToSense.ObjectMap()
+                        for (t in per[0].weak) tm.add(toPic(t.box))
+                        val fromTraces = tm.total > 0
+                        val wT = if (fromTraces) tm.weights() else map.weights()
+                        val selT = HowToSense.flowCells(wT)
+                        // Speeds already measured: the background's cells and the map's late cells.
+                        val done = pc.tried!!.copyOf()
+                        val selMap = HowToSense.flowCells(map.weights())
+                        for (k in 0 until HowToSense.N) if (selMap[k]) done[k] = true
+                        for (k in 0 until HowToSense.N) if (selT[k] && !done[k]) pc.raw!![k] = pc.flow!!.cellSpeed(k)
+                        val (speedT, _, _) = HowToSense.speedForMap(pc.raw!!, wT)
+                        val eT = HowToSense.choose(curve, st, speedT, wT, map.sizes(), curCell).e
+                        val nb = (0 until 25).filter { it % 5 != pol.baseS }.maxByOrNull { eT[it] }!!
+                        nextExtra = nb
+                        choiceNote.put("extra_next", JSONObject().put("cell", nb).put("iso", Duel.ISOS[nb / 5])
+                            .put("shutter_us", Duel.SHUTTERS_US[nb % 5]).put("weights", if (fromTraces) "traces" else "map")
+                            .put("n_traces", per[0].weak.size).put("e", JSONArray(eT.toList())))
+                    }
+                }
                 prevPic = pic; prevExpo = expo; prevTs = ts
                 val chooseMs = ms(tChoose0)
                 choiceNote.put("ms", chooseMs)
@@ -4626,6 +4746,14 @@ class MeasurementController(
                 // ---- 8. record for the next plan.
                 val trace = per[0].weak.isNotEmpty()
                 pol.prevTrace = trace
+                prevTraceCells = BooleanArray(HowToSense.N).also { cells ->
+                    for (t in per[0].weak) {
+                        val b = toPic(t.box)
+                        for (gy in maxOf(0, (b[1] / HowToSense.CS).toInt())..minOf(HowToSense.GY - 1, (b[3] / HowToSense.CS).toInt()))
+                            for (gx in maxOf(0, (b[0] / HowToSense.CS).toInt())..minOf(HowToSense.GX - 1, (b[2] / HowToSense.CS).toInt()))
+                                cells[gy * HowToSense.GX + gx] = true
+                    }
+                }
                 val nothing = per[0].out.isEmpty() && per[0].weak.isEmpty()
                 nothingRun = if (nothing) nothingRun + 1 else 0
                 stepClock.decided()
@@ -4639,13 +4767,13 @@ class MeasurementController(
                         if (d.confidence < 0.05f) continue
                         val box = DoubleArray(4) { d.xyxy[it].toDouble() }
                         arr.put(JSONObject().put("xyxy", jsonBox(box)).put("conf", d.confidence.toDouble())
-                            .put("class", d.classId).put("sat", samplers[a].satFrac(box, ratio, Duel.SAT_SITES)))
+                            .put("class", d.classId).put("sat", samplers[a].satFrac(box, laneRatio[a], Duel.SAT_SITES)))
                     }
-                    val m = metas[0]
+                    val m = if (newRule) laneMeta[a] else metas[0]
                     logger.jsonl("candidate_dets", JSONObject().put("frame", f).put("role", roles[a])
                         .put("made_by", madeBy(a)).put("n_frames", laneN[a])
-                        .put("iso", isoNom).put("analog_gain", m.appliedIso).put("analog_gain_req", m.requestedIso)
-                        .put("digital_gain", ratio).put("exposure_us", imgUs[a])
+                        .put("iso", laneIso[a]).put("analog_gain", m.appliedIso).put("analog_gain_req", m.requestedIso)
+                        .put("digital_gain", laneRatio[a]).put("exposure_us", imgUs[a])
                         .put("frame_exposure_us", m.appliedExpUs).put("frame_exposure_us_req", m.requestedExpUs)
                         .put("sensor_ts", m.timestamp)
                         .put("dets", arr))
@@ -4664,6 +4792,7 @@ class MeasurementController(
                         .put("peak", c.peak).put("class", c.cls).put("n_pic", c.nPic)
                         .put("r", JSONArray(c.r.toList())).put("w", JSONArray(c.w.toList()))
                     shiftB[c.box]?.let { s -> o.put("to_nb", JSONArray(listOf(s[0], s[1], s[2]))) }
+                    o.put("out", c.status == "kept" && (newRule || c.evidence >= V.OUT_THR))
                     if (c.status == "kept") outArr.put(o) else dropArr.put(o.put("reason", c.status))
                 }
                 logger.jsonl("dets", JSONObject().put("frame", f).put("method", mode)
@@ -4674,6 +4803,7 @@ class MeasurementController(
                     .put("info_from_frame", if (f == 0) JSONObject.NULL else f - 1).put("depth", 1)
                     .put("plan", JSONObject().put("reason", plan.reason)
                         .put("nb_dir", plan.nb?.key ?: JSONObject.NULL)
+                        .put("extra_cell", exCell ?: JSONObject.NULL).put("align_ms", alignMs)
                         .put("thompson_draws", plan.draws?.let { dr ->
                             JSONObject().apply { for ((k, v) in dr) put(k.key, v) } } ?: JSONObject.NULL))
                     .put("base", JSONObject().put("g_req", isoNom).put("g_analog_req", phys)
@@ -4686,7 +4816,8 @@ class MeasurementController(
                     .put("images", JSONArray((0 until n).map { a ->
                         JSONObject().put("role", roles[a]).put("made_by", madeBy(a)).put("n_frames", laneN[a])
                             .put("exposure_us", imgUs[a])
-                            .put("iso", isoNom).put("analog", metas[0].appliedIso).put("digital", ratio) }))
+                            .put("iso", laneIso[a]).put("analog", (if (newRule) laneMeta[a] else metas[0]).appliedIso)
+                            .put("digital", laneRatio[a]) }))
                     .put("discord", wl?.let { JSONObject().put("w_t", it[0]).put("l_t", it[1]) } ?: JSONObject.NULL)
                     .put("votes_after", JSONObject().put("short", votes(Duel.Dir.SHORT)).put("long", votes(Duel.Dir.LONG)))
                     .put("p_better", JSONObject().put("short", pol.pBetterNow(Duel.Dir.SHORT))
@@ -4706,7 +4837,7 @@ class MeasurementController(
 
                 val bmp = src.selectedTensorBitmap(tensor, 0)
                 val path = saveImage("${frameName(f)}_base", bmp)
-                if (n > 1 && saveImages) saveImage("${frameName(f)}_nb_${plan.nb!!.key}", src.selectedTensorBitmap(tensor, 1))
+                if (n > 1 && saveImages) saveImage("${frameName(f)}_nb_${plan.nb?.key ?: "extra"}", src.selectedTensorBitmap(tensor, 1))
                 logFrame(f, mode, lattice.cell(gIdx, sBase), isoNom, Duel.SHUTTERS_US[sBase], n, shots.size > 1,
                     formMs, inferMs, totalMs, outDets, path,
                     tieBreak = plan.reason, applyBoost = false, captureMs = captureMs,
@@ -4725,7 +4856,7 @@ class MeasurementController(
                 f++
             }
         } finally {
-            runCatching { chooseLead.shutdownNow(); chooseWork.shutdownNow() }
+            runCatching { chooseLead.shutdownNow(); chooseWork.shutdownNow(); alignPool.shutdownNow() }
             runCatching { raw.stopFastCapture() }
             runCatching { src.shutdown() }
         }

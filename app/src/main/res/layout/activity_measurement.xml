@@ -391,6 +391,14 @@
                     android:text="read noise"
                     android:textAllCaps="false"
                     android:textSize="20sp" />
+                <Button android:id="@+id/expVerifyDark"
+                    android:layout_width="0dp"
+                    android:layout_height="88dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:text="verify dark"
+                    android:textAllCaps="false"
+                    android:textSize="20sp" />
             </LinearLayout>
 
             <!-- Record: the counterfactual record (collect_cf, 225 moments) per lighting. -->
