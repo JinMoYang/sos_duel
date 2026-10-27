@@ -6090,6 +6090,8 @@ class MeasurementController(
 
         val detsWriter = java.util.concurrent.Executors.newSingleThreadExecutor()
         val alignPool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        // Runs a burst's tracking update (which fans out on alignPool) beside the detector.
+        val alignLead = java.util.concurrent.Executors.newSingleThreadExecutor()
         val laneBytes = 640 * 640 * 3 * 4
         val jpegPool = java.util.concurrent.Executors.newFixedThreadPool(4)
         val copyPermits = java.util.concurrent.Semaphore(12)
@@ -6298,6 +6300,27 @@ class MeasurementController(
                                 }
                                 n *= 2; row++
                             }
+                            // collect_cf2: the tracking update (CPU) runs while the plain sums are
+                            // formed and detected (GPU), and is joined after them.
+                            val frozen = ArrayList(burst)
+                            val alignJob = if (aligned && u.n > 1) alignLead.submit(java.util.concurrent.Callable {
+                                val ta = now()
+                                val bw = frozen[0].width; val bh = frozen[0].height
+                                val pyr = frozen.map { fr -> alignPool.submit(java.util.concurrent.Callable {
+                                    BurstAlign.pyramid(fr.bayer, fr.width, fr.height) }) }.map { it.get() }
+                                val steps = (1 until frozen.size).map { k -> BurstAlign.step(pyr[k - 1], pyr[k], alignPool) }
+                                val acc = BurstAlign.accumulate(steps)
+                                val movedJobs = acc.withIndex().map { (k, m) -> alignPool.submit(java.util.concurrent.Callable {
+                                    BurstAlign.moveBack(frozen[k + 1].bayer, bw, bh, m) }) }
+                                val moved = ArrayList<RawFrame>(frozen.size)
+                                moved += frozen[0]
+                                movedJobs.forEachIndexed { k, job ->
+                                    val fr = frozen[k + 1]
+                                    moved += RawFrame(job.get(), fr.width, fr.height, fr.cfaPattern, fr.maxDn,
+                                        fr.sensorOrientation, fr.whiteBalance, fr.cameraToSrgb)
+                                }
+                                Triple(moved, steps, ms(ta))
+                            }) else null
                             val tl = now()
                             val fi = formAndDetect(burst, laneBurst, laneRatio, maxLanes) { tensor, tLane, lane, laneDets ->
                                 val gi = laneGi[lane]; val sj = laneSj[lane]
@@ -6325,24 +6348,11 @@ class MeasurementController(
                             formMs += fi[0]; inferMs += fi[1]
                             nImages += laneBurst.size
                             logMs += ms(tl) - fi[0] - fi[1]
-                            if (aligned && u.n > 1) {
+                            if (alignJob != null) {
                                 // Tracking update: frames 1..n-1 moved back onto frame 0.
-                                val ta = now()
-                                val bw = burst[0].width; val bh = burst[0].height
-                                val pyr = burst.map { fr -> alignPool.submit(java.util.concurrent.Callable {
-                                    BurstAlign.pyramid(fr.bayer, fr.width, fr.height) }) }.map { it.get() }
-                                val steps = (1 until burst.size).map { k -> BurstAlign.step(pyr[k - 1], pyr[k], alignPool) }
-                                val acc = BurstAlign.accumulate(steps)
-                                val movedJobs = acc.withIndex().map { (k, m) -> alignPool.submit(java.util.concurrent.Callable {
-                                    BurstAlign.moveBack(burst[k + 1].bayer, bw, bh, m) }) }
-                                val moved = ArrayList<RawFrame>(burst.size)
-                                moved += burst[0]
-                                movedJobs.forEachIndexed { k, job ->
-                                    val fr = burst[k + 1]
-                                    moved += RawFrame(job.get(), fr.width, fr.height, fr.cfaPattern, fr.maxDn,
-                                        fr.sensorOrientation, fr.whiteBalance, fr.cameraToSrgb)
-                                }
-                                val alignMs = ms(ta)
+                                val tw0 = now()
+                                val (moved, steps, alignMs) = alignJob.get()
+                                val alignWaitMs = ms(tw0)
                                 val aBurst = ArrayList<Int>(); val aRatio = ArrayList<Double>()
                                 val aGi = ArrayList<Int>(); val aSj = ArrayList<Int>()
                                 var an = 2; var arow = u.sj + 1
@@ -6371,7 +6381,7 @@ class MeasurementController(
                                 detsWriter.execute {
                                     logger.jsonl("collect_motion", JSONObject().put("frame", fr).put("burst_sj", bsj)
                                         .put("tiles", JSONArray(listOf(BurstAlign.TX, BurstAlign.TY)))
-                                        .put("align_ms", alignMs).put("steps", stepJson))
+                                        .put("align_ms", alignMs).put("align_wait_ms", alignWaitMs).put("steps", stepJson))
                                 }
                                 logMs += ms(tal) - afi[0] - afi[1]
                             }
@@ -6440,7 +6450,7 @@ class MeasurementController(
             runCatching { raw.stopFastCapture() }
             runCatching { src.shutdown() }
             runCatching {
-                jpegPool.shutdown(); detsWriter.shutdown(); alignPool.shutdownNow()
+                jpegPool.shutdown(); detsWriter.shutdown(); alignPool.shutdownNow(); alignLead.shutdownNow()
                 jpegPool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)
                 detsWriter.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)
             }
