@@ -327,6 +327,10 @@ class MeasurementActivity : AppCompatActivity() {
         if (intent.getBooleanExtra("interval_diag", false)) {
             Thread({ IntervalDiag.run(applicationContext, ::post) }, "interval-diag").start()
         }
+        // Gap-free read probe (GaplessDiag.kt): `--ez gapless_diag true`; same rule.
+        if (intent.getBooleanExtra("gapless_diag", false)) {
+            Thread({ GaplessDiag.run(applicationContext, ::post) }, "gapless-diag").start()
+        }
         // Lap-driven collection: the one control this experiment adds. From adb,
         // `--ez lap_session true` presses it, with optional `--es lap_plan
         // "collect:10,ae_phone:3"`, `--ei lap_repeats 3`, `--ei lap_leadin_s 90` and
