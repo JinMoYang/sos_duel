@@ -117,11 +117,46 @@ object ToleranceCurveSosCf {
     }
 
     private class Img(val id: String, val cell: Int, val iso: Int, val shutterUs: Int,
-                      val group: String, val ts: Long, val file: File)
+                      val group: String, val ts: Long, val file: File, val use: String = "counterfactual",
+                      val nFrames: Int = 1, val digital: Double = 1.0, val analog: Int = 1200, val srcShutterUs: Int = shutterUs)
     private class Box(val b: DoubleArray, val conf: Double)
     private class Sample(val unit: Int, val blur: Double, val bright: Double, val clip: Double, val hit: Boolean,
                          val cell: Int = -1, val edge: Boolean = false, val speed: Double = Double.NaN,
-                         val yaw: Double = Double.NaN)
+                         val yaw: Double = Double.NaN, val snr: Double = Double.NaN, val use: String = "",
+                         val nFrames: Int = 1)
+
+    /**
+     * Noise (2026-10-28): per-pixel SNR of a box in the detector's picture, from its mean linear
+     * level [l], the image's digital ratio [d], frames summed [n] and analog gain [g]. A frame's
+     * normalised signal x = l / (d n); a decoded site (mean of 4 pixels) has variance
+     * S(g) x / 4 + sigma(g)^2 (S: the HAL noise profile's signal term, sigma: read noise measured
+     * with the lens covered, sos_cf_v1/meta/read_noise.json); the image adds n frames and scales by
+     * d; one picture pixel averages ~[NOISE_SITES] sites. No 8-bit term: the detector sees floats.
+     */
+    private const val NOISE_SITES = 9.0
+    private const val RANGE_DN = 1023.0 - 64.0
+    private val HAL_G = doubleArrayOf(199.0, 398.0, 795.0, 1194.0)
+    private val HAL_S = doubleArrayOf(2.15291e-4, 2.56970e-4, 3.40120e-4, 4.23688e-4)
+    private val RN_G = doubleArrayOf(99.0, 199.0, 398.0, 795.0, 1194.0)
+    private val RN_DN = doubleArrayOf(0.468, 0.593, 0.889, 1.566, 2.306)
+    private fun interp(xs: DoubleArray, ys: DoubleArray, x: Double): Double {
+        if (x <= xs[0]) return ys[0] + (ys[1] - ys[0]) / (xs[1] - xs[0]) * (x - xs[0])
+        for (i in 1 until xs.size) if (x <= xs[i]) return ys[i - 1] + (ys[i] - ys[i - 1]) * (x - xs[i - 1]) / (xs[i] - xs[i - 1])
+        return ys.last()
+    }
+    private fun snrOf(l: Double, d: Double, n: Int, g: Int): Double {
+        val x = l / (d * n)
+        val sig = interp(RN_G, RN_DN, g.toDouble()) / RANGE_DN
+        val site = maxOf(interp(HAL_G, HAL_S, g.toDouble()), 1e-5) * maxOf(x, 0.0) / 4 + sig * sig
+        val pix = d * d * n * site / NOISE_SITES
+        return if (pix > 0) l / kotlin.math.sqrt(pix) else Double.NaN
+    }
+    /** SNR bins of the noise factor (lower edges). */
+    private val SNR_LO = doubleArrayOf(0.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0)
+    /** Noise factor per SNR bin from -Dsos.noise=<file> (lines "snr_lo ..." and "factor ..."). */
+    private val noiseFactor: DoubleArray? = System.getProperty("sos.noise")?.let { f ->
+        File(f).readLines().map { it.trim() }.firstOrNull { it.startsWith("factor") }
+            ?.split(Regex("\\s+"))?.drop(1)?.map { it.toDouble() }?.toDoubleArray() }
 
     private fun picture(f: File): DoubleArray {
         val img = imageIoRead.invoke(null, f) ?: error("cannot read $f")
@@ -180,13 +215,16 @@ object ToleranceCurveSosCf {
         val byMoment = HashMap<Int, MutableList<Img>>()
         val baseIso = HashMap<Int, Int>()
         for (r in csv(File(dir, "images.csv"))) {
-            val use = r["use"]
-            if (use != "counterfactual" && use != "real_check") continue
+            val use = r["use"]!!
+            // collect_cf2's tracking sums and ISO 3200/6400 frames are samples, never evidence.
+            if (use != "counterfactual" && use != "real_check" && use != "aligned" && use != "gain_ext") continue
             val m = r["moment"]!!.toInt()
             val group = if (use == "real_check") "real" else when (r["source_shutter_us"]!!.toInt()) {
                 4167 -> "g240"; 8333 -> "g120"; else -> "g60" }
             byMoment.getOrPut(m) { ArrayList() } += Img(r["image_id"]!!, r["cell"]!!.toInt(), r["iso"]!!.toInt(),
-                r["shutter_us"]!!.toInt(), group, r["sensor_ts_ns"]!!.toLong(), File(dir, r["file"]!!))
+                r["shutter_us"]!!.toInt(), group, r["sensor_ts_ns"]!!.toLong(), File(dir, r["file"]!!), use,
+                r["n_frames"]!!.toInt(), r["digital_ratio"]!!.toDouble(), r["source_iso_captured"]!!.toInt(),
+                r["source_shutter_us"]!!.toInt())
             if (use == "counterfactual") baseIso[m] = r["base_iso"]!!.toInt()
         }
         val dets = HashMap<String, List<Box>>()
@@ -205,7 +243,8 @@ object ToleranceCurveSosCf {
         var moments = 0; var cars = 0; var used = 0
         for ((m, imgs) in byMoment.toSortedMap()) {
             // Strong boxes per group, then clusters across groups.
-            val strong = order.associateWith { g -> nms(imgs.filter { it.group == g }.flatMap { dets[it.id].orEmpty() }.filter { it.conf >= 0.5 }) }
+            val strong = order.associateWith { g -> nms(imgs.filter { it.group == g && (it.use == "counterfactual" || it.use == "real_check") }
+                .flatMap { dets[it.id].orEmpty() }.filter { it.conf >= 0.5 }) }
             val clusters = ArrayList<HashMap<String, DoubleArray>>()
             for (g in order) for (x in strong[g]!!) {
                 val hit = clusters.firstOrNull { c -> !c.containsKey(g) && c.values.any { same(it, x.b) } }
@@ -216,8 +255,8 @@ object ToleranceCurveSosCf {
             moments++; cars += certain.size
             // Speed between the base-ISO first frames of the 1/240 and 1/120 bursts.
             val bi = baseIso[m] ?: continue
-            val a = imgs.firstOrNull { it.group == "g240" && it.iso == bi && it.shutterUs == 4167 }
-            val b = imgs.firstOrNull { it.group == "g120" && it.iso == bi && it.shutterUs == 8333 }
+            val a = imgs.firstOrNull { it.use == "counterfactual" && it.group == "g240" && it.iso == bi && it.shutterUs == 4167 }
+            val b = imgs.firstOrNull { it.use == "counterfactual" && it.group == "g120" && it.iso == bi && it.shutterUs == 8333 }
             if (a == null || b == null || b.ts <= a.ts) continue
             val carSpeed = if (!useLk) List(certain.size) { Double.NaN } else {
                 val need = BooleanArray(HowToSense.N)
@@ -254,16 +293,19 @@ object ToleranceCurveSosCf {
                     val pic = pics.getOrPut(img.id) { picture(img.file) }
                     val st = boxStats(pic, ref)
                     if (st[0].isNaN()) continue
-                    val sec = img.shutterUs / 1e6
+                    // A tracking sum blurs as one of its reads; any other image over its exposure.
+                    val blurUs = if (img.use == "aligned") img.srcShutterUs else img.shutterUs
+                    val sec = blurUs / 1e6
                     val len = max(side(ref), 1.0)
                     val blur = when (SPEED) {
                         "lk" -> carSpeed[ci] * sec / len
                         else -> {
-                            val rot = rotSpeed(gyro!!.mean(img.ts, img.ts + img.shutterUs * 1000L), ref) / len
+                            val rot = rotSpeed(gyro!!.mean(img.ts, img.ts + blurUs * 1000L), ref) / len
                             sec * (rot + if (SPEED == "hybrid") transConst else 0.0)
                         }
                     }
-                    out += Sample(unitBase + m, blur, st[0], st[1], hit, img.cell, edgeOf[ci], blur / sec * len, yawM)
+                    out += Sample(unitBase + m, blur, st[0], st[1], hit, img.cell, edgeOf[ci], blur / sec * len, yawM,
+                        snrOf(st[0], img.digital, img.nFrames, img.analog), img.use, img.nFrames)
                     used++
                 }
             }
@@ -463,7 +505,8 @@ object ToleranceCurveSosCf {
         val curve = HowToSense.Curve.parse(curveFile.readText())
         if (SPEED == "hybrid") transConst = System.getProperty("sos.trans")?.toDouble() ?: translationConst(root)
         println("predict ${root.name} with ${curveFile.name}; ${speedNote()}")
-        fun pred(s: Sample) = curve.p[curve.bin(s.blur, s.bright)] * curve.factor(s.clip)
+        fun pred(s: Sample) = curve.p[curve.bin(s.blur, s.bright)] * curve.factor(s.clip) *
+            (noiseFactor?.let { f -> if (s.snr.isNaN()) 1.0 else f[HowToSense.Curve.binOf(SNR_LO, s.snr)] } ?: 1.0)
         fun name(c: Int) = "ISO%d 1/%d".format(Duel.ISOS[c / 5], HowToSense.DENS[c % 5])
         val all = ArrayList<Sample>()
         for ((i, seq) in listOf("bright", "dim", "dark").withIndex()) {
@@ -527,6 +570,27 @@ object ToleranceCurveSosCf {
             println("  %-7s ".format(lt) + edges.indices.joinToString("") { b ->
                 val v = cars.filter { HowToSense.Curve.binOf(edges, it.yaw) == b }.map { it.speed }
                 if (v.isEmpty()) "%-14s".format("-") else "%-14s".format("%.0f (%d)".format(HowToSense.median(v), v.size)) })
+        }
+        println("== by SNR bin, per lighting: observed/predicted n" + (if (noiseFactor != null) " (noise factor applied)" else ""))
+        for (lt in listOf("bright", "dim", "dark")) for (b in SNR_LO.indices) {
+            val l = all.filter { light(it) == lt && HowToSense.Curve.binOf(SNR_LO, it.snr) == b }
+            println("  %-6s snr >= %5.0f %s".format(lt, SNR_LO[b], line(l)))
+        }
+        println("== by image kind (use, frames), per lighting: observed/predicted n")
+        for (lt in listOf("bright", "dim", "dark")) for (k in all.map { it.use to it.nFrames }.distinct().sortedBy { it.toString() }) {
+            val l = all.filter { light(it) == lt && it.use == k.first && it.nFrames == k.second }
+            if (l.isNotEmpty()) println("  %-6s %-20s %s".format(lt, "${k.first} x${k.second}", line(l)))
+        }
+        if (System.getProperty("sos.noisefit") != null) {
+            // Indirect standardisation: per SNR bin, detections seen over those expected.
+            val fit = DoubleArray(SNR_LO.size) { b ->
+                val l = all.filter { HowToSense.Curve.binOf(SNR_LO, it.snr) == b }
+                val e = l.sumOf { pred(it) }
+                if (e > 0) l.count { it.hit } / e else 1.0
+            }
+            File(System.getProperty("sos.noisefit")).writeText("# noise factor by SNR bin, ${root.name}, ${curveFile.name}\n" +
+                "snr_lo ${SNR_LO.joinToString(" ")}\nfactor ${fit.joinToString(" ") { "%.4f".format(it) }}\n")
+            println("== noise factor written: " + fit.joinToString(" ") { "%.3f".format(it) })
         }
         println("== per lighting by blur bin: observed/predicted n")
         for (lt in listOf("bright", "dim", "dark")) for (b in curve.blurLo.indices) {
