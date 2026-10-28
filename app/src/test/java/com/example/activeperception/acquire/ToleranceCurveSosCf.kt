@@ -57,6 +57,14 @@ object ToleranceCurveSosCf {
      *   long, so its translation blur v x shutter / L does not depend on Z.
      */
     private val SPEED = System.getProperty("sos.speed", "lk")
+    /**
+     * Which cars are certain (system property sos.certain): "groups" (default) = strong
+     * (conf >= .5) in >= 2 shutter groups, an image scored only on cars >= 2 OTHER groups saw;
+     * "images" (2026-10-29) = strong in >= 2 images, an image scored on cars >= 2 images of other
+     * groups saw. At the fast Limo 31-47 % of the strong cars are seen by one group only, most
+     * by the 1/240 one, so "groups" drops the blur-sensitive cars from every other group's score.
+     */
+    private val CERTAIN = System.getProperty("sos.certain", "groups")
     /** Focal length in picture px (640 x 480 picture); gyro-checked 2026-10-26 (yaw x f vs LK). */
     private const val F_PX = 425.0
     /** Gyro samples (~38 Hz) are averaged over the exposure padded by this much. */
@@ -250,7 +258,14 @@ object ToleranceCurveSosCf {
                 val hit = clusters.firstOrNull { c -> !c.containsKey(g) && c.values.any { same(it, x.b) } }
                 if (hit != null) hit[g] = x.b else clusters += hashMapOf(g to x.b)
             }
-            val certain = clusters.filter { it.size >= 2 }
+            // Strong images behind each cluster, per group (CERTAIN = "images", 2026-10-29).
+            val imgCount = clusters.map { c -> c.mapValues { (g, box) ->
+                imgs.count { it.group == g && (it.use == "counterfactual" || it.use == "real_check") &&
+                    dets[it.id].orEmpty().any { d -> d.conf >= 0.5 && same(d.b, box) } } } }
+            val certainIdx = clusters.indices.filter { i ->
+                if (CERTAIN == "images") imgCount[i].values.sum() >= 2 else clusters[i].size >= 2 }
+            val certain = certainIdx.map { clusters[it] }
+            val certainCount = certainIdx.map { imgCount[it] }
             if (certain.isEmpty()) continue
             moments++; cars += certain.size
             // Speed between the base-ISO first frames of the 1/240 and 1/120 bursts.
@@ -284,7 +299,11 @@ object ToleranceCurveSosCf {
             for (img in imgs) {
                 if (img.group == "real") continue
                 for ((ci, c) in certain.withIndex()) {
-                    if (c.keys.count { it != img.group } < 2) continue          // leave the image's own group out
+                    // Leave the image's own group out: certain by >= 2 other groups ("groups"), or by
+                    // >= 2 strong images of other groups ("images": a car only one shutter group
+                    // sees, often only the sharp 1/240 one, then counts for every other group).
+                    if (CERTAIN == "images") { if (certainCount[ci].filterKeys { it != img.group }.values.sum() < 2) continue }
+                    else if (c.keys.count { it != img.group } < 2) continue
                     val ref = c[img.group] ?: run {
                         val i = order.indexOf(img.group)
                         c.entries.minByOrNull { abs(order.indexOf(it.key) - i) }!!.value
@@ -729,6 +748,8 @@ object ToleranceCurveSosCf {
             appendLine("# HowToSense features (box brightness, clip share, blur = speed x shutter / long side); p, var from clip < 0.05;")
             appendLine("# var by bootstrap over moments ($nBoot); empty bins take the nearest bin's p with var 0.25.")
             appendLine("# ${speedNote()}")
+            appendLine("# certain cars: " + if (CERTAIN == "images") "strong in >= 2 images of other groups (sos.certain=images)"
+                else "strong in >= 2 other shutter groups")
             appendLine("# samples ${samples.size} (clip < 0.05: ${low.size}); " + counts.joinToString("; ") { (s, c) -> "$s ${c[0]} moments ${c[1]} cars ${c[2]} samples" })
             appendLine("# n per bin (blur-major): ${n0.joinToString(" ")}")
             appendLine("# n per clip bin: ${nClip.joinToString(" ")}")
