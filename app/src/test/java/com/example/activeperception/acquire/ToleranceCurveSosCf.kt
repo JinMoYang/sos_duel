@@ -123,7 +123,7 @@ object ToleranceCurveSosCf {
     private class Sample(val unit: Int, val blur: Double, val bright: Double, val clip: Double, val hit: Boolean,
                          val cell: Int = -1, val edge: Boolean = false, val speed: Double = Double.NaN,
                          val yaw: Double = Double.NaN, val snr: Double = Double.NaN, val use: String = "",
-                         val nFrames: Int = 1, val srcShutterUs: Int = 0)
+                         val nFrames: Int = 1, val srcShutterUs: Int = 0, val car: Int = -1)
 
     /**
      * Noise (2026-10-28): per-pixel SNR of a box in the detector's picture, from its mean linear
@@ -305,7 +305,7 @@ object ToleranceCurveSosCf {
                         }
                     }
                     out += Sample(unitBase + m, blur, st[0], st[1], hit, img.cell, edgeOf[ci], blur / sec * len, yawM,
-                        snrOf(st[0], img.digital, img.nFrames, img.analog), img.use, img.nFrames, img.srcShutterUs)
+                        snrOf(st[0], img.digital, img.nFrames, img.analog), img.use, img.nFrames, img.srcShutterUs, ci)
                     used++
                 }
             }
@@ -622,30 +622,39 @@ object ToleranceCurveSosCf {
         class Rule(val name: String, val takes: (Sample) -> Boolean, val totalBlur: Boolean)
         val rules = listOf(Rule("single reads", ::single, false), Rule("tracking sums, read blur", ::tracked, false),
             Rule("tracking sums, total blur", ::tracked, true))
-        fun obs(l: List<Sample>) = l.count { it.hit }.toDouble() / l.size
-        println("== base rules, per lighting: observed share of the picked image (per moment), oracle, picks")
+        // Every rule is scored on the same cars: per moment, those with a sample in every image
+        // any rule may take (a car certain by >= 3 groups; leave-one-group-out drops the others
+        // from some images), so the picks differ only by the image. Shares are per car.
+        val takesAny = { x: Sample -> rules.any { r -> r.takes(x) } }
+        println("== base rules, per lighting: detected share of the common cars in the picked image, oracle, picks")
         for (lt in listOf("bright", "dim", "dark")) {
-            val byUnit = all.filter { light(it) == lt && it.cell in 0 until 25 }.groupBy { it.unit }
+            val byUnit = all.filter { light(it) == lt && it.cell in 0 until 25 && takesAny(it) }.groupBy { it.unit }
             if (byUnit.isEmpty()) continue
-            val fixed = byUnit.values.mapNotNull { l -> l.filter { it.cell == 20 && single(it) }.takeIf { it.isNotEmpty() }?.let(::obs) }
-            val perCell = all.filter { light(it) == lt && it.cell in 0 until 25 && single(it) }.groupBy { it.cell }
-                .mapValues { (_, l) -> obs(l) }
-            val bestCell = perCell.maxByOrNull { it.value }!!
-            println("  %-6s fixed ISO1600 1/240 %.3f (%d moments); best single cell overall %s %.3f".format(lt,
-                fixed.average(), fixed.size, name(bestCell.key), bestCell.value))
+            val keyOf = { x: Sample -> "${x.cell}/${x.use}/${x.srcShutterUs}/${x.nFrames}" }
+            val common = byUnit.mapValues { (_, l) ->
+                l.groupBy(keyOf).values.map { im -> im.map { it.car }.toSet() }.reduce { x, y -> x intersect y }
+            }
+            val nCars = common.values.sumOf { it.size }
+            val nMoments = common.values.count { it.isNotEmpty() }
+            fun hitsAt(c: Int) = byUnit.entries.sumOf { (u, l) -> l.count { it.cell == c && single(it) && it.car in common[u]!! && it.hit } }
+            val bestCell = (0 until 25).maxByOrNull { hitsAt(it) }!!
+            println("  %-6s %d moments, %d common cars; fixed ISO1600 1/240 %.3f; best single cell %s %.3f".format(lt,
+                nMoments, nCars, hitsAt(20).toDouble() / nCars, name(bestCell), hitsAt(bestCell).toDouble() / nCars))
             for (r in rules) {
-                val got = ArrayList<Double>(); val oracle = ArrayList<Double>(); val picks = IntArray(25)
-                for ((_, l) in byUnit) {
-                    val byCell = l.filter(r.takes).groupBy { it.cell }
+                var hits = 0; var best = 0; val picks = IntArray(25)
+                for ((u, l) in byUnit) {
+                    val cars = common[u]!!
+                    if (cars.isEmpty()) continue
+                    val byCell = l.filter { r.takes(it) && it.car in cars }.groupBy { it.cell }
                     if (byCell.isEmpty()) continue
-                    val best = byCell.maxByOrNull { (_, s) ->
-                        s.sumOf { predWith(it, if (r.totalBlur && it.use == "aligned") it.blur * it.nFrames else it.blur) } / s.size }!!
-                    got += obs(best.value); picks[best.key]++
-                    oracle += byCell.values.maxOf(::obs)
+                    val pick = byCell.maxByOrNull { (_, k) ->
+                        k.sumOf { predWith(it, if (r.totalBlur && it.use == "aligned") it.blur * it.nFrames else it.blur) } }!!
+                    hits += pick.value.count { it.hit }; picks[pick.key]++
+                    best += byCell.values.maxOf { k -> k.count { it.hit } }
                 }
                 val top = (0 until 25).sortedByDescending { picks[it] }.take(3).filter { picks[it] > 0 }
-                println("  %-6s %-26s %.3f (oracle %.3f, %d moments)  picks %s".format(lt, r.name, got.average(),
-                    oracle.average(), got.size, top.joinToString { "${name(it)} ${100 * picks[it] / got.size}%" }))
+                println("  %-6s %-26s %.3f (oracle %.3f)  picks %s".format(lt, r.name, hits.toDouble() / nCars,
+                    best.toDouble() / nCars, top.joinToString { "${name(it)} ${100 * picks[it] / nMoments}%" }))
             }
         }
     }
