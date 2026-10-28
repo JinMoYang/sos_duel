@@ -1740,6 +1740,17 @@ class MeasurementActivity : AppCompatActivity() {
         VERIFY_METHODS.indices.map { VERIFY_METHODS[(it + r) % VERIFY_METHODS.size] }
     }.joinToString(",") { "$it:$MAIN_LAPS" }
 
+    /** The gyro-curve check (2026-10-28): tracking sums with the LK curve (as verified on
+     *  10-28) and with the gyro curve, single reads with the gyro curve, and the fixed
+     *  reference; same rounds as [VERIFY_PLAN]. 12 runs, ~9 min per lighting. */
+    private val VERIFY_G_METHODS = listOf("duel2t_trace", "duel2tg_trace", "duel2sg_trace", "fixed_1600_240")
+    private val VERIFY_G_PLAN = (0 until 3).flatMap { r ->
+        VERIFY_G_METHODS.indices.map { VERIFY_G_METHODS[(it + r) % VERIFY_G_METHODS.size] }
+    }.joinToString(",") { "$it:$MAIN_LAPS" }
+
+    /** Duel2's curve: built with LK speeds, or (a g variant) with gyro + translation speeds. */
+    private fun duelCurveFile(gyro: Boolean) = if (gyro) "tolerance_curve_gyro.txt" else "tolerance_curve.txt"
+
     /** One round of the Limo step, one lap each, the method changing every lap so slow drift
      *  (light, battery, speed) falls on every method alike: five collection laps (one per
      *  base ISO, never two in a row, also across rounds) and one of each compared method:
@@ -1764,9 +1775,12 @@ class MeasurementActivity : AppCompatActivity() {
         R.id.expMainDark to LapPreset("main, dark", MAIN_PLAN, 1, lighting = "dark"),
         // Check tab: Duel's two modes, one 3-lap run each (spec 7, track part).
         R.id.expTrackTest to LapPreset("track test", "duel2_trace:3,duel2_every:3", 1),
-        // Check tab: the base-image check in the dark (see VERIFY_PLAN).
-        R.id.expVerifyDark to LapPreset("verify base, dark", VERIFY_PLAN, 1, lighting = "dark",
-            sessionTag = "duel2_verify"),
+        // Check tab: the gyro-curve check, dim and dark (see VERIFY_G_PLAN; the 10-28 base-image
+        // check, VERIFY_PLAN, still starts by lap_plan).
+        R.id.expVerifyDim to LapPreset("verify gyro, dim", VERIFY_G_PLAN, 1, lighting = "dim",
+            sessionTag = "duel2_verify_g"),
+        R.id.expVerifyDark to LapPreset("verify gyro, dark", VERIFY_G_PLAN, 1, lighting = "dark",
+            sessionTag = "duel2_verify_g"),
         R.id.expReadNoise to LapPreset("read noise", run = "readnoise"),
         // Old tab: the v3 experiments' steps (2026-10-15/16).
         R.id.expStatic to LapPreset("question 1, still", run = "collect55_ab", cap = 30),
@@ -1835,6 +1849,12 @@ class MeasurementActivity : AppCompatActivity() {
             "duel2s_every" -> "proposed: Duel2 single reads (every)"
             "duel2t_trace" -> "proposed: Duel2 tracking sums (trace)"
             "duel2t_every" -> "proposed: Duel2 tracking sums (every)"
+            "duel2tg_trace" -> "proposed: Duel2 tracking sums, gyro (trace)"
+            "duel2tg_every" -> "proposed: Duel2 tracking sums, gyro (every)"
+            "duel2sg_trace" -> "proposed: Duel2 single reads, gyro (trace)"
+            "duel2sg_every" -> "proposed: Duel2 single reads, gyro (every)"
+            "duel2g_trace" -> "proposed: Duel2, gyro (trace)"
+            "duel2g_every" -> "proposed: Duel2, gyro (every)"
             "fixed_1600_240" -> "reference: fixed 1600 · 1/240"
             "nae" -> "baseline: Neural-AE"
             "prop_c" -> "baseline: Sense-well"
@@ -1921,13 +1941,16 @@ class MeasurementActivity : AppCompatActivity() {
         }
         val plan = LapSession.parsePlan(launchLapPlan ?: preset?.plan ?: LapSession.DEFAULT_PLAN)
         if (plan.isEmpty()) { post("lap plan is empty"); return }
-        // Duel2 cannot start without its tolerance curve; refuse the whole session up front
+        // Duel2 cannot start without its tolerance curves; refuse the whole session up front
         // rather than let its blocks silently not start while the laps are counted.
-        if (plan.any { it.method.startsWith("duel2") } && runCatching {
-                HowToSense.Curve.parse(assets.open("tolerance_curve.txt").bufferedReader().use { it.readText() })
-            }.isFailure) {
+        val curvesNeeded = plan.filter { it.method.startsWith("duel2") }
+            .map { duelCurveFile(it.method.substringBefore('_').endsWith("g")) }.distinct()
+        val missing = curvesNeeded.filter { f -> runCatching {
+                HowToSense.Curve.parse(assets.open(f).bufferedReader().use { it.readText() })
+            }.isFailure }
+        if (missing.isNotEmpty()) {
             restoreStepButton(false); showNow("no tolerance curve")
-            post("Duel2 needs assets/tolerance_curve.txt — session not started")
+            post("Duel2 needs assets/${missing.joinToString()} — session not started")
             return
         }
         // Runs in a lap session end by laps, never by a frame cap left over from a step.
@@ -2064,19 +2087,25 @@ class MeasurementActivity : AppCompatActivity() {
             start(cmd) { mc!!.runV3Cause(theta, pilot, cap, ::post, ::showFrame) }
             return
         }
-        // duel2 = the 2026-10-26 app, duel2s = real single reads, duel2t = tracking sums.
-        val duelBase = mapOf("duel2" to "naive", "duel2s" to "single", "duel2t" to "track")
+        // duel2 = the 2026-10-26 app, duel2s = real single reads, duel2t = tracking sums; a
+        // trailing g (duel2tg, duel2sg, duel2g) = the gyro speed source and its curve.
+        val duelBase = mapOf("" to "naive", "s" to "single", "t" to "track")
         val duelParts = cmd.split("_")
-        if (duelParts.size == 2 && duelParts[0] in duelBase && duelParts[1] in listOf("trace", "every")) {
+        val duelName = if (duelParts.size == 2 && duelParts[1] in listOf("trace", "every"))
+            Regex("duel2([st]?)(g?)").matchEntire(duelParts[0]) else null
+        if (duelName != null) {
             val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
+            val gyro = duelName.groupValues[2] == "g"
+            val curveFile = duelCurveFile(gyro)
             val curve = runCatching {
-                HowToSense.Curve.parse(assets.open("tolerance_curve.txt").bufferedReader().use { it.readText() })
-            }.getOrElse { post("Duel needs assets/tolerance_curve.txt: ${it.message}"); return }
+                HowToSense.Curve.parse(assets.open(curveFile).bufferedReader().use { it.readText() })
+            }.getOrElse { post("Duel needs assets/$curveFile: ${it.message}"); return }
             // Desk tests: --ei duel_start_cell c forces the start cell once (then forgotten).
             val forced = intent?.getIntExtra("duel_start_cell", -1)?.takeIf { it in 0 until 25 }
             intent?.removeExtra("duel_start_cell")
             start(cmd) { mc!!.runDuel(duelParts[1] == "every", curve, cap, ::post, ::showFrame,
-                baseMode = duelBase.getValue(duelParts[0]), startCellOverride = forced) }
+                baseMode = duelBase.getValue(duelName.groupValues[1]), startCellOverride = forced,
+                speedSource = if (gyro) "gyro" else "lk") }
             return
         }
         // The Duel experiments' fixed reference cell: ISO 1600 x 1/240 s on the v2 lattice.

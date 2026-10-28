@@ -138,6 +138,8 @@ class MeasurementController(
     private var passStartMs: Long = 0L
     /** The run's measured Limo speed, armed with the IMU log; into summary.json at the end. */
     private val speedMeter = LimoSpeedMeter()
+    /** Recent gyro samples, fed with the IMU log, for Duel2's "gyro" speed source. */
+    private val gyroWindow = com.example.activeperception.acquire.GyroWindow()
 
     private fun now() = System.nanoTime()
     private fun ms(t0: Long) = (now() - t0) / 1e6
@@ -468,9 +470,11 @@ class MeasurementController(
         }
         speedMeter.start(sensors.totalYawDeg, System.currentTimeMillis())
         ExperimentSession.lastLapS = Double.NaN
+        gyroWindow.clear()
         sensors.onGyroSample = { ts, gx, gy, gz ->
             logger.row("imu", listOf(ts, "gyro", "", "", "", gx, gy, gz, ""))
             speedMeter.add(sensors.currentYawRate)
+            gyroWindow.add(ts, gx.toDouble(), gy.toDouble(), gz.toDouble())
         }
         sensors.onLuxSample = { ts, lux ->
             logger.row("imu", listOf(ts, "light", "", "", "", "", "", "", lux))
@@ -4266,11 +4270,18 @@ class MeasurementController(
         onFrame: (Bitmap, List<Detection>, Int, Int) -> Unit = { _, _, _, _ -> },
         baseMode: String = "naive",
         /** Desk tests only: start at this lattice cell instead of the phone AE's. */
-        startCellOverride: Int? = null
+        startCellOverride: Int? = null,
+        /** Where the curve's blur takes its speed: "lk" = LK flow between consecutive base
+         *  pictures (the 2026-10-26 app), "gyro" = [HowToSense.gyroSpeeds] over the base frame's
+         *  exposure (2026-10-28; the curve must be the one built with that speed, and a tracking
+         *  sum's blur is one read's). */
+        speedSource: String = "lk"
     ) {
         val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
             ?: error("Duel requires TfliteYoloDetector")
         require(baseMode in listOf("naive", "single", "track"))
+        require(speedSource in listOf("lk", "gyro"))
+        val gyroSpeed = speedSource == "gyro"
         // 2026-10-28 base-image experiment. naive: the 2026-10-26 app (burst-sum images, Thompson
         // neighbour, evidence-mean output). single / track: every image is real reads at its own
         // setting (track: a cell longer than 1/240 is realised as aligned 1/240 .. 1/60 reads, see
@@ -4278,7 +4289,7 @@ class MeasurementController(
         // output is every kept cluster (union).
         val newRule = baseMode != "naive"
         val mode = (if (baseMode == "single") "duel2s" else if (baseMode == "track") "duel2t" else "duel2") +
-            if (every) "_every" else "_trace"
+            (if (gyroSpeed) "g" else "") + if (every) "_every" else "_trace"
         val lattice = Grid(gains = Duel.ISOS, exposuresUs = Duel.SHUTTERS_US, digitalBoost = 1.0)
         val analogCeil = v2AnalogCeil()
         // ---- start: phone AE's setting, nearest cell on each axis (AE is never used again).
@@ -4327,6 +4338,12 @@ class MeasurementController(
             .put("detector", "yolov8n tflite, conf >= 0.05 kept, vehicles for decisions")
             .put("input_size", 640)
             .put("base_mode", baseMode)
+            .put("speed_source", if (!gyroSpeed) "lk: flow between consecutive base pictures on the map's cells"
+                else "gyro: per grid cell f |w_xy| + |w_z| r (f = ${HowToSense.F_PX} px, mean gyro over the base " +
+                    "frame's exposure +- ${com.example.activeperception.acquire.GyroWindow.PAD_NS / 1_000_000} ms) " +
+                    "+ ${HowToSense.TRANS_PER_S} car lengths/s; choices from the first frame")
+            .put("blur_shutter", if (gyroSpeed && baseMode == "track") "one read's (a tracking sum blurs as one read)"
+                else "the image's exposure")
             .apply {
                 if (newRule) {
                     put("synthesis", if (baseMode == "single") "none: base and extra are each one real read at its own setting"
@@ -4364,6 +4381,10 @@ class MeasurementController(
          *  tracking-summed: 1/120 = 2 x 1/240, 1/60 = 2 x 1/120; 1/240, 1/30, 1/15 are one read. */
         fun reads(s: Int): Pair<Int, Int> = if (baseMode != "track") s to 1 else when (s) {
             1 -> 0 to 2; 2 -> 1 to 2; else -> s to 1 }
+        // The curve's blur per shutter index: gyro + track = one read's (the tracking update
+        // leaves each read's own motion only); otherwise the image's whole exposure.
+        val blurDen = if (gyroSpeed && baseMode == "track") IntArray(5) { HowToSense.DENS[reads(it).first] }
+            else HowToSense.DENS
         // Grid cells of the previous frame's base traces (picture grid), for the extra lane's tiles.
         var prevTraceCells = BooleanArray(HowToSense.N)
         var prevPic: DoubleArray? = null
@@ -4517,13 +4538,14 @@ class MeasurementController(
                     HowToSense.pictureRows(rgb, pic, 0 until band)
                     picJobs.forEach { it.get() }
                     val picMs = ms(tPre0)
-                    if (pp == null) PreChoice(pic, picMs, null, null, null, null, 0.0, ms(tPre0)) else {
+                    // gyro: no flow, so stats (and a choice) from the first frame on.
+                    if (pp == null && !gyroSpeed) PreChoice(pic, picMs, null, null, null, null, 0.0, ms(tPre0)) else {
                         val tFs0 = now()
-                        val flow = HowToSense.Flow(pp, flowGain, pic, flowDt)
-                        val tried = HowToSense.flowCells(wBefore)
+                        val flow = if (gyroSpeed) null else HowToSense.Flow(pp!!, flowGain, pic, flowDt)
+                        val tried = if (gyroSpeed) BooleanArray(HowToSense.N) else HowToSense.flowCells(wBefore)
                         val cells = (0 until HowToSense.N).filter { tried[it] }
                         val raw = DoubleArray(HowToSense.N) { Double.NaN }
-                        val jobs = (0 until 3).map { j ->
+                        val jobs = if (flow == null) emptyList() else (0 until 3).map { j ->
                             chooseWork.submit(Runnable { for (i in j until cells.size step 3) raw[cells[i]] = flow.cellSpeed(cells[i]) })
                         }
                         // Stats in two halves of the grid, one on the fourth worker; each grid
@@ -4688,18 +4710,27 @@ class MeasurementController(
                 val pic = pc.pic
                 val choiceNote = JSONObject().put("from_frame", f)
                 var moved = false
-                if (pp == null) {
+                // gyro: the rotation over this base image's reads, one speed field for every map.
+                val gyroMean = if (!gyroSpeed) null else {
+                    val last = metas[(if (newRule) laneN[0] else 1) - 1]
+                    gyroWindow.mean(ts, last.timestamp + last.appliedExpUs * 1_000L)
+                }
+                val gyroField = gyroMean?.let { HowToSense.gyroSpeeds(it.first, map.sizes()) }
+                if (gyroMean != null) choiceNote.put("gyro", JSONObject().put("w", JSONArray(gyroMean.first.toList()))
+                    .put("samples", gyroMean.second))
+                if (pp == null && !gyroSpeed) {
                     choiceNote.put("rule", "no previous base: keep")
                 } else {
                     val wgt = map.weights()
-                    // Cells this frame's detections brought into the flow set.
-                    val sel = HowToSense.flowCells(wgt)
+                    // Cells this frame's detections brought into the flow set (lk only).
+                    val sel = if (gyroSpeed) BooleanArray(HowToSense.N) else HowToSense.flowCells(wgt)
                     val late = (0 until HowToSense.N).filter { sel[it] && !pc.tried!![it] }
                     val tLate0 = now()
                     for (k in late) pc.raw!![k] = pc.flow!!.cellSpeed(k)
                     val lateMs = ms(tLate0)
-                    val (speed, nMeasured, nTried) = HowToSense.speedForMap(pc.raw!!, wgt)
-                    val ch = HowToSense.choose(curve, pc.st!!, speed, wgt, map.sizes(), curCell)
+                    val (speed, nMeasured, nTried) = if (gyroField != null) Triple(gyroField, HowToSense.N, 0)
+                        else HowToSense.speedForMap(pc.raw!!, wgt)
+                    val ch = HowToSense.choose(curve, pc.st!!, speed, wgt, map.sizes(), curCell, blurDen)
                     choiceNote.put("ms_parts", JSONObject().put("picture", pc.picMs)
                         .put("speed_stats", pc.flowStatsMs).put("background", pc.totalMs)
                         .put("wait", waitMs).put("late_cells", late.size).put("late", lateMs))
@@ -4721,7 +4752,7 @@ class MeasurementController(
                 // the map), away from the next base's shutter.
                 if (newRule) {
                     val st = pc.st
-                    if (pp == null || st == null) {
+                    if ((pp == null && !gyroSpeed) || st == null) {
                         nextExtra = null
                         choiceNote.put("extra_next", JSONObject().put("rule", "no stats yet: the shutter neighbour"))
                     } else {
@@ -4729,14 +4760,16 @@ class MeasurementController(
                         for (t in per[0].weak) tm.add(toPic(t.box))
                         val fromTraces = tm.total > 0
                         val wT = if (fromTraces) tm.weights() else map.weights()
-                        val selT = HowToSense.flowCells(wT)
-                        // Speeds already measured: the background's cells and the map's late cells.
-                        val done = pc.tried!!.copyOf()
-                        val selMap = HowToSense.flowCells(map.weights())
-                        for (k in 0 until HowToSense.N) if (selMap[k]) done[k] = true
-                        for (k in 0 until HowToSense.N) if (selT[k] && !done[k]) pc.raw!![k] = pc.flow!!.cellSpeed(k)
-                        val (speedT, _, _) = HowToSense.speedForMap(pc.raw!!, wT)
-                        val eT = HowToSense.choose(curve, st, speedT, wT, map.sizes(), curCell).e
+                        val speedT = gyroField ?: run {
+                            val selT = HowToSense.flowCells(wT)
+                            // Speeds already measured: the background's cells and the map's late cells.
+                            val done = pc.tried!!.copyOf()
+                            val selMap = HowToSense.flowCells(map.weights())
+                            for (k in 0 until HowToSense.N) if (selMap[k]) done[k] = true
+                            for (k in 0 until HowToSense.N) if (selT[k] && !done[k]) pc.raw!![k] = pc.flow!!.cellSpeed(k)
+                            HowToSense.speedForMap(pc.raw!!, wT).first
+                        }
+                        val eT = HowToSense.choose(curve, st, speedT, wT, map.sizes(), curCell, blurDen).e
                         val nb = (0 until 25).filter { it % 5 != pol.baseS }.maxByOrNull { eT[it] }!!
                         nextExtra = nb
                         choiceNote.put("extra_next", JSONObject().put("cell", nb).put("iso", Duel.ISOS[nb / 5])

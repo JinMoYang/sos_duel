@@ -40,6 +40,27 @@ object HowToSense {
      *  trap the coarse levels; real scenes did not. */
     const val FLOW_LEVELS = 5
 
+    /** Focal length in picture px, gyro-checked 2026-10-26 (yaw x f against LK in turns). */
+    const val F_PX = 425.0
+    /** The blur the gyro does not see, box lengths per second, added to its rotation (2026-10-28):
+     *  2.6 fitted on sos_cf_v1's bright straights (LK minus rotation) predicted sos_cf_slow (half
+     *  the Limo speed) and sos_cf2 (another day) best; scaling it with the Limo speed, or each
+     *  record's own LK value (cf2: 1.46), predicted worse. So it is not the Limo's speed. */
+    const val TRANS_PER_S = 2.6
+
+    /**
+     * Per grid cell, image speed (picture px/s) for the "gyro" speed source: the rotation [w]
+     * (rad/s, phone axes, the mean over the base frame's exposure) moves the picture by
+     * f |w_xy| and turns it about the centre by |w_z| r at the cell's centre, plus
+     * [TRANS_PER_S] car lengths per second ([size]: the map's typical long side), so that
+     * [choose]'s blur is shutter x (rotation / size + [TRANS_PER_S]) as in the curve built by
+     * ToleranceCurveSosCf with -Dsos.speed=hybrid.
+     */
+    fun gyroSpeeds(w: DoubleArray, size: DoubleArray): DoubleArray = DoubleArray(N) { k ->
+        val cx = (k % GX + 0.5) * CS - W / 2.0; val cy = (k / GX + 0.5) * CS - H / 2.0
+        sqrt(F_PX * F_PX * (w[0] * w[0] + w[1] * w[1]) + w[2] * w[2] * (cx * cx + cy * cy)) + TRANS_PER_S * size[k]
+    }
+
     /** Inverse sRGB of each 8-bit level. */
     private val LIN = DoubleArray(256) {
         val x = it / 255.0
@@ -304,12 +325,15 @@ object HowToSense {
      * blur = speed x shutter_c / car size. The base moves to the best cell only when E_best -
      * E_cur exceeds sqrt(sum over curve bins of (Wb_best - Wb_cur)^2 var), where Wb_c sums
      * weight x clip factor per curve bin. Grid cells of zero weight add nothing and are skipped.
+     * [blurDen]: per shutter index, the denominator the blur is taken over (an image made of
+     * tracking-summed reads blurs as one read; default: its own shutter).
      */
-    fun choose(curve: Curve, st: Stats, speed: DoubleArray, w: DoubleArray, size: DoubleArray, cur: Int): Choice {
+    fun choose(curve: Curve, st: Stats, speed: DoubleArray, w: DoubleArray, size: DoubleArray, cur: Int,
+               blurDen: IntArray = DENS): Choice {
         val e = DoubleArray(25)
         val wb = Array(25) { DoubleArray(curve.bins) }
         for (c in 0 until 25) {
-            val sh = 1.0 / DENS[c % 5]
+            val sh = 1.0 / blurDen[c % 5]
             for (k in 0 until N) {
                 if (w[k] == 0.0) continue
                 val i = curve.bin(speed[k] * sh / size[k], st.bright[c][k])

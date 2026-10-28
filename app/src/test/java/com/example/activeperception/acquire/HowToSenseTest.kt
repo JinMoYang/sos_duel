@@ -83,6 +83,50 @@ class HowToSenseTest {
         assertEquals(base, unsure.next)
     }
 
+    @Test fun gyroSpeedsAreRotationAtTheCellPlusTheConstant() {
+        val size = DoubleArray(n) { 50.0 }
+        // Pan only: the same f |w_xy| everywhere, plus 2.6 car lengths a second.
+        val pan = HowToSense.gyroSpeeds(doubleArrayOf(0.3, 0.4, 0.0), size)
+        for (k in listOf(0, 100, n - 1)) assertEquals(425.0 * 0.5 + 2.6 * 50, pan[k], 1e-9)
+        // Roll only: |w_z| r, r from the picture's centre to the cell's (corner cell: (-300, -220)).
+        val roll = HowToSense.gyroSpeeds(doubleArrayOf(0.0, 0.0, 1.0), size)
+        assertEquals(Math.hypot(300.0, 220.0) + 130, roll[0], 1e-9)
+    }
+
+    @Test fun aTrackingSumBlursAsOneRead() {
+        // Blur bins split at .02 of a car length: still bright enough at ISO 1600 x 1/60, the
+        // one-read 1/60 blurs past the split, the 2 x 1/120 sum (blurDen 120) does not.
+        val curve = HowToSense.Curve.parse("""
+            # test curve
+            blur_lo 0 0.02
+            bright_lo 0
+            clip_lo 0
+            p 0.9 0.3
+            var 0 0
+            clip_factor 1
+        """.trimIndent())
+        val st = HowToSense.stats(HowToSense.picture(flat(30)), HowToSense.cell(4, 0))
+        val w = DoubleArray(n) { 1.0 / n }; val size = DoubleArray(n) { 50.0 }
+        val speed = DoubleArray(n) { 100.0 }                     // 1/60: .033 lengths, 1/120: .017
+        val c60 = HowToSense.cell(4, 2)
+        assertEquals(0.3, HowToSense.choose(curve, st, speed, w, size, c60).e[c60], 1e-12)
+        val track = intArrayOf(240, 240, 120, 30, 15)
+        assertEquals(0.9, HowToSense.choose(curve, st, speed, w, size, c60, track).e[c60], 1e-12)
+    }
+
+    @Test fun gyroWindowMeansOverThePaddedExposureElseTheNearest() {
+        val g = GyroWindow()
+        for (i in 0 until 400) g.add(i * 25_000_000L, i.toDouble(), 0.0, 1.0)   // 40 Hz, x = index
+        // [5000, 5010] ms padded by 13 ms: samples 200 (5000 ms) .. 200 only, 4987..5023 ms.
+        val (m, used) = g.mean(5_000_000_000L, 5_010_000_000L)
+        assertEquals(1, used); assertEquals(200.0, m[0], 1e-12); assertEquals(1.0, m[2], 1e-12)
+        val (m2, used2) = g.mean(4_980_000_000L, 5_060_000_000L)  // 4967..5073: 199, 200, 201, 202
+        assertEquals(4, used2); assertEquals(200.5, m2[0], 1e-12)
+        // Older than the ring keeps (256 samples): the nearest remaining sample.
+        val (m3, used3) = g.mean(0L, 1_000_000L)
+        assertEquals(0, used3); assertEquals(144.0, m3[0], 1e-12)
+    }
+
     /** A non-periodic scene of soft blobs: a purely periodic texture can trap the coarse pyramid
      *  levels on the wrong period, which no real scene did (see [HowToSense.FLOW_LEVELS]). */
     private val blobs = java.util.Random(3).let { r ->
