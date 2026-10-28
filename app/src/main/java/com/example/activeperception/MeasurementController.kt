@@ -4288,12 +4288,17 @@ class MeasurementController(
          *  pictures (the 2026-10-26 app), "gyro" = [HowToSense.gyroSpeeds] over the base frame's
          *  exposure (2026-10-28; the curve must be the one built with that speed, and a tracking
          *  sum's blur is one read's). */
-        speedSource: String = "lk"
+        speedSource: String = "lk",
+        /** track only (2026-10-29): the base is the cell's first read alone, and its k aligned
+         *  reads only on a frame after a base with a weak trace (Key Exposure one read; the burst
+         *  only when the previous key left a car unsure). */
+        mergeAfterTrace: Boolean = false
     ) {
         val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
             ?: error("Duel requires TfliteYoloDetector")
         require(baseMode in listOf("naive", "single", "track"))
         require(speedSource in listOf("lk", "gyro"))
+        require(!mergeAfterTrace || baseMode == "track")
         val gyroSpeed = speedSource == "gyro"
         // 2026-10-28 base-image experiment. naive: the 2026-10-26 app (burst-sum images, Thompson
         // neighbour, evidence-mean output). single / track: every image is real reads at its own
@@ -4302,7 +4307,7 @@ class MeasurementController(
         // output is every kept cluster (union).
         val newRule = baseMode != "naive"
         val mode = (if (baseMode == "single") "duel2s" else if (baseMode == "track") "duel2t" else "duel2") +
-            (if (gyroSpeed) "g" else "") + if (every) "_every" else "_trace"
+            (if (gyroSpeed) "g" else "") + (if (mergeAfterTrace) "m" else "") + if (every) "_every" else "_trace"
         val lattice = Grid(gains = Duel.ISOS, exposuresUs = Duel.SHUTTERS_US, digitalBoost = 1.0)
         val analogCeil = v2AnalogCeil()
         // ---- start: phone AE's setting, nearest cell on each axis (AE is never used again).
@@ -4357,6 +4362,8 @@ class MeasurementController(
                     "+ ${HowToSense.TRANS_PER_S} car lengths/s; choices from the first frame")
             .put("blur_shutter", if (gyroSpeed && baseMode == "track") "one read's (a tracking sum blurs as one read)"
                 else "the image's exposure")
+            .put("merge_rule", if (mergeAfterTrace) "base = the cell's first read alone; its k aligned reads only " +
+                "on a frame after a base with a weak trace; stats scaled from the image actually formed" else "the cell's reads")
             .apply {
                 if (newRule) {
                     put("synthesis", if (baseMode == "single") "none: base and extra are each one real read at its own setting"
@@ -4439,9 +4446,11 @@ class MeasurementController(
                 // Burst-sum synthesis (naive): a comparison frame takes TWO frames at the shorter
                 // shutter of the pair; the longer image is their sum, the shorter the first.
                 // laneN = frames per image: lane 0 = base, lane 1 = neighbour / extra.
+                // mergeAfterTrace: one read unless the previous base had a weak trace.
+                val baseK = if (mergeAfterTrace && !pol.prevTrace) 1 else reads(sBase).second
                 val laneN = if (newRule) {
-                    if (exCell == null) intArrayOf(reads(sBase).second)
-                    else intArrayOf(reads(sBase).second, reads(exCell % 5).second)
+                    if (exCell == null) intArrayOf(baseK)
+                    else intArrayOf(baseK, reads(exCell % 5).second)
                 } else when (plan.nb) {
                     null -> intArrayOf(1)
                     Duel.Dir.LONG -> intArrayOf(1, 2)
@@ -4534,7 +4543,9 @@ class MeasurementController(
                 val mp0 = tensor.batch.transforms[0]
                 val top = mp0.padY.toInt()
                 val curCell = HowToSense.cell(gIdx, sBase)
-                val expo = HowToSense.exposure(curCell)
+                // The base picture's own cell: one read of a k-read cell is the read shutter's cell.
+                val picCell = if (newRule && laneN[0] < reads(sBase).second) HowToSense.cell(gIdx, reads(sBase).first) else curCell
+                val expo = HowToSense.exposure(picCell)
                 val ts = metas[0].timestamp
                 val pp = prevPic
                 val flowGain = expo / prevExpo
@@ -4565,9 +4576,9 @@ class MeasurementController(
                         // cell's values are its own, so the halves join without a change.
                         val upperHalf = BooleanArray(HowToSense.N) { it < HowToSense.N / 2 }
                         val lowerJob = chooseWork.submit(java.util.concurrent.Callable {
-                            HowToSense.stats(pic, curCell, BooleanArray(HowToSense.N) { !upperHalf[it] })
+                            HowToSense.stats(pic, picCell, BooleanArray(HowToSense.N) { !upperHalf[it] })
                         })
-                        val upper = HowToSense.stats(pic, curCell, upperHalf)
+                        val upper = HowToSense.stats(pic, picCell, upperHalf)
                         val lower = lowerJob.get()
                         fun join(a: Array<DoubleArray>, b: Array<DoubleArray>) =
                             Array(25) { c -> DoubleArray(HowToSense.N) { k -> if (upperHalf[k]) a[c][k] else b[c][k] } }
@@ -4855,6 +4866,7 @@ class MeasurementController(
                     .put("plan", JSONObject().put("reason", plan.reason)
                         .put("nb_dir", plan.nb?.key ?: JSONObject.NULL)
                         .put("extra_cell", exCell ?: JSONObject.NULL).put("align_ms", alignMs)
+                        .put("base_reads", laneN[0]).put("pic_cell", picCell)
                         .put("thompson_draws", plan.draws?.let { dr ->
                             JSONObject().apply { for ((k, v) in dr) put(k.key, v) } } ?: JSONObject.NULL))
                     .put("base", JSONObject().put("g_req", isoNom).put("g_analog_req", phys)

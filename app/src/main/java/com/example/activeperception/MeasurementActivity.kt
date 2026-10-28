@@ -1737,16 +1737,19 @@ class MeasurementActivity : AppCompatActivity() {
         "physsweep", "shin_nm", "nae", "fixed_1600_240")
     private val MAIN_PLAN = rounds(MAIN_METHODS)
 
-    /**
-     * The gyro-curve check (2026-10-28), 12 runs, ~9 min per lighting: tracking sums with the
-     * LK curve (duel2t) and with the gyro curve (duel2tg), single reads with the gyro curve
-     * (duel2sg), and the fixed reference. Dark (5.4 lux, Limo 12.7 s a lap), confirmed cars a
-     * frame: duel2tg 1.70, duel2t 1.64, duel2sg 1.41, fixed 1.40 (se of a difference .05).
-     * The day's first "dark" press ran at ~100 lux: all four equal.
-     * The base-image check that morning (duel2 / duel2s / duel2t / fixed, dark: tracking sums
-     * 1.93, fixed 1.89, single reads 1.66, burst sums 1.42) starts by lap_plan.
+    /*
+     * Earlier checks, startable by lap_plan (same rounds, 2 laps a run):
+     * - 2026-10-28 morning, base images (duel2 / duel2s / duel2t / fixed_1600_240), dark:
+     *   tracking sums 1.93, fixed 1.89, single reads 1.66, burst sums 1.42 confirmed cars a frame.
+     * - 2026-10-28 evening, gyro curve (duel2t / duel2tg / duel2sg / fixed_1600_240), dark
+     *   (5.4 lux, Limo 12.7 s a lap): duel2tg 1.70, duel2t 1.64, duel2sg 1.41, fixed 1.40 (se of a
+     *   difference .05). The day's first "dark" press ran at ~100 lux: all four equal.
      */
-    private val VERIFY_G_PLAN = rounds(listOf("duel2t_trace", "duel2tg_trace", "duel2sg_trace", "fixed_1600_240"))
+
+    /** The merge check (2026-10-29), 9 runs, ~7 min per lighting: the key as one read and its
+     *  reads merged only after a base with a weak trace (duel2tgm) against always merged
+     *  (duel2tg) and the fixed reference: how much merging only when unsure gives up. */
+    private val VERIFY_M_PLAN = rounds(listOf("duel2tg_trace", "duel2tgm_trace", "fixed_1600_240"))
 
     /** Duel2's curve: built with LK speeds, or (a g variant) with gyro + translation speeds. */
     private fun duelCurveFile(gyro: Boolean) = if (gyro) "tolerance_curve_gyro.txt" else "tolerance_curve.txt"
@@ -1775,11 +1778,11 @@ class MeasurementActivity : AppCompatActivity() {
         R.id.expMainDark to LapPreset("main, dark", MAIN_PLAN, 1, lighting = "dark"),
         // Check tab: Duel's two modes, one 3-lap run each (spec 7, track part).
         R.id.expTrackTest to LapPreset("track test", "duel2_trace:3,duel2_every:3", 1),
-        // Check tab: the gyro-curve check, dim and dark (see VERIFY_G_PLAN).
-        R.id.expVerifyDim to LapPreset("verify gyro, dim", VERIFY_G_PLAN, 1, lighting = "dim",
-            sessionTag = "duel2_verify_g"),
-        R.id.expVerifyDark to LapPreset("verify gyro, dark", VERIFY_G_PLAN, 1, lighting = "dark",
-            sessionTag = "duel2_verify_g"),
+        // Check tab: the merge check, dim and dark (see VERIFY_M_PLAN).
+        R.id.expVerifyDim to LapPreset("verify merge, dim", VERIFY_M_PLAN, 1, lighting = "dim",
+            sessionTag = "duel2_verify_m"),
+        R.id.expVerifyDark to LapPreset("verify merge, dark", VERIFY_M_PLAN, 1, lighting = "dark",
+            sessionTag = "duel2_verify_m"),
         R.id.expReadNoise to LapPreset("read noise", run = "readnoise"),
         // Old tab: the v3 experiments' steps (2026-10-15/16).
         R.id.expStatic to LapPreset("question 1, still", run = "collect55_ab", cap = 30),
@@ -1854,6 +1857,7 @@ class MeasurementActivity : AppCompatActivity() {
             "duel2sg_every" -> "proposed: Duel2 single reads, gyro (every)"
             "duel2g_trace" -> "proposed: Duel2, gyro (trace)"
             "duel2g_every" -> "proposed: Duel2, gyro (every)"
+            "duel2tgm_trace" -> "proposed: Duel2, one-read key, merge after a trace"
             "fixed_1600_240" -> "reference: fixed 1600 · 1/240"
             "nae" -> "baseline: Neural-AE"
             "prop_c" -> "baseline: Sense-well"
@@ -1943,7 +1947,7 @@ class MeasurementActivity : AppCompatActivity() {
         // Duel2 cannot start without its tolerance curves; refuse the whole session up front
         // rather than let its blocks silently not start while the laps are counted.
         val curvesNeeded = plan.filter { it.method.startsWith("duel2") }
-            .map { duelCurveFile(it.method.substringBefore('_').endsWith("g")) }.distinct()
+            .map { duelCurveFile(it.method.substringBefore('_').trimEnd('m').endsWith("g")) }.distinct()
         val missing = curvesNeeded.filter { f -> runCatching {
                 HowToSense.Curve.parse(assets.open(f).bufferedReader().use { it.readText() })
             }.isFailure }
@@ -2087,11 +2091,12 @@ class MeasurementActivity : AppCompatActivity() {
             return
         }
         // duel2 = the 2026-10-26 app, duel2s = real single reads, duel2t = tracking sums; a
-        // trailing g (duel2tg, duel2sg, duel2g) = the gyro speed source and its curve.
+        // trailing g (duel2tg, duel2sg, duel2g) = the gyro speed source and its curve; a final m
+        // (duel2tgm) = the base merges its reads only after a base with a weak trace.
         val duelBase = mapOf("" to "naive", "s" to "single", "t" to "track")
         val duelParts = cmd.split("_")
         val duelName = if (duelParts.size == 2 && duelParts[1] in listOf("trace", "every"))
-            Regex("duel2([st]?)(g?)").matchEntire(duelParts[0]) else null
+            Regex("duel2([st]?)(g?)(m?)").matchEntire(duelParts[0])?.takeIf { it.groupValues[3].isEmpty() || it.groupValues[1] == "t" } else null
         if (duelName != null) {
             val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
             val gyro = duelName.groupValues[2] == "g"
@@ -2104,7 +2109,7 @@ class MeasurementActivity : AppCompatActivity() {
             intent?.removeExtra("duel_start_cell")
             start(cmd) { mc!!.runDuel(duelParts[1] == "every", curve, cap, ::post, ::showFrame,
                 baseMode = duelBase.getValue(duelName.groupValues[1]), startCellOverride = forced,
-                speedSource = if (gyro) "gyro" else "lk") }
+                speedSource = if (gyro) "gyro" else "lk", mergeAfterTrace = duelName.groupValues[3] == "m") }
             return
         }
         // The Duel experiments' fixed reference cell: ISO 1600 x 1/240 s on the v2 lattice.
