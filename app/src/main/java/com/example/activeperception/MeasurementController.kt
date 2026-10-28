@@ -6821,8 +6821,8 @@ object ExperimentSession {
      *  into every run's manifest while set. */
     @Volatile var lighting: String = ""
     @Volatile var session: String = ""
-    /** The Limo speed the operator set (free text, e.g. its controller value); kept across
-     *  runs until changed and written into every run's manifest while set. */
+    /** The Limo speed the operator picked (slow / avg / fast, "" for none); kept across runs
+     *  until changed and written into every run's manifest while set. */
     @Volatile var limoSpeed: String = ""
     /** The last run's lap time from the gyro, s; NaN when it turned under half a lap. */
     @Volatile var lastLapS: Double = Double.NaN

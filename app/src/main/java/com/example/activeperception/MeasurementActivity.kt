@@ -34,7 +34,6 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.core.widget.doAfterTextChanged
 import com.example.activeperception.acquire.Detection
 import com.example.activeperception.acquire.Grid
 import com.example.activeperception.acquire.HowToSense
@@ -1307,21 +1306,18 @@ class MeasurementActivity : AppCompatActivity() {
         findViewById<Button>(R.id.expClose).setOnClickListener { expPanel.visibility = View.GONE }
         for ((t, _) in EXP_TABS) findViewById<Button>(t).setOnClickListener { showExpTab(t) }
         showExpTab(R.id.expTabMain)
-        // Limo speed as set: survives launches (it changes between days, not runs); from adb,
-        // `--es limo_speed <value>` sets it the same way.
-        val limoSpeed = findViewById<EditText>(R.id.limoSpeed)
-        limoSpeed.setText(intent.getStringExtra("limo_speed") ?: prefs.getString("limo_speed", "").orEmpty())
-        ExperimentSession.limoSpeed = limoSpeed.text.toString().trim()
-        prefs.edit().putString("limo_speed", ExperimentSession.limoSpeed).apply()
-        limoSpeed.doAfterTextChanged {
-            ExperimentSession.limoSpeed = it?.toString()?.trim().orEmpty()
-            prefs.edit().putString("limo_speed", ExperimentSession.limoSpeed).apply()
+        // Limo speed picked: survives launches (it changes between days, not runs); from adb,
+        // `--es limo_speed slow|avg|fast` picks it the same way.
+        val limoButtons = listOf(R.id.limoSlow to "slow", R.id.limoAvg to "avg", R.id.limoFast to "fast")
+        fun pickLimo(v: String) {
+            ExperimentSession.limoSpeed = v
+            prefs.edit().putString("limo_speed", v).apply()
+            for ((id, t) in limoButtons) findViewById<Button>(id).alpha = if (t == v) 1f else 0.35f
         }
-        limoSpeed.setOnEditorActionListener { v, _, _ ->
-            v.clearFocus()
-            (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
-                ?.hideSoftInputFromWindow(v.windowToken, 0)
-            true
+        pickLimo((intent.getStringExtra("limo_speed") ?: prefs.getString("limo_speed", ""))
+            .takeIf { s -> limoButtons.any { it.second == s } }.orEmpty())
+        for ((id, t) in limoButtons) findViewById<Button>(id).setOnClickListener {
+            pickLimo(if (ExperimentSession.limoSpeed == t) "" else t)
         }
         for ((id, preset) in EXP_PRESETS) {
             val b = findViewById<Button>(id)

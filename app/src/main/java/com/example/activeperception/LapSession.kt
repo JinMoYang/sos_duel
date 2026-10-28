@@ -152,7 +152,7 @@ class LapSession(
         state = State.LEAD_IN
         event("start", note = "plan=" + plan.joinToString("+") { "${it.method}x${it.laps}" } +
             " repeats=$repeats gravity_locked=${sensors.gravityLocked}" +
-            " limo_speed=${ExperimentSession.limoSpeed.ifEmpty { "-" }.replace(',', ';')}")
+            " limo_speed=${ExperimentSession.limoSpeed.ifEmpty { "-" }}")
         host.buzz(120)
         host.beep(1)
         host.status(if (sensors.gravityLocked) "lead-in lap…"

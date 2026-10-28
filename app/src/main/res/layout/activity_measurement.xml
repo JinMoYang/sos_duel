@@ -296,9 +296,10 @@
                 android:textColor="@color/text_label"
                 android:textSize="16sp" />
 
-            <!-- Limo speed: what the operator set on the Limo (kept until changed, written
-                 into every run's manifest like the lighting), and the last run's lap time
-                 measured from the gyro (also in every run's summary.json). -->
+            <!-- Limo speed: the operator's pick of slow / avg / fast (kept until changed,
+                 written into every run's manifest like the lighting; tap the lit one to
+                 clear it), and the last run's lap time measured from the gyro (also in
+                 every run's summary.json). -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -311,17 +312,22 @@
                     android:text="Limo speed"
                     android:textColor="@color/text_primary"
                     android:textSize="15sp" />
-                <EditText android:id="@+id/limoSpeed"
-                    android:layout_width="0dp"
+                <Button android:id="@+id/limoSlow"
+                    android:layout_width="0dp" android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
                     android:layout_marginStart="8dp"
-                    android:hint="as set, e.g. 0.4"
-                    android:imeOptions="actionDone"
-                    android:inputType="text"
-                    android:maxLines="1"
-                    android:minHeight="48dp"
-                    android:textSize="15sp" />
+                    android:text="slow" android:textAllCaps="false" android:textSize="15sp" android:maxLines="1"
+                    android:minWidth="0dp" android:paddingLeft="2dp" android:paddingRight="2dp" />
+                <Button android:id="@+id/limoAvg"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="avg" android:textAllCaps="false" android:textSize="15sp" android:maxLines="1"
+                    android:minWidth="0dp" android:paddingLeft="2dp" android:paddingRight="2dp" />
+                <Button android:id="@+id/limoFast"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="fast" android:textAllCaps="false" android:textSize="15sp" android:maxLines="1"
+                    android:minWidth="0dp" android:paddingLeft="2dp" android:paddingRight="2dp" />
                 <TextView android:id="@+id/limoMeasured"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -346,6 +352,10 @@
                     android:layout_weight="1"
                     android:text="Main"
                     android:textAllCaps="false"
+                    android:maxLines="1"
+                    android:minWidth="0dp"
+                    android:paddingLeft="2dp"
+                    android:paddingRight="2dp"
                     android:textSize="17sp" />
                 <Button android:id="@+id/expTabCheck"
                     style="?android:attr/borderlessButtonStyle"
@@ -354,6 +364,10 @@
                     android:layout_weight="1"
                     android:text="Check"
                     android:textAllCaps="false"
+                    android:maxLines="1"
+                    android:minWidth="0dp"
+                    android:paddingLeft="2dp"
+                    android:paddingRight="2dp"
                     android:textSize="17sp" />
                 <Button android:id="@+id/expTabRecord"
                     style="?android:attr/borderlessButtonStyle"
@@ -362,6 +376,10 @@
                     android:layout_weight="1"
                     android:text="Record"
                     android:textAllCaps="false"
+                    android:maxLines="1"
+                    android:minWidth="0dp"
+                    android:paddingLeft="2dp"
+                    android:paddingRight="2dp"
                     android:textSize="17sp" />
                 <Button android:id="@+id/expTabOld"
                     style="?android:attr/borderlessButtonStyle"
@@ -370,6 +388,10 @@
                     android:layout_weight="1"
                     android:text="Old"
                     android:textAllCaps="false"
+                    android:maxLines="1"
+                    android:minWidth="0dp"
+                    android:paddingLeft="2dp"
+                    android:paddingRight="2dp"
                     android:textSize="17sp" />
             </LinearLayout>
 
