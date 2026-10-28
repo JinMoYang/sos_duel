@@ -296,6 +296,41 @@
                 android:textColor="@color/text_label"
                 android:textSize="16sp" />
 
+            <!-- Limo speed: what the operator set on the Limo (kept until changed, written
+                 into every run's manifest like the lighting), and the last run's lap time
+                 measured from the gyro (also in every run's summary.json). -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Limo speed"
+                    android:textColor="@color/text_primary"
+                    android:textSize="15sp" />
+                <EditText android:id="@+id/limoSpeed"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:hint="as set, e.g. 0.4"
+                    android:imeOptions="actionDone"
+                    android:inputType="text"
+                    android:maxLines="1"
+                    android:minHeight="48dp"
+                    android:textSize="15sp" />
+                <TextView android:id="@+id/limoMeasured"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="lap —"
+                    android:textColor="@color/text_label"
+                    android:textSize="15sp" />
+            </LinearLayout>
+
             <!-- Tabs: Main = the Duel experiment, one press per lighting; Check = short
                  checks before it; Old = earlier experiments' steps, kept startable. -->
             <LinearLayout

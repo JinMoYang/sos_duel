@@ -136,6 +136,8 @@ class MeasurementController(
 
     private val regime = RegimeClassifier()
     private var passStartMs: Long = 0L
+    /** The run's measured Limo speed, armed with the IMU log; into summary.json at the end. */
+    private val speedMeter = LimoSpeedMeter()
 
     private fun now() = System.nanoTime()
     private fun ms(t0: Long) = (now() - t0) / 1e6
@@ -217,6 +219,7 @@ class MeasurementController(
         if (methodParams != null) m.put("method_params", methodParams)
         if (ExperimentSession.lighting.isNotEmpty()) m.put("lighting", ExperimentSession.lighting)
         if (ExperimentSession.session.isNotEmpty()) m.put("experiment_session", ExperimentSession.session)
+        if (ExperimentSession.limoSpeed.isNotEmpty()) m.put("limo_speed_setting", ExperimentSession.limoSpeed)
         m.put("grid", JSONObject().apply {
             put("gains", JSONArray(grid.gains.toTypedArray()))
             put("exposures_us", JSONArray(grid.exposuresUs.toTypedArray()))
@@ -463,8 +466,11 @@ class MeasurementController(
         sensors.onAccelSample = { ts, ax, ay, az ->
             logger.row("imu", listOf(ts, "accel", ax, ay, az, "", "", "", ""))
         }
+        speedMeter.start(sensors.totalYawDeg, System.currentTimeMillis())
+        ExperimentSession.lastLapS = Double.NaN
         sensors.onGyroSample = { ts, gx, gy, gz ->
             logger.row("imu", listOf(ts, "gyro", "", "", "", gx, gy, gz, ""))
+            speedMeter.add(sensors.currentYawRate)
         }
         sensors.onLuxSample = { ts, lux ->
             logger.row("imu", listOf(ts, "light", "", "", "", "", "", "", lux))
@@ -6672,6 +6678,14 @@ class MeasurementController(
                 .put("select_conf_threshold", selectConf)
                 .put("detector_conf_floor", 0.01)
                 .put("ts_ms", System.currentTimeMillis())
+            val sp = speedMeter.result(sensors.totalYawDeg, System.currentTimeMillis())
+            ExperimentSession.lastLapS = sp.lapS
+            fun num(v: Double): Any = if (v.isNaN()) JSONObject.NULL else Math.round(v * 1000) / 1000.0
+            summary.put("limo_measured", JSONObject()
+                .put("seconds", num(sp.seconds)).put("laps", num(sp.laps)).put("lap_s", num(sp.lapS))
+                .put("turn_yaw_rate_rad_s", num(sp.turnRateRadS))
+                .put("turn_threshold_rad_s", LimoSpeedMeter.TURN_RAD_S)
+                .put("gravity_locked", sensors.gravityLocked))
             java.io.File(logger.dir, "summary.json").writeText(summary.toString(2))
         }
     }
@@ -6807,4 +6821,9 @@ object ExperimentSession {
      *  into every run's manifest while set. */
     @Volatile var lighting: String = ""
     @Volatile var session: String = ""
+    /** The Limo speed the operator set (free text, e.g. its controller value); kept across
+     *  runs until changed and written into every run's manifest while set. */
+    @Volatile var limoSpeed: String = ""
+    /** The last run's lap time from the gyro, s; NaN when it turned under half a lap. */
+    @Volatile var lastLapS: Double = Double.NaN
 }

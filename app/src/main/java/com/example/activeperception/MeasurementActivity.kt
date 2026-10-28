@@ -34,6 +34,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.widget.doAfterTextChanged
 import com.example.activeperception.acquire.Detection
 import com.example.activeperception.acquire.Grid
 import com.example.activeperception.acquire.HowToSense
@@ -1306,6 +1307,22 @@ class MeasurementActivity : AppCompatActivity() {
         findViewById<Button>(R.id.expClose).setOnClickListener { expPanel.visibility = View.GONE }
         for ((t, _) in EXP_TABS) findViewById<Button>(t).setOnClickListener { showExpTab(t) }
         showExpTab(R.id.expTabMain)
+        // Limo speed as set: survives launches (it changes between days, not runs); from adb,
+        // `--es limo_speed <value>` sets it the same way.
+        val limoSpeed = findViewById<EditText>(R.id.limoSpeed)
+        limoSpeed.setText(intent.getStringExtra("limo_speed") ?: prefs.getString("limo_speed", "").orEmpty())
+        ExperimentSession.limoSpeed = limoSpeed.text.toString().trim()
+        prefs.edit().putString("limo_speed", ExperimentSession.limoSpeed).apply()
+        limoSpeed.doAfterTextChanged {
+            ExperimentSession.limoSpeed = it?.toString()?.trim().orEmpty()
+            prefs.edit().putString("limo_speed", ExperimentSession.limoSpeed).apply()
+        }
+        limoSpeed.setOnEditorActionListener { v, _, _ ->
+            v.clearFocus()
+            (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
+                ?.hideSoftInputFromWindow(v.windowToken, 0)
+            true
+        }
         for ((id, preset) in EXP_PRESETS) {
             val b = findViewById<Button>(id)
             b.setOnClickListener {
@@ -2524,6 +2541,8 @@ class MeasurementActivity : AppCompatActivity() {
                 // Playlist continuation: the next block starts once this run's worker has
                 // fully unwound (camera and GPU stay open, so the gap is a second or two).
                 runOnUiThread {
+                    findViewById<TextView>(R.id.limoMeasured)?.text = ExperimentSession.lastLapS
+                        .let { if (it.isNaN()) "lap —" else "lap %.1f s".format(it) }
                     lapSession?.onRunEnded()
                     if (lapSession == null) {
                         if (presetRunActive) {

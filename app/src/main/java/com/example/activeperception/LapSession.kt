@@ -151,7 +151,8 @@ class LapSession(
         rateEma = 0.0; maxRate = 0.0; phaseAtMax = 0.0
         state = State.LEAD_IN
         event("start", note = "plan=" + plan.joinToString("+") { "${it.method}x${it.laps}" } +
-            " repeats=$repeats gravity_locked=${sensors.gravityLocked}")
+            " repeats=$repeats gravity_locked=${sensors.gravityLocked}" +
+            " limo_speed=${ExperimentSession.limoSpeed.ifEmpty { "-" }.replace(',', ';')}")
         host.buzz(120)
         host.beep(1)
         host.status(if (sensors.gravityLocked) "lead-in lap…"
