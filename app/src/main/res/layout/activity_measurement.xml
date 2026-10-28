@@ -437,33 +437,49 @@
                     android:layout_width="0dp"
                     android:layout_height="88dp"
                     android:layout_weight="1"
-                    android:text="track test"
+                    android:text="track
+test"
                     android:textAllCaps="false"
-                    android:textSize="20sp" />
+                    android:minWidth="0dp"
+                    android:paddingLeft="2dp"
+                    android:paddingRight="2dp"
+                    android:textSize="18sp" />
                 <Button android:id="@+id/expReadNoise"
                     android:layout_width="0dp"
                     android:layout_height="88dp"
                     android:layout_weight="1"
                     android:layout_marginStart="8dp"
-                    android:text="read noise"
+                    android:text="read
+noise"
                     android:textAllCaps="false"
-                    android:textSize="20sp" />
+                    android:minWidth="0dp"
+                    android:paddingLeft="2dp"
+                    android:paddingRight="2dp"
+                    android:textSize="18sp" />
                 <Button android:id="@+id/expVerifyDim"
                     android:layout_width="0dp"
                     android:layout_height="88dp"
                     android:layout_weight="1"
                     android:layout_marginStart="8dp"
-                    android:text="verify dim"
+                    android:text="verify
+dim"
                     android:textAllCaps="false"
-                    android:textSize="20sp" />
+                    android:minWidth="0dp"
+                    android:paddingLeft="2dp"
+                    android:paddingRight="2dp"
+                    android:textSize="18sp" />
                 <Button android:id="@+id/expVerifyDark"
                     android:layout_width="0dp"
                     android:layout_height="88dp"
                     android:layout_weight="1"
                     android:layout_marginStart="8dp"
-                    android:text="verify dark"
+                    android:text="verify
+dark"
                     android:textAllCaps="false"
-                    android:textSize="20sp" />
+                    android:minWidth="0dp"
+                    android:paddingLeft="2dp"
+                    android:paddingRight="2dp"
+                    android:textSize="18sp" />
             </LinearLayout>
 
             <!-- Record: the counterfactual record (collect_cf, 225 moments) per lighting. -->
