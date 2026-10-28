@@ -636,6 +636,128 @@ class MeasurementController(
         endPass()
     }
 
+    /**
+     * Second-look check (2026-10-29): every frame the fixed key read ([keyIso] x [keyUs]) and ONE
+     * more read in the next sensor slot (16.7 ms later) at [secondIso] x [secondUs]. Each read is
+     * its own image (no merging), both are detected in one batch, and their detections are fused
+     * into the output (every kept cluster). The second read at the key's setting = one more look
+     * at the same moment; at another setting = another exposure. 16.7 ms moves a car ~1/10 of its
+     * box, so boxes are fused without a shift. Records as Duel2's two-image frames
+     * (candidate_dets roles base / neighbor, dets.jsonl clusters with each image's confidence r)
+     * so the same tools read it.
+     */
+    fun runFixedPair(keyIso: Int, keyUs: Int, secondIso: Int, secondUs: Int, maxFrames: Int,
+                     onStatus: (String) -> Unit,
+                     onFrame: (Bitmap, List<Detection>, Int, Int) -> Unit = { _, _, _, _ -> }) {
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+            ?: error("the pair check requires TfliteYoloDetector")
+        val name = "pair_${keyIso}_${Math.round(1e6 / keyUs)}_${secondIso}_${Math.round(1e6 / secondUs)}"
+        val ceil = v2AnalogCeil()
+        val isos = intArrayOf(keyIso, secondIso); val us = intArrayOf(keyUs, secondUs)
+        val phys = IntArray(2) { minOf(isos[it], ceil) }
+        val ratio = DoubleArray(2) { isos[it].toDouble() / phys[it] }
+        startPass(name, isGtReference = false, methodParams = JSONObject()
+            .put("rule", "key read + one more read in the next slot, each detected on its own, detections fused")
+            .put("key", JSONObject().put("iso", keyIso).put("analog_iso", phys[0]).put("exposure_us", keyUs))
+            .put("second", JSONObject().put("iso", secondIso).put("analog_iso", phys[1]).put("exposure_us", secondUs))
+            .put("merging", false).put("out_rule", "union: every kept cluster"))
+        val src = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
+        raw.armNativeDecodeValidation()
+        onStatus("warming FP16 GPU batches…")
+        tfl.warmUpAllBatches()
+        fun jsonBox(b: DoubleArray) = JSONArray(b.toList())
+        try {
+            var f = 0
+            var failures = 0
+            while (running && f < maxFrames) {
+                val t0 = now()
+                stepClock.begin()
+                val handle = raw.beginBracketSequence(listOf(us[0] to phys[0], us[1] to phys[1]),
+                    android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE)
+                val got = ArrayList<Pair<RawFrame, RawSensorCapturer.RawMeta>>()
+                if (!runCatching { for (i in 0..1) got += raw.takeBracketFrame(handle, i) }.isSuccess) {
+                    raw.abortBracketSequence(handle)
+                    failures++
+                    onStatus("pair: capture failed ($failures)")
+                    if (failures >= 5) break
+                    continue
+                }
+                failures = 0
+                if (f == 0) writeDecodeCheck()
+                val metas = got.map { it.second }
+                val frames = got.map { it.first }
+                stepClock.captured(metas)
+                val tCap = now()
+                val captureMs = msBetween(t0, tCap)
+                val tensor = src.formLanesTensor(frames.map { listOf(it) }, ratio)
+                stepClock.formed()
+                val dets = tfl.detectTensorBatchOptimized(tensor.batch)
+                stepClock.detected()
+                val inferMs = tfl.lastRunMs + tfl.lastDecodeMs
+                val formMs = ms(tCap) - inferMs
+                val samplers = (0..1).map { a -> com.example.activeperception.acquire.RawBoxSampler(frames[a],
+                    metas[a].blackLevels, metas[a].white.toDouble(), emptyList()) }
+                val per = (0..1).map { a ->
+                    V.perImage(dets[a].filter { it.confidence >= 0.05f }.map { d ->
+                        V.D(d.confidence.toDouble(), DoubleArray(4) { d.xyxy[it].toDouble() }, d.classId)
+                    })
+                }
+                val clusters = if (per[0].out.isEmpty() && per[1].out.isEmpty()) emptyList() else V.fuse(listOf(
+                    V.FuseImage(per[0].out, per[0].low) { box -> samplers[0].satFrac(box, ratio[0], Duel.SAT_SITES) },
+                    V.FuseImage(per[1].out, per[1].low) { box -> samplers[1].satFrac(box, ratio[1], Duel.SAT_SITES) }))
+                val kept = clusters.filter { it.status == "kept" }
+                val outDets = kept.map { c -> Detection(FloatArray(4) { c.box[it].toFloat() }, c.evidence.toFloat(), c.cls) }
+                stepClock.decided()
+                val totalMs = ms(t0)
+                val roles = listOf("base", "neighbor")
+                for (a in 0..1) {
+                    val arr = JSONArray()
+                    for (d in dets[a]) {
+                        if (d.confidence < 0.05f) continue
+                        val box = DoubleArray(4) { d.xyxy[it].toDouble() }
+                        arr.put(JSONObject().put("xyxy", jsonBox(box)).put("conf", d.confidence.toDouble())
+                            .put("class", d.classId).put("sat", samplers[a].satFrac(box, ratio[a], Duel.SAT_SITES)))
+                    }
+                    val m = metas[a]
+                    logger.jsonl("candidate_dets", JSONObject().put("frame", f).put("role", roles[a])
+                        .put("made_by", "frame").put("n_frames", 1)
+                        .put("iso", isos[a]).put("analog_gain", m.appliedIso).put("analog_gain_req", m.requestedIso)
+                        .put("digital_gain", ratio[a]).put("exposure_us", m.appliedExpUs)
+                        .put("frame_exposure_us", m.appliedExpUs).put("frame_exposure_us_req", m.requestedExpUs)
+                        .put("sensor_ts", m.timestamp).put("dets", arr))
+                }
+                val outArr = JSONArray(); val dropArr = JSONArray()
+                for (c in clusters) {
+                    val o = JSONObject().put("xyxy", jsonBox(c.box)).put("evidence", c.evidence)
+                        .put("peak", c.peak).put("class", c.cls).put("n_pic", c.nPic)
+                        .put("r", JSONArray(c.r.toList())).put("w", JSONArray(c.w.toList()))
+                        .put("to_nb", JSONArray(listOf(0.0, 0.0, 0)))
+                        .put("out", c.status == "kept")
+                    if (c.status == "kept") outArr.put(o) else dropArr.put(o.put("reason", c.status))
+                }
+                logger.jsonl("dets", JSONObject().put("frame", f).put("method", name)
+                    .put("roles", JSONArray(roles)).put("dets", outArr).put("dropped", dropArr)
+                    .put("second_after_ms", (metas[1].timestamp - metas[0].timestamp) / 1e6))
+                val bmp = src.selectedTensorBitmap(tensor, 0)
+                val path = saveImage("${frameName(f)}_base", bmp)
+                if (saveImages) saveImage("${frameName(f)}_nb_second", src.selectedTensorBitmap(tensor, 1))
+                logFrame(f, name, -1, keyIso, keyUs, 2, true, formMs, inferMs, totalMs, outDets, path,
+                    applyBoost = false, captureMs = captureMs, writeDetsLine = false, metaOverride = metas[0])
+                runCatching { onFrame(bmp, src.detectionsForTensorPreview(outDets, tensor, 0), keyIso, keyUs) }
+                onStatus("pair ISO$keyIso 1/${Math.round(1e6 / keyUs)} + ISO$secondIso 1/${Math.round(1e6 / secondUs)} " +
+                    "f=$f out=${outDets.size} ${"%.0f".format(totalMs)}ms")
+                f++
+            }
+        } finally {
+            runCatching { raw.stopFastCapture() }
+            runCatching { src.shutdown() }
+        }
+        endPass()
+    }
+
     // ---------- PhysSweep (Lens/ATI-style physical-sweep baseline, sense/baselines.py) ----------
 
     /** Lens-style physical sweep (Baek et al., ICLR 2025; `sense.baselines.PhysSweep`):

@@ -1744,12 +1744,14 @@ class MeasurementActivity : AppCompatActivity() {
      * - 2026-10-28 evening, gyro curve (duel2t / duel2tg / duel2sg / fixed_1600_240), dark
      *   (5.4 lux, Limo 12.7 s a lap): duel2tg 1.70, duel2t 1.64, duel2sg 1.41, fixed 1.40 (se of a
      *   difference .05). The day's first "dark" press ran at ~100 lux: all four equal.
+     * - 2026-10-29, merge check (duel2tg / duel2tgm / fixed_1600_240), dark (5.3 lux, fast):
+     *   always merged 1.70, merged only after a trace 1.60, fixed 1.58 (se .03).
      */
 
-    /** The merge check (2026-10-29), 9 runs, ~7 min per lighting: the key as one read and its
-     *  reads merged only after a base with a weak trace (duel2tgm) against always merged
-     *  (duel2tg) and the fixed reference: how much merging only when unsure gives up. */
-    private val VERIFY_M_PLAN = rounds(listOf("duel2tg_trace", "duel2tgm_trace", "fixed_1600_240"))
+    /** The second-look check (2026-10-29), 9 runs, ~7 min per lighting: the fixed key read alone,
+     *  plus one more read at the same setting, plus one read at the next shutter (1/120), each
+     *  read its own image, detections fused. Separates "one more look" from "another exposure". */
+    private val VERIFY_P_PLAN = rounds(listOf("fixed_1600_240", "pair_1600_240_1600_240", "pair_1600_240_1600_120"))
 
     /** Duel2's curve: built with LK speeds, or (a g variant) with gyro + translation speeds. */
     private fun duelCurveFile(gyro: Boolean) = if (gyro) "tolerance_curve_gyro.txt" else "tolerance_curve.txt"
@@ -1778,11 +1780,11 @@ class MeasurementActivity : AppCompatActivity() {
         R.id.expMainDark to LapPreset("main, dark", MAIN_PLAN, 1, lighting = "dark"),
         // Check tab: Duel's two modes, one 3-lap run each (spec 7, track part).
         R.id.expTrackTest to LapPreset("track test", "duel2_trace:3,duel2_every:3", 1),
-        // Check tab: the merge check, dim and dark (see VERIFY_M_PLAN).
-        R.id.expVerifyDim to LapPreset("verify merge, dim", VERIFY_M_PLAN, 1, lighting = "dim",
-            sessionTag = "duel2_verify_m"),
-        R.id.expVerifyDark to LapPreset("verify merge, dark", VERIFY_M_PLAN, 1, lighting = "dark",
-            sessionTag = "duel2_verify_m"),
+        // Check tab: the second-look check, dim and dark (see VERIFY_P_PLAN).
+        R.id.expVerifyDim to LapPreset("verify second look, dim", VERIFY_P_PLAN, 1, lighting = "dim",
+            sessionTag = "duel2_verify_p"),
+        R.id.expVerifyDark to LapPreset("verify second look, dark", VERIFY_P_PLAN, 1, lighting = "dark",
+            sessionTag = "duel2_verify_p"),
         R.id.expReadNoise to LapPreset("read noise", run = "readnoise"),
         // Old tab: the v3 experiments' steps (2026-10-15/16).
         R.id.expStatic to LapPreset("question 1, still", run = "collect55_ab", cap = 30),
@@ -1858,6 +1860,8 @@ class MeasurementActivity : AppCompatActivity() {
             "duel2g_trace" -> "proposed: Duel2, gyro (trace)"
             "duel2g_every" -> "proposed: Duel2, gyro (every)"
             "duel2tgm_trace" -> "proposed: Duel2, one-read key, merge after a trace"
+            "pair_1600_240_1600_240" -> "check: 1/240 + one more 1/240"
+            "pair_1600_240_1600_120" -> "check: 1/240 + one 1/120"
             "fixed_1600_240" -> "reference: fixed 1600 · 1/240"
             "nae" -> "baseline: Neural-AE"
             "prop_c" -> "baseline: Sense-well"
@@ -2110,6 +2114,17 @@ class MeasurementActivity : AppCompatActivity() {
             start(cmd) { mc!!.runDuel(duelParts[1] == "every", curve, cap, ::post, ::showFrame,
                 baseMode = duelBase.getValue(duelName.groupValues[1]), startCellOverride = forced,
                 speedSource = if (gyro) "gyro" else "lk", mergeAfterTrace = duelName.groupValues[3] == "m") }
+            return
+        }
+        // The second-look check: pair_<keyIso>_<keyDen>_<secondIso>_<secondDen>, e.g.
+        // pair_1600_240_1600_120 = the key read and one 1/120 read in the next slot.
+        Regex("""pair_(\d+)_(\d+)_(\d+)_(\d+)""").matchEntire(cmd)?.let { m ->
+            val us = mapOf(240 to 4167, 120 to 8333, 60 to 16667, 30 to 33333, 15 to 66667)
+            val (ki, kd, si, sd) = m.destructured
+            val keyUs = us[kd.toInt()]; val secondUs = us[sd.toInt()]
+            if (keyUs == null || secondUs == null) { post("pair: unknown shutter in $cmd"); return }
+            val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
+            start(cmd) { mc!!.runFixedPair(ki.toInt(), keyUs, si.toInt(), secondUs, cap, ::post, ::showFrame) }
             return
         }
         // The Duel experiments' fixed reference cell: ISO 1600 x 1/240 s on the v2 lattice.
