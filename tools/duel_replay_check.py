@@ -9,7 +9,9 @@ setting, the per-image outputs and weak traces, discord (fused boxes moved by th
 to_nb shifts), the votes, and the next base from the logged How-to-Sense E values and
 threshold (E itself needs the base picture before JPEG, so the JVM test checks it against
 the study instead). Fusion itself is not redone: the kept boxes are taken from dets.jsonl.
-No dependencies beyond the standard library.
+Every Duel2 variant (duel2 / duel2s / duel2t, LK or gyro speeds) is checked the same way; for
+single / track runs also the extra image's cell (the previous frame's extra_next = argmax of
+its logged E away from the next base's shutter). No dependencies beyond the standard library.
 """
 import json
 import sys

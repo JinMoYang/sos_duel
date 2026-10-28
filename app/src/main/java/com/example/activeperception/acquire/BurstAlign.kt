@@ -4,10 +4,18 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * Tracking sum of a burst (2026-10-28 experiment): before the frames of a burst are summed,
- * every later frame is moved back onto the first one, grid tile by grid tile, by the motion
- * measured between consecutive frames, so a passing car is summed onto itself instead of
- * into a double image. Frames of one burst share their exposure, so plain LK applies.
+ * Tracking sum of a burst (2026-10-28): before the frames of a burst are summed, every later
+ * frame is moved back onto the first one, grid tile by grid tile, by the motion measured
+ * between consecutive frames, so a passing car is summed onto itself instead of into a double
+ * image. Frames of one burst share their exposure, so plain LK applies.
+ *
+ * Why: the sensor reads a frame every 16.7 ms whatever the shutter, so a 1/240 or 1/120 burst
+ * has gaps between its reads and its plain sum is a double image (in the dark, Duel2's plain
+ * burst sums trailed the tracking sums by 0.5 confirmed cars a frame). Used by collect_cf2
+ * (its aligned images) and by Duel2's track mode (1/120 = 2 x 1/240, 1/60 = 2 x 1/120), the
+ * proposed method's images: in the dark they beat the fixed 1600 x 1/240 reference by ~0.3
+ * confirmed cars a frame (MeasurementActivity's VERIFY_G_PLAN). Cost on the S26: ~10 ms a
+ * step on 4 threads (AlignBenchTest).
  *
  * Works on decoded Bayer sites (the [RawFrame] layout, w x h sites, 2 x 2 sites = one quad =
  * one pixel of the 1020-wide oriented image). Motion is measured on quad luma at half the

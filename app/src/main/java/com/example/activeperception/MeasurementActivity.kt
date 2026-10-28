@@ -1719,34 +1719,34 @@ class MeasurementActivity : AppCompatActivity() {
         val sessionTag: String = "duel2_main"
     )
 
-    /** The Duel experiment (docs/SPEC_proposed_v4.md): eight methods, three runs each of
-     *  [MAIN_LAPS] laps, one run of every method per round, the order shifted by one each round
-     *  (no method always follows the same one, slow drift spreads over all). Each run
-     *  starts fresh and keeps its state for its laps. 24 runs. */
-    private val MAIN_METHODS = listOf("duel2_trace", "duel2_every", "ae_phone", "prop_c",
-        "physsweep", "shin_nm", "nae", "fixed_1600_240")
     /** Laps per run: 3 until the 2026-10-26 bright session; 2 since the Limo was slowed to
      *  ~20 s a lap (that session took 24 min). */
     private val MAIN_LAPS = 2
-    private val MAIN_PLAN = (0 until 3).flatMap { r ->
-        MAIN_METHODS.indices.map { MAIN_METHODS[(it + r) % MAIN_METHODS.size] }
+
+    /** A lap plan of three rounds, one run of [MAIN_LAPS] laps per method each round, the order
+     *  shifted by one each round (no method always follows the same one, slow drift - light,
+     *  battery, Limo speed - spreads over all). Each run starts fresh. */
+    private fun rounds(methods: List<String>) = (0 until 3).flatMap { r ->
+        methods.indices.map { methods[(it + r) % methods.size] }
     }.joinToString(",") { "$it:$MAIN_LAPS" }
 
-    /** The base-image check (2026-10-28): Duel2 as it was (burst-sum images), with real single
-     *  reads, and with tracking sums, against the fixed reference; three rounds of [MAIN_LAPS]
-     *  laps, the order shifted each round. 12 runs, ~9 min. */
-    private val VERIFY_METHODS = listOf("duel2_trace", "duel2s_trace", "duel2t_trace", "fixed_1600_240")
-    private val VERIFY_PLAN = (0 until 3).flatMap { r ->
-        VERIFY_METHODS.indices.map { VERIFY_METHODS[(it + r) % VERIFY_METHODS.size] }
-    }.joinToString(",") { "$it:$MAIN_LAPS" }
+    /** The Duel experiment (docs/SPEC_proposed_v4.md): eight methods, 24 runs. Still the
+     *  10-26 Duel2 (duel2_*); the 10-28 checks below chose duel2tg_trace as the proposed
+     *  method, so the final comparison swaps it in here. */
+    private val MAIN_METHODS = listOf("duel2_trace", "duel2_every", "ae_phone", "prop_c",
+        "physsweep", "shin_nm", "nae", "fixed_1600_240")
+    private val MAIN_PLAN = rounds(MAIN_METHODS)
 
-    /** The gyro-curve check (2026-10-28): tracking sums with the LK curve (as verified on
-     *  10-28) and with the gyro curve, single reads with the gyro curve, and the fixed
-     *  reference; same rounds as [VERIFY_PLAN]. 12 runs, ~9 min per lighting. */
-    private val VERIFY_G_METHODS = listOf("duel2t_trace", "duel2tg_trace", "duel2sg_trace", "fixed_1600_240")
-    private val VERIFY_G_PLAN = (0 until 3).flatMap { r ->
-        VERIFY_G_METHODS.indices.map { VERIFY_G_METHODS[(it + r) % VERIFY_G_METHODS.size] }
-    }.joinToString(",") { "$it:$MAIN_LAPS" }
+    /**
+     * The gyro-curve check (2026-10-28), 12 runs, ~9 min per lighting: tracking sums with the
+     * LK curve (duel2t) and with the gyro curve (duel2tg), single reads with the gyro curve
+     * (duel2sg), and the fixed reference. Dark (5.4 lux, Limo 12.7 s a lap), confirmed cars a
+     * frame: duel2tg 1.70, duel2t 1.64, duel2sg 1.41, fixed 1.40 (se of a difference .05).
+     * The day's first "dark" press ran at ~100 lux: all four equal.
+     * The base-image check that morning (duel2 / duel2s / duel2t / fixed, dark: tracking sums
+     * 1.93, fixed 1.89, single reads 1.66, burst sums 1.42) starts by lap_plan.
+     */
+    private val VERIFY_G_PLAN = rounds(listOf("duel2t_trace", "duel2tg_trace", "duel2sg_trace", "fixed_1600_240"))
 
     /** Duel2's curve: built with LK speeds, or (a g variant) with gyro + translation speeds. */
     private fun duelCurveFile(gyro: Boolean) = if (gyro) "tolerance_curve_gyro.txt" else "tolerance_curve.txt"
@@ -1775,8 +1775,7 @@ class MeasurementActivity : AppCompatActivity() {
         R.id.expMainDark to LapPreset("main, dark", MAIN_PLAN, 1, lighting = "dark"),
         // Check tab: Duel's two modes, one 3-lap run each (spec 7, track part).
         R.id.expTrackTest to LapPreset("track test", "duel2_trace:3,duel2_every:3", 1),
-        // Check tab: the gyro-curve check, dim and dark (see VERIFY_G_PLAN; the 10-28 base-image
-        // check, VERIFY_PLAN, still starts by lap_plan).
+        // Check tab: the gyro-curve check, dim and dark (see VERIFY_G_PLAN).
         R.id.expVerifyDim to LapPreset("verify gyro, dim", VERIFY_G_PLAN, 1, lighting = "dim",
             sessionTag = "duel2_verify_g"),
         R.id.expVerifyDark to LapPreset("verify gyro, dark", VERIFY_G_PLAN, 1, lighting = "dark",

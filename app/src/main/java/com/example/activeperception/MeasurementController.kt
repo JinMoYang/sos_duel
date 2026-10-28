@@ -4249,20 +4249,33 @@ class MeasurementController(
     }
 
     /**
-     * Duel (proposed v4; docs/SPEC_proposed_v4.md). Every frame: the base image at (base ISO,
-     * base shutter) and, when the plan says so, the same ISO one shutter rung away — both
-     * synthesized from ONE burst of two frames at the shorter of the two shutters (the longer
-     * image is the burst sum), detected in one batch, aligned by sparse flow and fused. Shutter:
-     * cars caught in only one of the two images are votes; the base moves one rung once the
-     * neighbour is better with 95% confidence, then keeps comparing that way until the
-     * neighbour loses. Gain: the highest ISO at which no car caught on the base would clip in
-     * 70% or more of its box — arithmetic on the base RAW, applied to the next frame.
-     * [every] = L1 (two images every frame); otherwise L0 (two images only during a line
-     * search or after a weak trace on the previous base). Starts at phone AE's setting
-     * snapped to the nearest cell. Decision rules: [com.example.activeperception.acquire.Duel].
+     * Duel2 (top-down proposed, Actdiff revision/PROPOSED_TOPDOWN_2026-10-26.md). Every frame:
+     * the base image at (base ISO, base shutter) and, on a comparison frame, one extra image,
+     * detected in one batch, aligned by sparse flow and fused into the frame's output. Then
+     * How-to-Sense ([HowToSense.choose]) picks the next base from this base picture: per lattice
+     * cell, E = sum over the 16 x 12 grid of object-map weight x curve(blur, brightness) x clip
+     * factor; the base moves only when E gains more than the curve's standard error.
      *
-     * One request in flight (depth 1): each frame is planned from the previous frame's
-     * results, as for every other method; decisions.jsonl records which frame that was.
+     * Variants (run name duel2[s|t][g]_trace|every):
+     * - [baseMode] "naive" (duel2, the 2026-10-26 app): both images synthesized from one burst
+     *   at the shorter shutter (the longer = the burst sum, with read gaps below 1/60); the
+     *   neighbour's direction by Thompson draws ([com.example.activeperception.acquire.Duel]);
+     *   output = clusters with evidence >= [V.OUT_THR].
+     * - "single" (duel2s): each image is one real read at its own setting.
+     * - "track" (duel2t): as single, but 1/120 = 2 x 1/240 and 1/60 = 2 x 1/120 reads, the
+     *   second moved back onto the first ([BurstAlign]) and summed: the long exposure's
+     *   brightness with one short read's blur. 1/240, 1/30 and 1/15 stay one read.
+     *   single / track: the extra image's cell = the curve's best away from the next base's
+     *   shutter; output = every kept cluster.
+     * - [speedSource] "lk" (the 2026-10-26 curve) or "gyro" (suffix g: [HowToSense.gyroSpeeds]
+     *   with assets/tolerance_curve_gyro.txt; with track, a sum's blur is one read's).
+     * - [every]: an extra image every frame; otherwise only after the base caught a weak trace.
+     *
+     * The proposed method since 2026-10-28 is duel2tg_trace (live check: MeasurementActivity's
+     * VERIFY_G_PLAN). Starts at the phone AE's setting snapped to the nearest cell. One request
+     * in flight (depth 1): each frame is planned from the previous frame's results;
+     * decisions.jsonl records which, and tools/duel_replay_check.py redoes every decision from
+     * the logs.
      */
     fun runDuel(
         every: Boolean, curve: HowToSense.Curve, maxFrames: Int,

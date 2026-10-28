@@ -16,6 +16,14 @@ import kotlin.math.sqrt
  * beats the current one by more than the curve's standard error. Pure Kotlin so the JVM
  * tests run exactly the phone's code.
  *
+ * Blur = image speed x shutter / car size (car lengths moved during the exposure). The speed
+ * comes from one of two sources, and the curve must be the one built with the same source
+ * (ToleranceCurveSosCf, -Dsos.speed): [Flow] (LK between consecutive base pictures; the
+ * 2026-10-26 app, assets/tolerance_curve.txt) or [gyroSpeeds] (gyro rotation + [TRANS_PER_S];
+ * 2026-10-28, assets/tolerance_curve_gyro.txt). LK read 0.4-0.8x the gyro's speed in the dark
+ * and 1.3-1.8x in dim light, which put the curve's errors where the light changed; the gyro
+ * does not depend on the picture.
+ *
  * Picture = the detector input without its letterbox rows: [W] x [H], 8-bit sRGB. Lattice
  * cell c = gain index * 5 + shutter index over [Duel.ISOS] x [Duel.SHUTTERS_US].
  */
