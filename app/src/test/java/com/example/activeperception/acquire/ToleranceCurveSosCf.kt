@@ -123,7 +123,7 @@ object ToleranceCurveSosCf {
     private class Sample(val unit: Int, val blur: Double, val bright: Double, val clip: Double, val hit: Boolean,
                          val cell: Int = -1, val edge: Boolean = false, val speed: Double = Double.NaN,
                          val yaw: Double = Double.NaN, val snr: Double = Double.NaN, val use: String = "",
-                         val nFrames: Int = 1)
+                         val nFrames: Int = 1, val srcShutterUs: Int = 0)
 
     /**
      * Noise (2026-10-28): per-pixel SNR of a box in the detector's picture, from its mean linear
@@ -305,7 +305,7 @@ object ToleranceCurveSosCf {
                         }
                     }
                     out += Sample(unitBase + m, blur, st[0], st[1], hit, img.cell, edgeOf[ci], blur / sec * len, yawM,
-                        snrOf(st[0], img.digital, img.nFrames, img.analog), img.use, img.nFrames)
+                        snrOf(st[0], img.digital, img.nFrames, img.analog), img.use, img.nFrames, img.srcShutterUs)
                     used++
                 }
             }
@@ -505,8 +505,9 @@ object ToleranceCurveSosCf {
         val curve = HowToSense.Curve.parse(curveFile.readText())
         if (SPEED == "hybrid") transConst = System.getProperty("sos.trans")?.toDouble() ?: translationConst(root)
         println("predict ${root.name} with ${curveFile.name}; ${speedNote()}")
-        fun pred(s: Sample) = curve.p[curve.bin(s.blur, s.bright)] * curve.factor(s.clip) *
+        fun predWith(s: Sample, blur: Double) = curve.p[curve.bin(blur, s.bright)] * curve.factor(s.clip) *
             (noiseFactor?.let { f -> if (s.snr.isNaN()) 1.0 else f[HowToSense.Curve.binOf(SNR_LO, s.snr)] } ?: 1.0)
+        fun pred(s: Sample) = predWith(s, s.blur)
         fun name(c: Int) = "ISO%d 1/%d".format(Duel.ISOS[c / 5], HowToSense.DENS[c % 5])
         val all = ArrayList<Sample>()
         for ((i, seq) in listOf("bright", "dim", "dark").withIndex()) {
@@ -596,6 +597,56 @@ object ToleranceCurveSosCf {
         for (lt in listOf("bright", "dim", "dark")) for (b in curve.blurLo.indices) {
             val l = all.filter { light(it) == lt && HowToSense.Curve.binOf(curve.blurLo, it.blur) == b }
             println("  %-6s blur >= %.4f %s".format(lt, curve.blurLo[b], line(l)))
+        }
+        rules(all, ::predWith, ::light, ::name)
+    }
+
+    /**
+     * Which image would each base rule take (2026-10-28)? Per moment, a rule has one image per
+     * lattice cell: "single reads" = one read at the cell's shutter (1/30, 1/15: gap-free 1/60
+     * reads summed, as a long read), "tracking sums" = 1/120 from 2 x 1/240 and 1/60 from
+     * 2 x 1/120 tracking-summed (collect_cf2's aligned images), the rest single. The pick is the
+     * cell whose image's certain cars have the highest predicted detected share; "read blur"
+     * judges a tracking sum by one read's blur (the 10-28 gyro app), "total blur" by its whole
+     * exposure (the 10-27 duel2t). Scored by the observed share of the picked image; oracle =
+     * the best image of each moment. Weights are the moment's certain cars, not the app's map.
+     */
+    private fun rules(all: List<Sample>, predWith: (Sample, Double) -> Double, light: (Sample) -> String,
+                      name: (Int) -> String) {
+        fun single(s: Sample) = s.use == "counterfactual" && s.srcShutterUs == minOf(Duel.SHUTTERS_US[s.cell % 5], 16667)
+        fun tracked(s: Sample) = when (s.cell % 5) {
+            1 -> s.use == "aligned" && s.srcShutterUs == 4167 && s.nFrames == 2
+            2 -> s.use == "aligned" && s.srcShutterUs == 8333 && s.nFrames == 2
+            else -> single(s)
+        }
+        class Rule(val name: String, val takes: (Sample) -> Boolean, val totalBlur: Boolean)
+        val rules = listOf(Rule("single reads", ::single, false), Rule("tracking sums, read blur", ::tracked, false),
+            Rule("tracking sums, total blur", ::tracked, true))
+        fun obs(l: List<Sample>) = l.count { it.hit }.toDouble() / l.size
+        println("== base rules, per lighting: observed share of the picked image (per moment), oracle, picks")
+        for (lt in listOf("bright", "dim", "dark")) {
+            val byUnit = all.filter { light(it) == lt && it.cell in 0 until 25 }.groupBy { it.unit }
+            if (byUnit.isEmpty()) continue
+            val fixed = byUnit.values.mapNotNull { l -> l.filter { it.cell == 20 && single(it) }.takeIf { it.isNotEmpty() }?.let(::obs) }
+            val perCell = all.filter { light(it) == lt && it.cell in 0 until 25 && single(it) }.groupBy { it.cell }
+                .mapValues { (_, l) -> obs(l) }
+            val bestCell = perCell.maxByOrNull { it.value }!!
+            println("  %-6s fixed ISO1600 1/240 %.3f (%d moments); best single cell overall %s %.3f".format(lt,
+                fixed.average(), fixed.size, name(bestCell.key), bestCell.value))
+            for (r in rules) {
+                val got = ArrayList<Double>(); val oracle = ArrayList<Double>(); val picks = IntArray(25)
+                for ((_, l) in byUnit) {
+                    val byCell = l.filter(r.takes).groupBy { it.cell }
+                    if (byCell.isEmpty()) continue
+                    val best = byCell.maxByOrNull { (_, s) ->
+                        s.sumOf { predWith(it, if (r.totalBlur && it.use == "aligned") it.blur * it.nFrames else it.blur) } / s.size }!!
+                    got += obs(best.value); picks[best.key]++
+                    oracle += byCell.values.maxOf(::obs)
+                }
+                val top = (0 until 25).sortedByDescending { picks[it] }.take(3).filter { picks[it] > 0 }
+                println("  %-6s %-26s %.3f (oracle %.3f, %d moments)  picks %s".format(lt, r.name, got.average(),
+                    oracle.average(), got.size, top.joinToString { "${name(it)} ${100 * picks[it] / got.size}%" }))
+            }
         }
     }
 
