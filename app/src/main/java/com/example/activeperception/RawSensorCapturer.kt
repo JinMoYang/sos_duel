@@ -52,6 +52,8 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         private const val SETTING_GUARD_FRAMES = 12
         private const val MAX_IMAGES = 32
         private const val CONTINUOUS_RING_CAPACITY = 6
+        /** Newest reads the parallel stream keeps (12.5 MB each). */
+        private const val PARALLEL_RING = 10
         // Only used if the HAL omits per-frame AWB metadata. Measured from RayNeo camera 0;
         // normal operation uses CaptureResult.COLOR_CORRECTION_GAINS instead.
         private val RAYNEO_WB_FALLBACK = floatArrayOf(1.8896484f, 1f, 1.7802734f)
@@ -561,6 +563,10 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     fun captureFast(exposureUs: Int, iso: Int, nBurst: Int): List<RawFrame> {
         check(fastCaptureStarted) { "startFastCapture() must be called first" }
         val wanted = max(1, nBurst)
+        parallel?.let { p ->
+            val key = ParallelKey.Manual(SensorState(exposureUs.toLong(), iso))
+            return p.take(listOf(key), wanted).map { it.frame }
+        }
         val expected = SensorState(exposureUs.toLong(), iso)
         val command = scheduler.enqueue(expected)
         val template = if (wanted == 1) CameraDevice.TEMPLATE_PREVIEW
@@ -579,8 +585,14 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     fun captureFastAe(nBurst: Int): List<RawFrame> {
         check(fastCaptureStarted) { "startFastCapture() must be called first" }
         val wanted = max(1, nBurst)
+        parallel?.let { p -> return p.take(listOf(ParallelKey.Ae), wanted).map { it.frame } }
         val id = aeCommandIds.decrementAndGet()
-        val request = device!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+        return runFastTarget(FastTarget(null, id, wanted, System.nanoTime()), aeRequest(id), "phone AE")
+    }
+
+    /** [captureFastAe]'s request: the HAL's AE and AWB on, fixed focus, tagged [id]. */
+    private fun aeRequest(id: Long): CaptureRequest =
+        device!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
             set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
             set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
             set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
@@ -588,17 +600,14 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             addTarget(reader!!.surface)
             setTag(id)
         }.build()
-        return runFastTarget(FastTarget(null, id, wanted, System.nanoTime()), request, "phone AE")
-    }
 
     private val aeCommandIds = AtomicLong(0L)
 
-    /** Submits [request] [FastTarget.wanted] times on the persistent routing and waits for
-     *  that many decoded frames. [what] names the capture in errors. */
-    private fun runFastTarget(target: FastTarget, request: CaptureRequest, what: String): List<RawFrame> {
-        val wanted = target.wanted
-        check(fastTargets.putIfAbsent(target.commandId, target) == null)
-        val callback = object : CameraCaptureSession.CaptureCallback() {
+    /** The capture callback of a [FastTarget] on the persistent routing: records the result for
+     *  the decode workers, tracks the applied state, and replaces a settling frame's slot
+     *  (bounded by [SETTING_GUARD_FRAMES]). */
+    private fun fastCallback(target: FastTarget): CameraCaptureSession.CaptureCallback =
+        object : CameraCaptureSession.CaptureCallback() {
             override fun onCaptureCompleted(
                 session: CameraCaptureSession,
                 request: CaptureRequest,
@@ -643,6 +652,13 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                 }
             }
         }
+
+    /** Submits [request] [FastTarget.wanted] times on the persistent routing and waits for
+     *  that many decoded frames. [what] names the capture in errors. */
+    private fun runFastTarget(target: FastTarget, request: CaptureRequest, what: String): List<RawFrame> {
+        val wanted = target.wanted
+        check(fastTargets.putIfAbsent(target.commandId, target) == null)
+        val callback = fastCallback(target)
         val sess = session ?: error("camera session is closed")
         sess.captureBurst(List(wanted) { request }, callback, cameraHandler)
         val timeoutNs = TimeUnit.MILLISECONDS.toNanos(max(6_000L, wanted * 400L))
@@ -927,8 +943,199 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         for (id in handle.commandIds) fastTargets.remove(id)
     }
 
+    // ---------- parallel mode (2026-10-29) ----------
+
+    /** What a parallel-mode read was requested as: a manual setting, or the phone's AE. */
+    sealed class ParallelKey {
+        data class Manual(val state: SensorState) : ParallelKey()
+        object Ae : ParallelKey()
+    }
+
+    /** One read of the parallel stream, with the key it was requested under. */
+    class ParallelRead(val frame: RawFrame, val meta: RawMeta, val key: ParallelKey)
+
+    /**
+     * Capture and analysis on separate threads: a stream thread keeps [depth] single-shot
+     * requests in flight, cycling through [pattern], and keeps the newest decoded reads; a
+     * caller's [take] waits until [periodNs] after its previous take started (the output clock),
+     * then for fresh reads (never handed out before) of the keys it asks for. The pattern is set
+     * before that wait, so a new setting reaches the sensor while the caller waits: about
+     * [depth] reads plus the request latency (~38 ms on the S26). Every request uses the
+     * preview template, as captureFast's one-shot requests do.
+     */
+    private inner class ParallelStream(val depth: Int, val periodNs: Long) {
+        @Volatile var pattern: List<ParallelKey> = emptyList()
+        /** Keys to request once each, in order, before the stream returns to cycling [pattern]
+         *  (a caller that plans its next windows ahead). */
+        val queue = java.util.concurrent.ConcurrentLinkedQueue<ParallelKey>()
+        private val ring = ArrayDeque<ParallelRead>()
+        private val lock = java.lang.Object()
+        @Volatile var active = true
+        @Volatile var error: Throwable? = null
+        private var lastReturnedTs = 0L
+        /** Newest timestamp handed out per key (several-key takes: a key's read need only be
+         *  newer than that key's last one). */
+        private val lastReturnedByKey = HashMap<ParallelKey, Long>()
+        private var tick = 0L
+        val thread = Thread({ loop() }, "RawParallelStream")
+
+        private fun submit(key: ParallelKey): FastTarget {
+            val target: FastTarget
+            val request: CaptureRequest
+            when (key) {
+                is ParallelKey.Manual -> {
+                    val command = scheduler.enqueue(key.state)
+                    target = FastTarget(key.state, command.id, 1, System.nanoTime())
+                    request = manualRequest(key.state, command.id, CameraDevice.TEMPLATE_PREVIEW)
+                }
+                ParallelKey.Ae -> {
+                    val id = aeCommandIds.decrementAndGet()
+                    target = FastTarget(null, id, 1, System.nanoTime())
+                    request = aeRequest(id)
+                }
+            }
+            check(fastTargets.putIfAbsent(target.commandId, target) == null)
+            (session ?: error("camera session is closed")).captureBurst(listOf(request), fastCallback(target), cameraHandler)
+            return target
+        }
+
+        private fun await(target: FastTarget): Decoded {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            try {
+                while (true) {
+                    target.ready.poll(100, TimeUnit.MILLISECONDS)?.let { return it }
+                    target.error?.let { throw it }
+                    if (System.nanoTime() >= deadline) error("parallel read timed out")
+                }
+            } finally {
+                fastTargets.remove(target.commandId)
+            }
+        }
+
+        private fun loop() {
+            val inflight = ArrayDeque<Pair<FastTarget, ParallelKey>>()
+            var next = 0
+            var failures = 0
+            try {
+                while (active) {
+                    while (inflight.size < depth) {
+                        val pat = pattern
+                        val key = queue.poll() ?: if (pat.isEmpty()) null else pat[next++ % pat.size]
+                        if (key == null) break
+                        inflight.addLast(submit(key) to key)
+                    }
+                    if (inflight.isEmpty()) { Thread.sleep(5); continue }
+                    val (t, key) = inflight.removeFirst()
+                    val d = try {
+                        await(t)
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "parallel read failed", e)
+                        if (++failures >= 5) throw e
+                        continue
+                    }
+                    failures = 0
+                    synchronized(lock) {
+                        ring.addLast(ParallelRead(d.frame, d.meta, key))
+                        while (ring.size > PARALLEL_RING) ring.removeFirst()
+                        lock.notifyAll()
+                    }
+                }
+            } catch (e: Throwable) {
+                if (active) { error = e; Log.e(TAG, "parallel stream stopped", e) }
+            } finally {
+                inflight.forEach { fastTargets.remove(it.first.commandId) }
+                synchronized(lock) { active = false; lock.notifyAll() }
+            }
+        }
+
+        /** Paced take: [keys] becomes the pattern (unless [setPattern] is false: the caller set
+         *  it); after the output clock, the newest [n] fresh reads of keys[0] when there is one
+         *  key, else the newest fresh read of each key: keys[0] (the output's) newer than every
+         *  read handed out before, every other key newer than its own last one. */
+        fun take(keys: List<ParallelKey>, n: Int = 1, setPattern: Boolean = true): List<ParallelRead> {
+            if (setPattern) pattern = keys
+            val lead = tick - System.nanoTime()
+            if (lead > 0) Thread.sleep(lead / 1_000_000, (lead % 1_000_000).toInt())
+            val t0 = System.nanoTime()
+            tick = t0 + periodNs
+            val deadline = t0 + TimeUnit.SECONDS.toNanos(4)
+            fun pick(): List<ParallelRead>? {
+                val fresh = ring.filter { it.meta.timestamp > lastReturnedTs }
+                if (keys.size == 1) return fresh.filter { it.key == keys[0] }.takeIf { it.size >= n }?.takeLast(n)
+                return keys.mapIndexed { i, k ->
+                    val after = if (i == 0) lastReturnedTs else lastReturnedByKey[k] ?: 0L
+                    ring.lastOrNull { it.key == k && it.meta.timestamp > after } ?: return null
+                }
+            }
+            var got: List<ParallelRead>? = null
+            synchronized(lock) {
+                while (got == null) {
+                    got = pick()
+                    if (got != null) break
+                    error?.let { throw it }
+                    check(active) { "parallel stream is not running" }
+                    val left = deadline - System.nanoTime()
+                    check(left > 0) { "parallel: no fresh read of $keys" }
+                    lock.wait(minOf(20L, TimeUnit.NANOSECONDS.toMillis(left).coerceAtLeast(1L)))
+                }
+            }
+            val reads = got!!
+            lastReturnedTs = maxOf(lastReturnedTs, reads.maxOf { it.meta.timestamp })
+            for (r in reads) lastReturnedByKey[r.key] = r.meta.timestamp
+            val metas = reads.map { it.meta }
+            lastMeta = metas; lastSettlingMeta = metas
+            currentState = SensorState(metas.last().appliedExpUs, metas.last().appliedIso)
+            lastCaptureProfile = CaptureProfile("parallel", reads.size, Double.NaN, Double.NaN, Double.NaN,
+                Double.NaN, 0.0, 0.0, (System.nanoTime() - t0) / 1e6)
+            return reads
+        }
+    }
+
+    @Volatile private var parallel: ParallelStream? = null
+    val parallelActive: Boolean get() = parallel != null
+
+    /** Parallel mode (see [ParallelStream]): from now on [captureFast] and [captureFastAe] hand
+     *  out the newest fresh reads of a continuous stream, one call every [periodMs]. */
+    @Synchronized
+    fun startParallel(depth: Int = 3, periodMs: Long = 100L) {
+        check(fastCaptureStarted) { "startFastCapture() must be called first" }
+        if (parallel != null) return
+        parallel = ParallelStream(depth, periodMs * 1_000_000L).also { it.thread.start() }
+        Log.i(TAG, "parallel mode: depth $depth, period $periodMs ms")
+    }
+
+    @Synchronized
+    fun stopParallel() {
+        val p = parallel ?: return
+        parallel = null
+        p.active = false
+        runCatching { p.thread.join(3000) }
+    }
+
+    /** Parallel mode, several settings: from now on the stream cycles [states]. */
+    fun parallelSetPattern(states: List<SensorState>) {
+        (parallel ?: error("parallel mode is off")).pattern = states.map { ParallelKey.Manual(it) }
+    }
+
+    /** Parallel mode, a window planned ahead: [states] are requested once each, in order, after
+     *  the windows queued before; then the stream cycles them until the next window is queued. */
+    fun parallelEnqueue(states: List<SensorState>) {
+        val p = parallel ?: error("parallel mode is off")
+        val keys = states.map { ParallelKey.Manual(it) }
+        p.queue.addAll(keys)
+        p.pattern = keys
+    }
+
+    /** Parallel mode, several settings: after the output clock, the newest fresh read of each of
+     *  [states], in that order (states[0] the output's; see [ParallelStream.take]). The pattern is
+     *  the caller's ([parallelSetPattern]). */
+    fun parallelTakeEach(states: List<SensorState>): List<Pair<RawFrame, RawMeta>> =
+        (parallel ?: error("parallel mode is off")).take(states.map { ParallelKey.Manual(it) }, setPattern = false)
+            .map { it.frame to it.meta }
+
     @Synchronized
     fun stopFastCapture() {
+        stopParallel()
         if (!fastCaptureStarted) return
         reader?.setOnImageAvailableListener(null, null)
         reader?.let { drainReader(it) }

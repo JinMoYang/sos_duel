@@ -1737,6 +1737,16 @@ class MeasurementActivity : AppCompatActivity() {
         "physsweep", "shin_nm", "nae", "fixed_1600_240")
     private val MAIN_PLAN = rounds(MAIN_METHODS)
 
+    /** The final comparison (2026-10-29), parallel structure for every method (capture and analysis
+     *  on separate threads, 10 fps): the proposed method (addl_3_sep_every: the key read at the
+     *  curve's setting plus up to 3 more at that setting every frame, each detected on its own, fused)
+     *  and the baselines moved unchanged onto the parallel capture (par_*), PhysSweep as fast
+     *  PhysSweep. 21 runs, ~12 min per lighting. The serial MAIN_PLAN above stays startable by
+     *  lap_plan. */
+    private val PAR_MAIN_METHODS = listOf("addl_3_sep_every", "par_ae_phone", "par_prop_c", "par_physsweep_fast",
+        "par_shin_nm", "par_nae", "par_fixed_1600_240")
+    private val PAR_MAIN_PLAN = rounds(PAR_MAIN_METHODS)
+
     /*
      * Earlier checks, startable by lap_plan (same rounds, 2 laps a run):
      * - 2026-10-28 morning, base images (duel2 / duel2s / duel2t / fixed_1600_240), dark:
@@ -1746,12 +1756,29 @@ class MeasurementActivity : AppCompatActivity() {
      *   difference .05). The day's first "dark" press ran at ~100 lux: all four equal.
      * - 2026-10-29, merge check (duel2tg / duel2tgm / fixed_1600_240), dark (5.3 lux, fast):
      *   always merged 1.70, merged only after a trace 1.60, fixed 1.58 (se .03).
+     * - 2026-10-29, second look (fixed_1600_240 / pair_1600_240_1600_240 / pair_1600_240_1600_120),
+     *   dark (5.8 lux): + one more 1/240 1.64, + one 1/120 1.49, fixed 1.39 (se .09); neither pair
+     *   added boxes no other run saw.
+     * - 2026-10-29, additional exposures after a trace (addl_0, addl_{1,3,5}_{merge,sep}), parallel,
+     *   dark (4.4 lux, fast): key only .81; +1 merged .88 / separate .82; +3 1.00 / .98; +5 1.04 /
+     *   .97 (se .07). The gain saturates at +3, the largest within 100 ms (+5 took ~120 ms).
+     * - 2026-10-29, the 3 additional exposures after a trace or every frame (VERIFY_E_PLAN), fast:
+     *   dark (4.5 lux) every merged 1.17 / every separate 1.14 / trace separate 1.04 / trace merged
+     *   1.02 (se .04); dim (10.4 lux) every separate 2.20 / trace separate 2.13 / trace merged 2.03 /
+     *   every merged 1.89 (se .11; 27% of its car boxes > 5% clipped: the key's setting is chosen for
+     *   one read). Every frame, separate: first or tied first in both, the proposed method.
      */
 
-    /** The second-look check (2026-10-29), 9 runs, ~7 min per lighting: the fixed key read alone,
-     *  plus one more read at the same setting, plus one read at the next shutter (1/120), each
-     *  read its own image, detections fused. Separates "one more look" from "another exposure". */
-    private val VERIFY_P_PLAN = rounds(listOf("fixed_1600_240", "pair_1600_240_1600_240", "pair_1600_240_1600_120"))
+    /** The additional-exposure check (2026-10-29): capture and analysis on separate threads at
+     *  10 fps; after a frame whose key image had a weak trace the next frame spends 1 + 0, 1, 3 or 5
+     *  reads at the key's setting, merged into one image or each detected on its own
+     *  (MeasurementController.runAddl). Ran once (see Earlier checks); startable by lap_plan. */
+    private val VERIFY_A_PLAN = rounds(listOf("addl_0", "addl_1_merge", "addl_1_sep", "addl_3_merge",
+        "addl_3_sep", "addl_5_merge", "addl_5_sep"))
+
+    /** When to spend the 3 additional exposures (2026-10-29), 12 runs, ~6 min per lighting: after a
+     *  trace only, or every frame; merged or each detected on its own. */
+    private val VERIFY_E_PLAN = rounds(listOf("addl_3_merge", "addl_3_sep", "addl_3_merge_every", "addl_3_sep_every"))
 
     /** Duel2's curve: built with LK speeds, or (a g variant) with gyro + translation speeds. */
     private fun duelCurveFile(gyro: Boolean) = if (gyro) "tolerance_curve_gyro.txt" else "tolerance_curve.txt"
@@ -1775,16 +1802,19 @@ class MeasurementActivity : AppCompatActivity() {
     private val EXP_PRESETS = linkedMapOf(
         // Main tab: the Duel experiment, one press per lighting (5 s countdown, a lead-in
         // lap, then 24 runs; one beep at the start, three at the end).
-        R.id.expMainBright to LapPreset("main, bright", MAIN_PLAN, 1, lighting = "bright"),
-        R.id.expMainDim to LapPreset("main, dim", MAIN_PLAN, 1, lighting = "dim"),
-        R.id.expMainDark to LapPreset("main, dark", MAIN_PLAN, 1, lighting = "dark"),
+        R.id.expMainBright to LapPreset("main (parallel), bright", PAR_MAIN_PLAN, 1, lighting = "bright",
+            sessionTag = "par_main"),
+        R.id.expMainDim to LapPreset("main (parallel), dim", PAR_MAIN_PLAN, 1, lighting = "dim",
+            sessionTag = "par_main"),
+        R.id.expMainDark to LapPreset("main (parallel), dark", PAR_MAIN_PLAN, 1, lighting = "dark",
+            sessionTag = "par_main"),
         // Check tab: Duel's two modes, one 3-lap run each (spec 7, track part).
         R.id.expTrackTest to LapPreset("track test", "duel2_trace:3,duel2_every:3", 1),
-        // Check tab: the second-look check, dim and dark (see VERIFY_P_PLAN).
-        R.id.expVerifyDim to LapPreset("verify second look, dim", VERIFY_P_PLAN, 1, lighting = "dim",
-            sessionTag = "duel2_verify_p"),
-        R.id.expVerifyDark to LapPreset("verify second look, dark", VERIFY_P_PLAN, 1, lighting = "dark",
-            sessionTag = "duel2_verify_p"),
+        // Check tab: when to spend the additional exposures, dim and dark (see VERIFY_E_PLAN).
+        R.id.expVerifyDim to LapPreset("verify trace / every frame, dim", VERIFY_E_PLAN, 1, lighting = "dim",
+            sessionTag = "addl_every_verify"),
+        R.id.expVerifyDark to LapPreset("verify trace / every frame, dark", VERIFY_E_PLAN, 1, lighting = "dark",
+            sessionTag = "addl_every_verify"),
         R.id.expReadNoise to LapPreset("read noise", run = "readnoise"),
         // Old tab: the v3 experiments' steps (2026-10-15/16).
         R.id.expStatic to LapPreset("question 1, still", run = "collect55_ab", cap = 30),
@@ -1842,6 +1872,8 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** What auto_collect shows in large letters while [method] runs. */
     private fun methodTitle(method: String): String {
+        if (method.startsWith("par_")) return "parallel: " + methodTitle(method.removePrefix("par_"))
+        if (method == "physsweep_fast") return "baseline: PhysSweep (fast)"
         v3Command(method)?.let { (theta, pilot) ->
             return if (pilot) "pilot: v3cause"
             else "proposed: v3cause " + if (theta.isInfinite()) "θ∞" else "θ%.2f".format(theta)
@@ -1862,6 +1894,15 @@ class MeasurementActivity : AppCompatActivity() {
             "duel2tgm_trace" -> "proposed: Duel2, one-read key, merge after a trace"
             "pair_1600_240_1600_240" -> "check: 1/240 + one more 1/240"
             "pair_1600_240_1600_120" -> "check: 1/240 + one 1/120"
+            "addl_0" -> "check: key exposure only"
+            "addl_1_merge" -> "check: key + 1 more, merged"
+            "addl_1_sep" -> "check: key + 1 more, separate"
+            "addl_3_merge" -> "check: key + 3 more, merged"
+            "addl_3_sep" -> "check: key + 3 more, separate"
+            "addl_5_merge" -> "check: key + 5 more, merged"
+            "addl_5_sep" -> "check: key + 5 more, separate"
+            "addl_3_merge_every" -> "check: key + 3 more every frame, merged"
+            "addl_3_sep_every" -> "proposed: key + up to 3 more every frame, separate"
             "fixed_1600_240" -> "reference: fixed 1600 · 1/240"
             "nae" -> "baseline: Neural-AE"
             "prop_c" -> "baseline: Sense-well"
@@ -1950,8 +1991,9 @@ class MeasurementActivity : AppCompatActivity() {
         if (plan.isEmpty()) { post("lap plan is empty"); return }
         // Duel2 cannot start without its tolerance curves; refuse the whole session up front
         // rather than let its blocks silently not start while the laps are counted.
-        val curvesNeeded = plan.filter { it.method.startsWith("duel2") }
-            .map { duelCurveFile(it.method.substringBefore('_').trimEnd('m').endsWith("g")) }.distinct()
+        val curvesNeeded = plan.filter { it.method.startsWith("duel2") || it.method.startsWith("addl_") }
+            .map { if (it.method.startsWith("addl_")) duelCurveFile(true)
+                else duelCurveFile(it.method.substringBefore('_').trimEnd('m').endsWith("g")) }.distinct()
         val missing = curvesNeeded.filter { f -> runCatching {
                 HowToSense.Curve.parse(assets.open(f).bufferedReader().use { it.readText() })
             }.isFailure }
@@ -2083,10 +2125,31 @@ class MeasurementActivity : AppCompatActivity() {
         return theta to pilot
     }
 
-    private fun launchRunnerCommand(cmd: String) {
+    /** Set by a "par_" command for the run it starts ([start] takes it). */
+    private var parallelNext = false
+
+    private fun launchRunnerCommand(command: String) {
+        // "par_<method>" (2026-10-29): the same method with capture and analysis on separate
+        // threads at 10 fps (MeasurementController.parallelCapture); the run is named par_...
+        parallelNext = command.startsWith("par_")
+        val cmd = command.removePrefix("par_")
         if (isCollect(cmd)) { startCollect(cmd); return }
         if (cmd == "readnoise") {
             start("readnoise") { mc!!.runReadNoise(::post) }
+            return
+        }
+        // Fast PhysSweep: PhysSweep with its sweep in the parallel structure's spare slots
+        // (MeasurementController.runPhysSweepFast); only as par_physsweep_fast.
+        if (cmd == "physsweep_fast") {
+            if (!parallelNext) { post("physsweep_fast runs only as par_physsweep_fast"); return }
+            val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
+            start("physsweep_fast_v2") { mc!!.runPhysSweepFast(cap, ::post, ::onFrameWithOffload) }
+            return
+        }
+        // Desk test, phone still: what one output can spend with capture and analysis on
+        // separate threads (MeasurementController.runBudgetProbe).
+        if (cmd == "budget_probe") {
+            start(cmd) { mc!!.runBudgetProbe(::post) }
             return
         }
         v3Command(cmd)?.let { (theta, pilot) ->
@@ -2125,6 +2188,27 @@ class MeasurementActivity : AppCompatActivity() {
             if (keyUs == null || secondUs == null) { post("pair: unknown shutter in $cmd"); return }
             val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
             start(cmd) { mc!!.runFixedPair(ki.toInt(), keyUs, si.toInt(), secondUs, cap, ::post, ::showFrame) }
+            return
+        }
+        // The additional-exposure check: addl_0, addl_<extra>_merge | _sep (extra 1-5), the key
+        // read plus that many more at its setting after a trace; a trailing _every, on every
+        // frame (MeasurementController.runAddl).
+        Regex("""addl_([0-5])(?:_(merge|sep))?(_every)?""").matchEntire(cmd)?.let { m ->
+            val extra = m.groupValues[1].toInt(); val use = m.groupValues[2]
+            if ((extra == 0) != use.isEmpty()) { post("addl: $cmd takes _merge or _sep exactly when extra > 0"); return }
+            val curveFile = duelCurveFile(true)
+            val curve = runCatching {
+                HowToSense.Curve.parse(assets.open(curveFile).bufferedReader().use { it.readText() })
+            }.getOrElse { post("addl needs assets/$curveFile: ${it.message}"); return }
+            val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
+            // _every, or for desk tests --ez addl_every true (once, then forgotten): every frame additional.
+            val every = m.groupValues[3].isNotEmpty() || intent?.getBooleanExtra("addl_every", false) == true
+            intent?.removeExtra("addl_every")
+            // Desk tests: --ei addl_start_cell c forces the start cell once (then forgotten).
+            val forced = intent?.getIntExtra("addl_start_cell", -1)?.takeIf { it in 0 until 25 }
+            intent?.removeExtra("addl_start_cell")
+            start(cmd) { mc!!.runAddl(extra, use == "merge", curve, cap, ::post, ::showFrame,
+                everyFrameAdditional = every, startCellOverride = forced) }
             return
         }
         // The Duel experiments' fixed reference cell: ISO 1600 x 1/240 s on the v2 lattice.
@@ -2511,6 +2595,8 @@ class MeasurementActivity : AppCompatActivity() {
     /** Runs [block] on the persistent GPU worker with a fresh logger and controller, so each
      *  press gets its own run directory while the camera and three GPU interpreters are reused. */
     private fun start(modeTag: String, block: () -> Unit) {
+        val par = parallelNext
+        parallelNext = false
         if (runActive) { post("busy — stop first"); return }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED) { post("no camera permission"); return }
@@ -2548,13 +2634,14 @@ class MeasurementActivity : AppCompatActivity() {
                 }
                 // Platform leads the name so a mixed directory groups by rig, while the
                 // epoch stays last for the parsers that split on it.
-                val runName = "run_${plat}_${modeTag}_${System.currentTimeMillis()}"
+                val runName = "run_${plat}_${if (par) "par_" else ""}${modeTag}_${System.currentTimeMillis()}"
                 val logger = MeasurementLogger(this, runName)
                 val mcLocal = MeasurementController(raw, detector, grid, sensors, logger, health, selectConf)
                 mcLocal.setV2Session(sess)
                 mcLocal.platformTag = plat
                 mcLocal.applyPairing(pairSnap)
                 mcLocal.saveImages = saveImagesNow
+                mcLocal.parallelCapture = par
                 mcLocal.appFilesDir = getExternalFilesDir(null)
                 raw.fixedFocusDiopters = focusNow
                 mc = mcLocal
