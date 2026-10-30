@@ -1,188 +1,81 @@
-# RayNeo SoS (통합 앱)
+# RayNeo SoS (`share`)
 
-카메라의 노출(셔터)과 게인(ISO)을 **검출 결과를 보고 고르는** 연구용 Android 앱이다. 같은 APK가 두 기기에서 돈다.
+검출 결과를 보고 카메라 노출(셔터·ISO)을 고르는 Android 앱. Galaxy S26 Ultra를 Limo에 달고, 트랙의 장난감 차 검출로 방법들을 비교한다. 이전 실험 전부는 `topdown-base` 브랜치에 있다.
 
-| 기기 | 화면 | 용도 |
-|---|---|---|
-| RayNeo X3 Pro 글래스 | 터치패드 조작 UI | 원래 최종 빌드(아래 부록) |
-| Galaxy S26 Ultra (`SM-S948N`) | 폰 화면 UI, Limo(토이카 로봇) 주행 | 지금 진행 중인 실험 |
+## TL;DR
 
-제조사가 RayNeo면 글래스 UI, 아니면 폰 UI가 자동으로 뜬다.
+- **구조 (프레임 예산 파이프라인)**: 10 fps 마감(100 ms)마다 출력 하나. 촬영 thread는 센서를 쉬지 않고 읽고, 분석 thread는 마감마다 최신 RAW를 쓴다. 출력 하나의 예산 = RAW 6장, 검출 4장.
+- **proposed (`addl_3_sep_every`)**: key 설정을 반응 곡선 + gyro로 예측 → 같은 설정 RAW 최대 3장을 더 찍어 장마다 검출 → 합집합. (1/30이면 추가 1장, 1/15면 0장)
+- **baseline**: AE-Phone, Sense-well, PhysSweep(fast), ShinNM, Neural-AE, fixed 1600·1/240(oracle). 모두 같은 병렬 구조(`par_`), 결정 규칙은 원래 그대로.
+- **결과 (10-29, 프레임당 확인된 차)**: 어두울수록 proposed가 앞서고, 밝으면 비긴다.
 
-## 지금 상태 (2026-10-16)
+| | 밝음 94 lux | dim 9.8 | 어두움 4.6 |
+|---|---|---|---|
+| **proposed** | 2.78 | **2.28** | **0.89** |
+| Sense-well | 2.83 | 2.14 | 0.81 |
+| fixed (oracle) | **2.86** | 2.16 | 0.67 |
+| PhysSweep (fast) | 2.37 | 1.85 | 0.55 |
+| Neural-AE | 1.63 | 1.55 | 0.66 |
+| ShinNM | 1.79 | 0.62 | 0.37 |
+| AE-Phone | 1.72 | 0.89 | 0.36 |
+| 표준오차 | ±.14 | ±.14 | ±.08 |
 
-- 작업 브랜치: **`v3-experiments`**. 이 브랜치와 `limo-collection`은 **GitHub에 올라가 있지 않다.** 이 폴더(또는 git bundle)로만 전달된다.
-- 진행 중인 실험은 두 질문이다.
-  1. software 합성(digital regain + burst sum)이 실제로 그 설정으로 찍은 사진을 충실히 재현하는가.
-  2. proposed(v3cause)가 baseline들(Sense-well, AE-Phone, PhysSweep, ShinNM)을 이기는가.
-- **다음 담당자는 [docs/HANDOVER_v3_experiments.md](docs/HANDOVER_v3_experiments.md)부터 읽는다.** 목적, 수집된 데이터와 유효 여부, 로그 형식, 분석 방법, 남은 일이 모두 거기 있다.
+대가: 지연 ~120 ms (fixed ~70), 밝을 때 아무도 못 본 박스 0.13–0.15 / 프레임.
 
-## 새 환경 준비
+알려진 문제: PhysSweep(fast)가 밝은 세션 한 run에서 18.7초에 멈춤(링 버퍼 밀어내기, 미수정). Neural-AE·ShinNM은 출력 간격이 ~134 ms(마감 100 ms 초과)로 원래부터 느림.
 
-1. **저장소**: 폴더를 통째로 복사한다. `app/build/`, `.gradle/`은 빌드 때 다시 생기므로 빼도 된다. 또는 원래 PC에서 `git bundle create RayNeo_SoS_all.bundle --all`로 묶어 받은 뒤, `git clone RayNeo_SoS_all.bundle RayNeo_SoS`, `git checkout v3-experiments`.
-2. **도구**: SDK Manager에서 설치한다.
-   - Android SDK platform 36
-   - NDK `27.0.12077973`
-   - CMake `3.22.1`
-   - platform-tools(adb)
-3. **JDK 21** (예: Android Studio의 JBR 21). **Java 25로는 Gradle 8.13이 깨진다.** Gradle은 wrapper가 8.13을 알아서 받는다.
-4. **`local.properties`**: `sdk.dir=<Android SDK 경로>`. git에 없으며 Android Studio가 만들어 준다.
-5. **서명 키**: 폰에 이미 깔린 앱과 **같은 debug keystore**(`~/.android/debug.keystore`, Windows는 `%USERPROFILE%\.android\debug.keystore`)가 있어야 덮어 설치(`install -r`)가 된다. 키는 따로 전달된다.
-   - 키가 다르면 앱을 지우고 다시 깔아야 한다. 그러면 앱 전용 폴더가 지워진다.
-   - 그 폴더에는 실험이 쓰는 read noise 기준값 `read_noise.json`이 있으니, 지우기 전에 `/sdcard/Android/data/com.sos.integrate/files/`를 먼저 백업한다.
+## 빌드·설치
 
-## 빌드와 설치
+JDK 21, Android SDK 36, NDK `27.0.12077973`, CMake `3.22.1`.
 
 ```bash
-# macOS / Linux / Git Bash
-JAVA_HOME=<JDK 21 경로> ./gradlew assembleDebug
+JAVA_HOME=<JDK 21> ./gradlew assembleDebug
+adb install -r -t app/build/outputs/apk/debug/app-debug.apk
+adb push nae_hist_scalar_3x3.bin /sdcard/Android/data/com.sos.integrate/files/   # Neural-AE 가중치 (아래)
 ```
 
-```powershell
-# Windows PowerShell
-$env:JAVA_HOME = '<JDK 21 경로>'; .\gradlew.bat assembleDebug
-```
+## 실험
+
+앱을 열면 **experiments** 화면. Limo 속도를 고르고 버튼을 누른다(폰 잠금 해제, 화면 켜 둠).
+
+| 탭 | 버튼 | 내용 | 시간 |
+|---|---|---|---|
+| Main | bright / dim / dark | 최종 비교: 7방법 × 3라운드 | ~12분 |
+| Check | verify dim / dark | 추가 3장: 흔적 뒤 vs 매 프레임, 합침 vs 따로 | ~6분 |
+| Check | read noise | 렌즈 가리고 폰마다 1번 | ~12초 |
+| Record | bright / dim / dark | 반응 곡선용 기록 (`collect_cf2`) | ~4.5분 |
+
+조명: dark 4–6 lux, dim ~10, bright ~95. adb: `adb shell am start -S -n com.sos.integrate/com.example.activeperception.MeasurementActivity --es run <이름>` (멈춤: `KEYCODE_BACK`).
+
+## 평가
+
+`/sdcard/Documents/sos/`에서 세션 하나(`lapsession_*.csv` + 그 `run_*` 폴더들)를 받아:
 
 ```bash
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n com.sos.integrate/com.example.activeperception.MeasurementActivity
+python tools/eval/eval_session.py <세션> [--key-only]       # 점수, 라운드 승, 오검출, 시간
+python tools/eval/eval_session.py <세션> --kind addl_every  # Check 탭 실험
+python tools/eval/unsupported_boxes.py <세션>              # 아무도 못 본 박스
 ```
 
-- Application ID: **`com.sos.integrate`**. 폰에 예전 앱 `com.sos.rayneox3.final`(아래 부록의 글래스 빌드)이 함께 깔려 있을 수 있다. 이름이 비슷하니 혼동하지 말 것.
-- 설치하면 앱이 재시작된다. **측정 중이 아닐 때만** 설치한다.
-- Windows Git Bash에서 adb를 쓸 때는 `export MSYS_NO_PATHCONV=1`로 경로 변환을 끈다.
-- `app/.cxx/`의 빌드 파일 일부가 git에 추적되고 있어 빌드 후 항상 수정됨으로 보인다. 커밋할 때는 소스 파일만 고른다.
+확인된 차 = 같은 트랙 위치(±1/60 바퀴, IoU ≥ .3)에서 다른 run 3개 이상도 본 박스(정답 라벨 없음). 정의는 `tools/eval/sos_eval.py`.
 
-## 실험 앱 사용 (Galaxy S26 Ultra)
+## 반응 곡선 · Neural-AE 가중치
 
-첫 화면(주행 화면) 오른쪽 위 **auto_collect** → 검은 화면에 지금 실행 중인 방법이 큰 글씨로 뜨고, 아래에 버튼이 셋 있다.
+10-16 기록(`sos_cf_v1`, 따로 전달)에서 PC로 만든다.
 
-| 버튼 | 언제 | 시간 |
-|---|---|---|
-| read noise | 폰마다 한 번, 렌즈를 완전히 가리고(엎어 놓기) | 약 12초 |
-| static | 조명마다, 폰을 고정하고 차가 보이게 | 약 1분 (30프레임) |
-| Limo | 조명마다, Limo 주행 | 약 9분 (40바퀴: collect 20, 비교 방법 5개 × 4) |
+```bash
+./gradlew :app:compileDebugUnitTestKotlin
+tools/curve/run_jvm.sh ToleranceCurveSosCf <sos_cf_v1> curve_gyro.txt -Dsos.speed=gyro   # → assets/tolerance_curve_gyro.txt
+tools/curve/run_jvm.sh NaeTrainSosCf <sos_cf_v1> <출력 폴더>                             # → nae_hist_scalar_3x3.bin
+```
 
-- 시작할 때 "삑" 1번, 끝나면 "삑" 3번이 난다. 손으로 멈추면 소리가 나지 않는다.
-- 실행 중인 버튼을 다시 누르면 멈춘다.
-- 폰은 세로든 가로든 달아도 된다. 실행마다 중력으로 사진 방향을 맞춘다.
-- 결과는 폰의 `/sdcard/Documents/sos/`에 저장된다.
-  - 실행마다 `run_<platform>_<method>_<epoch_ms>/` 폴더(`manifest.json`, `frames.csv`, `dets.jsonl`, `img/` 등)
-  - Limo 세션은 `lapsession_<epoch_ms>.csv`
-  - 가져오기: `adb pull /sdcard/Documents/sos/<폴더>`
+## 코드
 
-자세한 절차, 바퀴 판정, 로그 형식은 핸드오버 문서 §5~§7에 있다.
-
-## 코드 구조 (주요 파일)
-
-`app/src/main/java/com/example/activeperception/`
-
-| 파일 | 역할 |
+| 파일 | |
 |---|---|
-| `MeasurementActivity.kt` | UI, auto_collect, adb 실행 명령, 화면 방향 |
-| `MeasurementController.kt` | 방법별 실행 루프(prop_c, physsweep, shin_nm, v3cause, collect, read noise)와 로깅 |
-| `LapSession.kt` | 자이로 기반 바퀴 판정과 방법 전환 |
-| `acquire/V3Cause.kt` | proposed(v3cause) 판단 로직 |
-| `ParallelRawCandidateSource.kt`, `app/src/main/cpp/native_tensor_preprocessor.cpp` | RAW → 검출기 입력(모든 방법 공통) |
-| `RawSensorCapturer.kt` | Camera2 RAW 촬영, 고정 초점 |
-
-## 문서
-
-| 문서 | 내용 |
-|---|---|
-| [docs/HANDOVER_v3_experiments.md](docs/HANDOVER_v3_experiments.md) | **지금 실험의 전부**: 목적, 데이터, 분석 방법, 남은 일 |
-| [docs/PIPELINE.md](docs/PIPELINE.md), [docs/IMPLEMENTATION_NOTES.md](docs/IMPLEMENTATION_NOTES.md), [docs/FINAL_BUILD.md](docs/FINAL_BUILD.md), [docs/TOUCHPAD_CONTROLS.md](docs/TOUCHPAD_CONTROLS.md) | RayNeo 글래스 최종 빌드 당시의 문서 |
-
----
-
-## 부록: RayNeo X3 Pro 글래스 최종 빌드 (원래 README, 2026-08)
-
-> 통합 이전에 쓰인 내용이다. 지금 Application ID는 `com.sos.integrate`이고, 아래의 `com.sos.rayneox3.final`은 그때의 별도 앱이다.
-
-RayNeo X3 Pro (`ARGF20`, Android 12)용 최종 SoS 앱이다. 실험과 중간 버전은 기존
-`/Users/silver/Desktop/sos_glass`에 보존하고, 이 프로젝트에는 검증 후 채택한 실행
-경로와 필요한 모델만 둔다.
-
-### 기본 실행 경로
-
-```text
-Camera2 RAW10 4032×3024
-→ SENSOR_TIMESTAMP 기반 RAW/metadata 매칭
-→ CFA별 dynamic black-level 차감 + 2× subsampling
-→ P-step: N=4 RAW burst / K=9 exposure×gain 후보
-   non-P-step: physical single RAW / K=3 gain 후보
-→ fused native ARM path
-   (first-N 합산 → 2×2 demosaic → digital gain → sRGB OETF
-    → 90° 회전 → 640 letterbox/normalization → tensor)
-→ 5-class YOLOv8n FP16, OpenCL GPU fixed batch B=9/B=3
-→ allocation-reuse Decode/NMS → Σconfidence argmax
-→ selected candidate만 Bitmap/overlay 생성
-→ 다음 sensor request, UI, logging, optional cloud offload
-```
-
-### 원본 SoS에서 유지한 기능
-
-- exposure×gain candidate grid와 `P` 주기의 full-grid probing
-- burst 합산으로 exposure 후보, digital re-gain으로 gain 후보 생성
-- 전체 후보의 batched YOLO 추론과 confidence-sum 기반 최적 cell 선택
-- 검출이 전혀 없을 때 entropy/laplacian/tenengrad/Crete/safe-cell fallback
-- 선택 exposure를 실제 sensor에 적용하고 다음 step의 anchor로 사용
-- Fixed, phone/custom AE, AE-quantized, Proposed 모드
-- cross-exposure consistency 기반 비동기 cloud advisory/offload
-- P=5/9/12, 회전 턴테이블 시작 동기화, 터치패드 조작
-- 후보별 detection JSONL, frame/candidate/router/timing CSV, 선택 JPEG 저장
-
-### RayNeo 최적화
-
-- RayNeo camera 0의 RAW10, 4032×3024, 90° orientation을 사용한다.
-- 수신 순서가 아니라 sensor timestamp와 실제 exposure/ISO metadata로 RAW를 승인한다.
-- 12-frame 고정 guard 대신 적용 metadata가 확인된 첫 RAW를 사용한다.
-- finite single sequence와 다음 burst prefetch로 capture wait를 처리와 겹친다.
-- AWB/CCM은 제거하고 원본 SoS와 같은 digital gain + sRGB OETF를 사용한다.
-- Bayer sum, demosaic, gain, sRGB, rotation, resize를 하나의 native formation 경로로 합친다.
-- 모든 후보의 ARGB/Bitmap을 만들지 않고 tensor로 직접 추론한 뒤 선택 후보만 표시한다.
-- tensor/RAW/LUT/decode/NMS 버퍼를 재사용한다.
-- 모델은 검증된 640 FP16 COCO5 B=1/3/9만 포함한다. 정확도 저하와 CPU fallback이
-  확인된 Full-INT8 512/640 및 NNAPI/NPU 경로는 포함하지 않는다.
-
-COCO5 출력 순서는 `cup`, `wine glass`, `banana`, `bus`, `dining table`이며 앱 내부에서
-원래 COCO class ID로 다시 매핑한다.
-
-### 검증된 steady-state 기준
-
-선택 Bitmap/overlay와 비동기 저장을 제외한 detection-ready 기준:
-
-| Step | 평균 지연 |
-| --- | ---: |
-| K=3 single probing | 약 **0.32 s** |
-| K=9 burst probing | 약 **0.98 s** |
-
-새 최종 APK는 독립 빌드와 정적 구성을 확인했다. glass가 현재 연결되어 있지 않아 설치
-후 camera/GPU smoke test는 아래 순서로 진행해야 한다.
-
-### 빌드와 설치
-
-```bash
-./gradlew :app:assembleDebug --offline
-adb -s <DEVICE_SERIAL> install -r app/build/outputs/apk/debug/app-debug.apk
-```
-
-- Application ID: `com.sos.rayneox3.final`
-- 앱 이름: `RayNeo SoS`
-- 기본 설정: Proposed, P=5, Safe fallback, digital boost 2×, confidence 0.25
-
-최초 Start 시 camera와 FP16 GPU B=1/3/9를 로드·워밍업하므로 첫 실행은 오래 걸릴 수
-있다. 이후 처리 시간은 steady-state 값으로 수렴한다.
-
-### 실기 확인 체크리스트
-
-1. 앱 목록에서 `RayNeo SoS`가 보이고 camera 권한 요청이 뜨는지 확인한다.
-2. Proposed/P=5 Start 후 `K=9 burst` 1회와 `K=3 single` 4회가 반복되는지 확인한다.
-3. 화면 방향, 선택 이미지, bounding box 좌표가 일치하는지 확인한다.
-4. `metadata_match=1`이 유지되고 exposure가 선택된 shutter로 바뀌는지 확인한다.
-5. GPU backend가 B=1/3/9 모두 GPU이고 crash/thermal throttling이 없는지 확인한다.
-6. 앱 전용 files 디렉터리의 run 폴더에서 `manifest.json`, `frames.csv`, `exp55.csv`,
-   `candidates.csv`, `candidate_dets.jsonl`, `router.csv`, `img/`를 확인한다.
-
-세부 구조는 [docs/PIPELINE.md](docs/PIPELINE.md), 터치 조작은
-[docs/TOUCHPAD_CONTROLS.md](docs/TOUCHPAD_CONTROLS.md)를 참고한다.
+| `MeasurementController.kt` | 방법별 루프: `runAddl`(proposed), baseline들, `runPhysSweepFast`, `runCollect55`, `runBudgetProbe` |
+| `RawSensorCapturer.kt` | Camera2 RAW, 병렬 모드(`startParallel`) |
+| `MeasurementActivity.kt` | 화면, 버튼 계획, adb 명령 |
+| `acquire/HowToSense.kt` | 반응 곡선으로 key 설정 고르기 |
+| `acquire/V3Cause.kt` | 사진별 검출 정리, 융합 |
+| `acquire/BurstAlign.kt`, `SparseFlow.kt` | 트래킹 |

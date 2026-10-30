@@ -24,3 +24,7 @@ local.properties
 
 # Measurement output, if a run directory is ever copied into the tree
 sos/
+
+# CMake/ndk build state (machine-specific paths) and built APKs: build from source
+app/.cxx/
+dist/
