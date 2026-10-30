@@ -14,14 +14,6 @@ object V3Cause {
     const val OUT_THR = 0.25
     const val WEAK_LO = 0.05
     const val PLACE_IOU = 0.3
-    const val TWO_SHOT_S = 0.20
-    const val FLICKER_WINDOW = 10
-    const val HYST_WINDOW = 10
-    const val SAT_PLACE = 0.5
-    const val BLUR_RATIO = 0.03
-    const val BASE_SAT = 0.1
-    /** Cheapest first: the order that breaks equal place counts. */
-    val ORDER = listOf("digital", "short_sat", "short_blur", "long")
 
     class D(val conf: Double, val box: DoubleArray, val cls: Int = -1)
 
@@ -116,104 +108,4 @@ object V3Cause {
     /** Python's round(): half to even. */
     fun pyRound(x: Double): Int = Math.rint(x).toInt()
 
-    /** Reward for a delta: extra-image outputs not overlapping any base output, each weighted
-     *  by 1 - its saturated fraction in that extra image. */
-    fun addedBoxes(extraOut: List<D>, baseOut: List<D>, satExtra: (DoubleArray) -> Double): Double =
-        extraOut.filter { d -> baseOut.all { iou(d.box, it.box) < 0.3 } }
-            .sumOf { 1.0 - satExtra(it.box) }
-
-    /** n[d], s[d] for d = 1..5 (index 0 unused). Deterministic. */
-    fun pickDelta(n: IntArray, s: DoubleArray): Pair<Int, String> {
-        for (d in 1..5) if (n[d] == 0) return d to "sweep"
-        var best = 1
-        for (d in 2..5) if (s[d] / n[d] > s[best] / n[best]) best = d
-        return best to "exploit"
-    }
-
-    class BaseTarget(val target: Double, val j: Int)
-
-    /** satAtScale(box, 2^j): fraction of the box's RAW sites with signal x 2^j >= white.
-     *  Null when the base has no output box. */
-    fun baseTarget(
-        baseOut: List<D>, satAtScale: (DoubleArray, Double) -> Double,
-        again: Double, againLo: Double, againHi: Double
-    ): BaseTarget? {
-        if (baseOut.isEmpty()) return null
-        val ok = (-4..4).filter { j ->
-            val s = Math.pow(2.0, j.toDouble())
-            baseOut.all { satAtScale(it.box, s) < BASE_SAT }
-        }
-        val j = ok.maxOrNull() ?: -4
-        return BaseTarget(minOf(maxOf(again * Math.pow(2.0, j.toDouble()), againLo), againHi), j)
-    }
-
-    /** window = the last 10 targets; acts only once 10 have accumulated. */
-    fun hysteresis(cur: Double, window: List<Double>): Pair<Double, String> {
-        if (window.size < HYST_WINDOW) return cur to "hold"
-        if (window.all { it < cur }) return window.maxOrNull()!! to "all_lower"
-        if (window.all { it > cur }) return window.minOrNull()!! to "all_higher"
-        return cur to "hold"
-    }
-
-    /** blur ratio = motion px/frame x (T0 / frame interval) / box long side. */
-    fun blurRatio(box: DoubleArray, motionPx: Double, t0S: Double, frameDtS: Double): Double {
-        if (!(frameDtS > 0) || motionPx.isNaN()) return 0.0
-        val side = maxOf(box[2] - box[0], box[3] - box[1], 1.0)
-        return motionPx * (t0S / frameDtS) / side
-    }
-
-    /** -> "short_sat" | "short_blur" | "long" | "digital" */
-    fun cause(
-        box: DoubleArray, satFrac: Double, motionPx: Double, t0S: Double, frameDtS: Double,
-        signalDn: Double, readNoiseDn: Double, againAtMax: Boolean, kappa: Double = 5.0
-    ): String {
-        if (satFrac >= SAT_PLACE) return "short_sat"
-        if (blurRatio(box, motionPx, t0S, frameDtS) >= BLUR_RATIO) return "short_blur"
-        if (signalDn < kappa * readNoiseDn || againAtMax) return "long"
-        return "digital"
-    }
-
-    class Plan(
-        val s: Double, val k: Int, val chosen: List<String>, val skipReason: String,
-        val nWeak: Int, val nPlaces: Int?,
-        val causeCounts: Map<String, Int>?, val ranked: List<Pair<String, Int>>?,
-        /** The weak boxes that counted (flickered); empty unless k > 0. */
-        val places: List<D>
-    )
-
-    /** weak: this frame's weak responses; outHist: base outputs of the previous frames
-     *  (oldest first; only the last 10 are looked at); causeOf(box) -> that place's cause. */
-    fun planNext(weak: List<D>, outHist: List<List<D>>, causeOf: (D) -> String, theta: Double): Plan {
-        val s = weak.maxOfOrNull { it.conf } ?: -1.0
-        val k = if (s < theta) 0 else if (s < TWO_SHOT_S) 1 else 2
-        if (k == 0) return Plan(s, 0, emptyList(), "below_theta", weak.size, null, null, null, emptyList())
-        val recent = outHist.takeLast(FLICKER_WINDOW)
-        val places = weak.filter { d -> recent.any { h -> h.any { iou(d.box, it.box) >= PLACE_IOU } } }
-        if (places.isEmpty())
-            return Plan(s, k, emptyList(), "no_flicker_places", weak.size, 0, null, null, emptyList())
-        val cnt = LinkedHashMap<String, Int>()
-        for (p in places) { val x = causeOf(p); cnt[x] = (cnt[x] ?: 0) + 1 }
-        val ranked = cnt.keys.sortedWith(compareBy<String>({ -cnt[it]!! }, { ORDER.indexOf(it) }))
-        val chosen = ranked.take(k)
-        return Plan(s, k, chosen, "none", weak.size, places.size, cnt,
-            ranked.map { it to cnt[it]!! }, places)
-    }
-
-    /** Times a box in [hist] (the last 10 frames' outputs) overlapped [box] at IoU >= 0.3. */
-    fun flickerCount(box: DoubleArray, hist: List<List<D>>): Int =
-        hist.takeLast(FLICKER_WINDOW).count { h -> h.any { iou(box, it.box) >= PLACE_IOU } }
-
-    class Setting(val exposureS: Double, val again: Double, val dgain: Double)
-
-    /** digital reuses the base RAW (no new exposure). */
-    fun remedySetting(
-        remedy: String, t0S: Double, again: Double, delta: Int, againMax: Double,
-        dgainMax: Double = 16.0
-    ): Setting = when (remedy) {
-        "digital" -> Setting(t0S, again, minOf(Math.pow(2.0, delta.toDouble()), dgainMax))
-        "short_sat" -> Setting(t0S / 4, again, 1.0)
-        "short_blur" -> Setting(t0S / 2, minOf(again * 2, againMax), 1.0)
-        "long" -> Setting(t0S * Math.pow(2.0, delta.toDouble()), again, 1.0)
-        else -> error("unknown remedy $remedy")
-    }
 }

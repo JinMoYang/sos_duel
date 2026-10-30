@@ -65,7 +65,7 @@ python tools/eval/unsupported_boxes.py <세션>              # 아무도 못 본
 
 ```bash
 ./gradlew :app:compileDebugUnitTestKotlin
-tools/curve/run_jvm.sh ToleranceCurveSosCf <sos_cf_v1> curve_gyro.txt -Dsos.speed=gyro   # → assets/tolerance_curve_gyro.txt
+tools/curve/run_jvm.sh ToleranceCurveSosCf <sos_cf_v1> curve_gyro.txt -Dsos.speed=hybrid # → assets/tolerance_curve_gyro.txt
 tools/curve/run_jvm.sh NaeTrainSosCf <sos_cf_v1> <출력 폴더>                             # → nae_hist_scalar_3x3.bin
 ```
 

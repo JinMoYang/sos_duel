@@ -574,13 +574,6 @@ class MeasurementActivity : AppCompatActivity() {
      *   one read). Every frame, separate: first or tied first in both, the proposed method.
      */
 
-    /** The additional-exposure check (2026-10-29): capture and analysis on separate threads at
-     *  10 fps; after a frame whose key image had a weak trace the next frame spends 1 + 0, 1, 3 or 5
-     *  reads at the key's setting, merged into one image or each detected on its own
-     *  (MeasurementController.runAddl). Ran once (see Earlier checks); startable by lap_plan. */
-    private val VERIFY_A_PLAN = rounds(listOf("addl_0", "addl_1_merge", "addl_1_sep", "addl_3_merge",
-        "addl_3_sep", "addl_5_merge", "addl_5_sep"))
-
     /** When to spend the 3 additional exposures (2026-10-29), 12 runs, ~6 min per lighting: after a
      *  trace only, or every frame; merged or each detected on its own. */
     private val VERIFY_E_PLAN = rounds(listOf("addl_3_merge", "addl_3_sep", "addl_3_merge_every", "addl_3_sep_every"))

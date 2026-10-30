@@ -2,11 +2,14 @@
 # Runs one of the app's JVM tools (an object with a main() under app/src/test) on the PC, with the
 # app's own compiled code, so the phone and the PC compute features the same way.
 #
-#   tools/curve/run_jvm.sh ToleranceCurveSosCf <sos_cf_v1 dir> <out curve.txt> [-Dsos.speed=gyro]
+#   tools/curve/run_jvm.sh ToleranceCurveSosCf <sos_cf_v1 dir> <out curve.txt> -Dsos.speed=hybrid
+#   tools/curve/run_jvm.sh ToleranceCurveSosCf <other record> --predict <curve.txt> -Dsos.speed=hybrid -Dsos.trans=2.6
 #   tools/curve/run_jvm.sh NaeTrainSosCf <sos_cf_v1 dir> <out dir>
 #
 # ToleranceCurveSosCf builds the proposed method's tolerance curve (the app ships
-# app/src/main/assets/tolerance_curve_gyro.txt, built with -Dsos.speed=gyro); NaeTrainSosCf
+# app/src/main/assets/tolerance_curve_gyro.txt, built with -Dsos.speed=hybrid: gyro rotation plus
+# a translation term fitted on the record, 2.602 car lengths/s; the default lk and gyro, rotation
+# only, build other curves; --predict scores a curve on another record); NaeTrainSosCf
 # trains the Neural-AE baseline's weights (push nae_hist_scalar_3x3.bin to
 # /sdcard/Android/data/com.sos.integrate/files/). Both read the counterfactual record sos_cf_v1
 # (collect_cf, 2026-10-16), shared apart from the repository.

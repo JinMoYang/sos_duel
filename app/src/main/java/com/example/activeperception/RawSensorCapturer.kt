@@ -209,7 +209,6 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
      *  the HAL does not report it. */
     var maxAnalogIso: Int = 0; private set
     var streamFormat: Int = ImageFormat.RAW_SENSOR; private set
-    val streamFormatName: String get() = formatName(streamFormat)
     /** Manual focus in diopters, applied to EVERY request this capturer builds (AF off), so
      *  no method carries the autofocus's own hunting into a comparison. NaN or negative
      *  leaves focus to the template's AF. Clamped to the lens minimum focus distance; a
@@ -370,75 +369,6 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             "syncDeclared=$syncMaxLatency timestamp=$timestampSource orientation=$sensorOrientation")
     }
 
-    fun availableRawStreamConfigs(): List<RawStreamConfig> {
-        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?: return emptyList()
-        return intArrayOf(ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12)
-            .flatMap { format ->
-                (map.getOutputSizes(format) ?: emptyArray<Size>()).map { size ->
-                    val bits = when (format) {
-                        ImageFormat.RAW10 -> 10L
-                        ImageFormat.RAW12 -> 12L
-                        else -> 16L
-                    }
-                    RawStreamConfig(format, formatName(format), size.width, size.height,
-                        map.getOutputMinFrameDuration(format, size),
-                        map.getOutputStallDuration(format, size),
-                        size.width.toLong() * size.height * bits / 8L)
-                }
-            }.sortedWith(compareBy<RawStreamConfig> { it.format }
-                .thenByDescending { it.width.toLong() * it.height })
-    }
-
-    /** EXP5.3 only: reconfigure the existing camera device to another advertised RAW format. */
-    @Synchronized
-    fun reconfigureRawStream(format: Int, requestedWidth: Int, requestedHeight: Int) {
-        require(format == ImageFormat.RAW_SENSOR || format == ImageFormat.RAW10 ||
-            format == ImageFormat.RAW12)
-        val supported = availableRawStreamConfigs().any {
-            it.format == format && it.width == requestedWidth && it.height == requestedHeight
-        }
-        require(supported) { "Unsupported ${formatName(format)} ${requestedWidth}x$requestedHeight" }
-        stopContinuousCapture()
-        stopFastCapture()
-        val closed = CountDownLatch(1)
-        sessionClosedLatch = closed
-        runCatching { session?.close() }
-        closed.await(2, TimeUnit.SECONDS)
-        sessionClosedLatch = null
-        reader?.setOnImageAvailableListener(null, null)
-        reader?.let { drainReader(it) }
-        reader?.close()
-        session = null
-
-        width = requestedWidth; height = requestedHeight
-        captureWidth = width; captureHeight = height; streamFormat = format
-        streamMinFrameDurationNs = (chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?.getOutputMinFrameDuration(format, android.util.Size(width, height)) ?: 0L)
-            .takeIf { it > 0L } ?: BASE_FRAME_DURATION_NS
-        reader = ImageReader.newInstance(width, height, format, MAX_IMAGES)
-        val configured = CountDownLatch(1)
-        @Suppress("DEPRECATION")
-        device!!.createCaptureSession(listOf(reader!!.surface),
-            object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(value: CameraCaptureSession) {
-                    session = value; configured.countDown()
-                }
-                override fun onConfigureFailed(value: CameraCaptureSession) {
-                    configured.countDown()
-                }
-                override fun onClosed(value: CameraCaptureSession) {
-                    sessionClosedLatch?.countDown()
-                }
-            }, cameraHandler)
-        check(configured.await(4, TimeUnit.SECONDS) && session != null) {
-            "RAW session reconfigure failed for ${formatName(format)}"
-        }
-        currentState = null
-        drainReader(reader!!)
-        Log.i(TAG, "EXP5.3 stream=${formatName(format)} ${width}x$height")
-    }
-
     private fun formatName(format: Int): String = when (format) {
         ImageFormat.RAW_SENSOR -> "RAW_SENSOR"
         ImageFormat.RAW10 -> "RAW10"
@@ -449,46 +379,6 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     override fun capture(exposureUs: Int, iso: Int, nBurst: Int): List<RawFrame> {
         return captureInternal(exposureUs, iso, nBurst, metadataFirst = false)
     }
-
-    /** Experiment path: submit at most the measured 12-frame actuation window but stop as
-     * soon as metadata exposes [nBurst] frames at the requested state. This keeps the safety
-     * ceiling while removing the fixed wait from the accepted image path. */
-    fun captureMetadataFirst(exposureUs: Int, iso: Int, nBurst: Int): List<RawFrame> {
-        return captureInternal(exposureUs, iso, nBurst, metadataFirst = true)
-    }
-
-    /** EXP5.1 B: submit exactly the frames needed, with no fixed settling guard. A mismatch
-     * is reported to the caller instead of silently accepting stale sensor state. */
-    fun captureNoGuard(exposureUs: Int, iso: Int, nBurst: Int): List<RawFrame> {
-        val expected = SensorState(exposureUs.toLong(), iso)
-        val command = scheduler.enqueue(expected)
-        val request = manualRequest(expected, command.id)
-        return runCapture(request, max(1, nBurst), 0, expected, command.id)
-    }
-
-    /** EXP5.1.1 optimized B: exact-N request plus native NEON RAW decode. */
-    fun captureNoGuardNative(exposureUs: Int, iso: Int, nBurst: Int): List<RawFrame> {
-        val expected = SensorState(exposureUs.toLong(), iso)
-        val command = scheduler.enqueue(expected)
-        val request = manualRequest(expected, command.id)
-        return runCapture(request, max(1, nBurst), 0, expected, command.id,
-            nativeDecode = true)
-    }
-
-    /** EXP5.1.1 E: same exact-N/native path with the low-latency preview request template. */
-    fun captureNoGuardNativePreview(exposureUs: Int, iso: Int, nBurst: Int): List<RawFrame> {
-        val expected = SensorState(exposureUs.toLong(), iso)
-        val command = scheduler.enqueue(expected)
-        val request = manualRequest(expected, command.id, CameraDevice.TEMPLATE_PREVIEW)
-        return runCapture(request, max(1, nBurst), 0, expected, command.id,
-            nativeDecode = true)
-    }
-
-    /** Best safe EXP5.1.1 combination: preview template for latency-sensitive single RAW,
-     * still template for four-frame bursts where preview increased tail latency. */
-    fun captureExp511Best(exposureUs: Int, iso: Int, nBurst: Int): List<RawFrame> =
-        if (nBurst <= 1) captureNoGuardNativePreview(exposureUs, iso, 1)
-        else captureNoGuardNative(exposureUs, iso, nBurst)
 
     /**
      * EXP5.6: install ImageReader routing once, keep Camera result and RAW image delivery on
@@ -698,105 +588,6 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             currentState = SensorState(it.meta.appliedExpUs, it.meta.appliedIso)
         }
         return accepted.map { it.frame }
-    }
-
-    /**
-     * Submit a finite run of same-exposure RAW requests without waiting for all of them.
-     * [takeFastSequenceFrame] releases each decoded frame to formation immediately, allowing
-     * later sensor frames to arrive while the current frame is on CPU/GPU.
-     */
-    fun beginFastSequence(exposureUs: Int, iso: Int, count: Int): FastSequenceHandle {
-        check(fastCaptureStarted) { "startFastCapture() must be called first" }
-        require(count in 1..MAX_IMAGES)
-        val expected = SensorState(exposureUs.toLong(), iso)
-        val command = scheduler.enqueue(expected)
-        val target = FastTarget(expected, command.id, count, System.nanoTime())
-        val startedSensorNs = SystemClock.elapsedRealtimeNanos()
-        check(fastTargets.putIfAbsent(command.id, target) == null)
-        val request = manualRequest(expected, command.id, CameraDevice.TEMPLATE_PREVIEW)
-        val callback = object : CameraCaptureSession.CaptureCallback() {
-            override fun onCaptureCompleted(
-                session: CameraCaptureSession,
-                request: CaptureRequest,
-                result: TotalCaptureResult
-            ) {
-                val nowNs = System.nanoTime()
-                synchronized(target.lock) {
-                    if (target.firstResultNs == 0L) target.firstResultNs = nowNs
-                }
-                val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: -1L
-                scheduler.markRequestFrame(command.id, result.frameNumber)
-                val actual = result.sensorState()
-                scheduler.observe(result.frameNumber, ts, actual)?.let {
-                    lastApplyDelayFrames = it.applyDelayFrames; currentState = actual
-                }
-                fastResults[ts] = result
-                synchronized(fastResultLock) { fastResultLock.notifyAll() }
-                // Same settling-slot replacement as captureFast.
-                if (!scheduler.matches(target.expected!!, actual)) {
-                    val resubmit = synchronized(target.lock) {
-                        if (target.resubmits < SETTING_GUARD_FRAMES) { target.resubmits++; true }
-                        else false
-                    }
-                    if (resubmit) runCatching { session.capture(request, this, cameraHandler) }
-                }
-            }
-
-            override fun onCaptureFailed(
-                session: CameraCaptureSession,
-                request: CaptureRequest,
-                failure: CaptureFailure
-            ) {
-                synchronized(target.lock) {
-                    target.failures++
-                    target.error = IllegalStateException(
-                        "Fast sequence failed frame=${failure.frameNumber} reason=${failure.reason}")
-                    target.lock.notifyAll()
-                }
-            }
-        }
-        (session ?: error("camera session is closed"))
-            .captureBurst(List(count) { request }, callback, cameraHandler)
-        return FastSequenceHandle(command.id, exposureUs, iso, count, target.startedNs,
-            startedSensorNs)
-    }
-
-    fun takeFastSequenceFrame(
-        handle: FastSequenceHandle,
-        timeoutMs: Long = 6_000L
-    ): RawFrame {
-        val target = fastTargets[handle.commandId]
-            ?: error("Fast sequence ${handle.commandId} is no longer active")
-        val decoded = target.ready.poll(timeoutMs, TimeUnit.MILLISECONDS)
-            ?: run {
-                target.error?.let { throw it }
-                error("Timed out waiting for fast sequence ${handle.commandId}")
-            }
-        val nowNs = System.nanoTime()
-        synchronized(target.lock) {
-            lastCaptureProfile = CaptureProfile(
-                strategy = "persistent_finite_streaming",
-                requestedFrames = handle.count,
-                firstResultMs = if (target.firstResultNs == 0L) Double.NaN
-                    else (target.firstResultNs - target.startedNs) / 1e6,
-                firstImageMs = if (target.firstImageNs == 0L) Double.NaN
-                    else (target.firstImageNs - target.startedNs) / 1e6,
-                firstMatchedMs = if (target.firstMatchedNs == 0L) Double.NaN
-                    else (target.firstMatchedNs - target.startedNs) / 1e6,
-                decodeWallMs = if (target.firstDecodeStartNs == 0L || target.lastDecodeEndNs == 0L)
-                    Double.NaN else (target.lastDecodeEndNs - target.firstDecodeStartNs) / 1e6,
-                decodeCpuSumMs = target.decodeCpuNs / 1e6,
-                cleanupMs = 0.0,
-                totalMs = (nowNs - target.startedNs) / 1e6)
-        }
-        lastMeta = listOf(decoded.meta); lastSettlingMeta = lastMeta
-        currentState = SensorState(decoded.meta.appliedExpUs, decoded.meta.appliedIso)
-        if (target.ready.isEmpty() && synchronized(target.lock) {
-                target.decoded.size >= target.wanted
-            }) {
-            fastTargets.remove(handle.commandId)
-        }
-        return decoded.frame
     }
 
     /** One burst whose shots each carry their own exposure and ISO; see
@@ -1092,7 +883,6 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     }
 
     @Volatile private var parallel: ParallelStream? = null
-    val parallelActive: Boolean get() = parallel != null
 
     /** Parallel mode (see [ParallelStream]): from now on [captureFast] and [captureFastAe] hand
      *  out the newest fresh reads of a continuous stream, one call every [periodMs]. */
@@ -1287,13 +1077,6 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         return accepted.map { it.frame }
     }
 
-    /** Snapshot belonging to the calling capture worker, immune to concurrent streaming frames. */
-    fun consumeCaptureSnapshot(): CaptureSnapshot? {
-        val value = captureSnapshot.get()
-        captureSnapshot.remove()
-        return value
-    }
-
     @Synchronized
     fun stopContinuousCapture() {
         if (!continuousStarted) return
@@ -1323,47 +1106,6 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         decodePool = Executors.newFixedThreadPool(threads)
         decodeThreadCount = threads
         Log.i(TAG, "EXP5.4 decodeThreads=$threads")
-    }
-
-    /** EXP5.1 C: do not queue 12 surplus requests. Submit one frame until metadata matches,
-     * then request only the remaining burst frames. This is intentionally camera-only and
-     * conservative; the production path remains unchanged until the experiment validates it. */
-    @Synchronized
-    fun captureAdaptive(exposureUs: Int, iso: Int, nBurst: Int): List<RawFrame> {
-        val expected = SensorState(exposureUs.toLong(), iso)
-        val command = scheduler.enqueue(expected)
-        val request = manualRequest(expected, command.id)
-        val wanted = max(1, nBurst)
-        val acceptedFrames = ArrayList<RawFrame>(wanted)
-        val acceptedMeta = ArrayList<RawMeta>(wanted)
-        var submissions = 0
-        val maxSubmissions = SETTING_GUARD_FRAMES + wanted
-        while (acceptedFrames.size < wanted && submissions < maxSubmissions) {
-            val remaining = wanted - acceptedFrames.size
-            // Before the first matching result, advance one request at a time. Afterwards,
-            // collect only the exact number of additional burst frames needed.
-            val count = if (acceptedFrames.isEmpty()) 1 else remaining
-            val frames = runCapture(request, count, 0, null, command.id)
-            val metas = lastMeta
-            submissions += count
-            for (i in frames.indices) {
-                val meta = metas.getOrNull(i) ?: continue
-                if (scheduler.matches(expected,
-                        SensorState(meta.appliedExpUs, meta.appliedIso))) {
-                    acceptedFrames.add(frames[i])
-                    acceptedMeta.add(meta.copy(
-                        requestedExpUs = exposureUs.toLong(), requestedIso = iso))
-                    if (acceptedFrames.size == wanted) break
-                }
-            }
-        }
-        lastSettlingMeta = acceptedMeta.toList()
-        lastMeta = acceptedMeta.toList()
-        check(acceptedFrames.size == wanted) {
-            "Adaptive capture only obtained ${acceptedFrames.size}/$wanted matching frames; " +
-                "requested=${exposureUs}us ISO$iso, submissions=$submissions"
-        }
-        return acceptedFrames
     }
 
     private fun captureInternal(

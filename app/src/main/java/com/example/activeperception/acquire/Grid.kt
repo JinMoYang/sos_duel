@@ -45,42 +45,6 @@ class Grid(
  * actually exercises distinct analog amplification.
  */
 
-/** 4×4, ISO 100-800 × 4-32ms. maxBurst = 8. */
-val REAL_4x4 = Grid(
-    gains = intArrayOf(100, 200, 400, 800),
-    exposuresUs = intArrayOf(4000, 8000, 16000, 32000)
-)
-
-/** 3×3 for dim indoor: drops REAL_4x4's darkest cell. maxBurst = 4. */
-val REAL_3x3 = Grid(
-    gains = intArrayOf(200, 400, 800),
-    exposuresUs = intArrayOf(8000, 16000, 32000)
-)
-
-/** 3×3, one stop over [REAL_3x3]. Costs ~6 dB noise floor at base. */
-val REAL_3x3_BRIGHT = Grid(
-    gains = intArrayOf(400, 800, 1600),
-    exposuresUs = intArrayOf(8000, 16000, 32000)
-)
-
-/** 3×3 for night: +3 stops over [REAL_3x3] at the brightest cell. 64ms blurs hand-held. */
-val REAL_3x3_NIGHT = Grid(
-    gains = intArrayOf(400, 800, 1600),
-    exposuresUs = intArrayOf(16000, 32000, 64000)
-)
-
-/** 3×3 for daylight, entirely inside the analog-gain zone. */
-val REAL_3x3_DAYLIGHT = Grid(
-    gains = intArrayOf(25, 100, 400),
-    exposuresUs = intArrayOf(4000, 8000, 16000)
-)
-
-/** 4×3 spanning 64× ISO, to cover the analog zone and the plateau in one pass. */
-val REAL_4x3_WIDE = Grid(
-    gains = intArrayOf(25, 100, 400, 1600),
-    exposuresUs = intArrayOf(4000, 8000, 16000)
-)
-
 /**
  * 3×3 for indoor dim scenes — the default. The gain axis stays inside the analog zone so
  * Verify's per-cell physical captures exercise real amplification; [digitalBoost] = 2.0

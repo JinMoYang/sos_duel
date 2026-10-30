@@ -35,16 +35,6 @@ data class FormationProfile(
     val totalMs: Double
 )
 
-data class Exp21PreparedRgb(
-    val cells: IntArray,
-    val rgbByRow: Map<Int, Array<IntArray>>,
-    val width: Int,
-    val height: Int,
-    val orientation: Int,
-    val maxDn: Double,
-    val prepareMs: Double
-)
-
 data class Exp21PathProfile(
     val path: String,
     val k: Int,
@@ -54,7 +44,6 @@ data class Exp21PathProfile(
     val totalMs: Double
 )
 
-data class Exp21BitmapResult(val images: List<Bitmap>, val profile: Exp21PathProfile)
 data class Exp21TensorResult(val batch: DirectTensorBatch, val profile: Exp21PathProfile)
 
 /**
@@ -206,182 +195,6 @@ class ParallelRawCandidateSource(
             totalMs = (end - totalStart) / 1e6
         )
         return bitmaps
-    }
-
-    /** EXP2.1 setup shared by both measured arms. RAW summation and demosaic are deliberately
-     *  done once so the benchmark starts at the named boundary: RGB -> YOLO tensor. */
-    fun prepareExp21Rgb(frames: List<RawFrame>, cells: IntArray): Exp21PreparedRgb {
-        require(frames.isNotEmpty())
-        val started = System.nanoTime()
-        val avail = frames.size
-        val w = frames[0].width; val h = frames[0].height
-        val cfa = frames[0].cfaPattern
-        val rows = cells.map { grid.indices(it).second }.toSortedSet()
-        val futures = rows.map { sj ->
-            pool.submit<Pair<Int, Array<IntArray>>> {
-                val n = minOf(grid.burstN(sj), avail)
-                val summed = IntArray(frames[0].bayer.size)
-                val start = if (burstWindow == BurstWindow.FIRST_N) 0 else (avail - n) / 2
-                for (k in start until start + n) {
-                    val plane = frames[k].bayer
-                    for (p in summed.indices) summed[p] += plane[p]
-                }
-                sj to Formation.demosaic2x2(summed, w, h, cfa)
-            }
-        }
-        val rgb = futures.associate { it.get() }
-        return Exp21PreparedRgb(cells.clone(), rgb, w / 2, h / 2,
-            frames[avail / 2].sensorOrientation, frames[0].maxDn,
-            (System.nanoTime() - started) / 1e6)
-    }
-
-    /** Current production representation path, but starting from the shared RGB planes. */
-    fun formExp21Bitmaps(prepared: Exp21PreparedRgb): Exp21BitmapResult {
-        val started = System.nanoTime()
-        val lut = lutFor(prepared.maxDn); val lutMax = lut.lastIndex
-        val transformStart = System.nanoTime()
-        val futures = prepared.cells.map { cell ->
-            pool.submit<PackResult> {
-                val cpuStart = System.nanoTime()
-                val (gi, sj) = grid.indices(cell)
-                val rgb = requireNotNull(prepared.rgbByRow[sj])
-                val argb = packOriginalOrientedArgbWithLut(
-                    rgb[0], rgb[1], rgb[2], prepared.width, prepared.height,
-                    prepared.orientation, grid.gainRatio(gi), lut, lutMax)
-                PackResult(argb, (System.nanoTime() - cpuStart) / 1e6)
-            }
-        }
-        val packed = futures.map { it.get() }
-        val transformEnd = System.nanoTime()
-        val bitmapStart = System.nanoTime()
-        val images = packed.map {
-            Bitmap.createBitmap(it.argb.pixels, it.argb.width, it.argb.height, Bitmap.Config.ARGB_8888)
-        }
-        val end = System.nanoTime()
-        return Exp21BitmapResult(images, Exp21PathProfile(
-            "C_bitmap", prepared.cells.size,
-            (transformEnd - transformStart) / 1e6, packed.sumOf { it.cpuMs },
-            (end - bitmapStart) / 1e6, (end - started) / 1e6))
-    }
-
-    /** EXP2.1 direct path. It preserves gain, sRGB LUT, orientation, filtered letterbox,
-     *  RGB channel order and [0,1] normalization while skipping ARGB and Bitmap objects. */
-    fun formExp21Tensor(prepared: Exp21PreparedRgb, imgsz: Int = 640): Exp21TensorResult {
-        val started = System.nanoTime()
-        val count = prepared.cells.size
-        val floatsPerFrame = imgsz * imgsz * 3
-        val input = exp21TensorBuffers.computeIfAbsent(count) {
-            ByteBuffer.allocateDirect(count * floatsPerFrame * 4).order(ByteOrder.nativeOrder())
-        }
-        val lut = lutFor(prepared.maxDn); val lutMax = lut.lastIndex
-        val degrees = (prepared.orientation % 360 + 360) % 360
-        require(degrees == 0 || degrees == 90 || degrees == 180 || degrees == 270)
-        val orientedW = if (degrees == 90 || degrees == 270) prepared.height else prepared.width
-        val orientedH = if (degrees == 90 || degrees == 270) prepared.width else prepared.height
-        val scale = minOf(imgsz.toFloat() / orientedW, imgsz.toFloat() / orientedH)
-        val nw = Math.round(orientedW * scale); val nh = Math.round(orientedH * scale)
-        val padX = (imgsz - nw) / 2f; val padY = (imgsz - nh) / 2f
-        val mapping = TensorLetterbox(scale.toDouble(), padX.toDouble(), padY.toDouble())
-        val futures = prepared.cells.mapIndexed { lane, cell ->
-            pool.submit<Double> {
-                val cpuStart = System.nanoTime()
-                val (gi, sj) = grid.indices(cell)
-                val rgb = requireNotNull(prepared.rgbByRow[sj])
-                val gain = grid.gainRatio(gi)
-                val baseFloat = lane * floatsPerFrame
-                val pad = 114f / 255f
-                for (i in 0 until floatsPerFrame) input.putFloat((baseFloat + i) * 4, pad)
-
-                fun sourceIndex(ox: Int, oy: Int): Int {
-                    val sx: Int; val sy: Int
-                    when (degrees) {
-                        0 -> { sx = ox; sy = oy }
-                        90 -> { sx = oy; sy = prepared.height - 1 - ox }
-                        180 -> { sx = prepared.width - 1 - ox; sy = prepared.height - 1 - oy }
-                        else -> { sx = prepared.width - 1 - oy; sy = ox }
-                    }
-                    return sy * prepared.width + sx
-                }
-
-                val xPad = padX.toInt(); val yPad = padY.toInt()
-                for (dy in 0 until nh) {
-                    val sy = ((dy + 0.5) * orientedH / nh - 0.5)
-                        .coerceIn(0.0, (orientedH - 1).toDouble())
-                    val y0 = floor(sy).toInt(); val y1 = minOf(y0 + 1, orientedH - 1)
-                    val fy = sy - y0
-                    for (dx in 0 until nw) {
-                        val sx = ((dx + 0.5) * orientedW / nw - 0.5)
-                            .coerceIn(0.0, (orientedW - 1).toDouble())
-                        val x0 = floor(sx).toInt(); val x1 = minOf(x0 + 1, orientedW - 1)
-                        val fx = sx - x0
-                        val p00 = sourceIndex(x0, y0); val p10 = sourceIndex(x1, y0)
-                        val p01 = sourceIndex(x0, y1); val p11 = sourceIndex(x1, y1)
-                        val outPixel = ((dy + yPad) * imgsz + dx + xPad) * 3
-                        for (channel in 0..2) {
-                            val plane = rgb[channel]
-                            fun u8(p: Int): Int = lut[(plane[p] * gain).toInt().coerceIn(0, lutMax)]
-                            val top = u8(p00) * (1.0 - fx) + u8(p10) * fx
-                            val bottom = u8(p01) * (1.0 - fx) + u8(p11) * fx
-                            val value = ((top * (1.0 - fy) + bottom * fy) / 255.0).toFloat()
-                            input.putFloat((baseFloat + outPixel + channel) * 4, value)
-                        }
-                    }
-                }
-                (System.nanoTime() - cpuStart) / 1e6
-            }
-        }
-        val cpu = futures.map { it.get() }
-        input.rewind()
-        val end = System.nanoTime()
-        return Exp21TensorResult(DirectTensorBatch(input, List(count) { mapping }),
-            Exp21PathProfile("D_direct_tensor", count, (end - started) / 1e6,
-                cpu.sum(), 0.0, (end - started) / 1e6))
-    }
-
-    /** Native C++/ARM NEON variant of the same direct path. Four workers are kept busy even
-     *  for K=1 by splitting the output into horizontal stripes. */
-    fun formExp21NativeTensor(prepared: Exp21PreparedRgb, imgsz: Int = 640): Exp21TensorResult {
-        val started = System.nanoTime()
-        val count = prepared.cells.size
-        val floatsPerFrame = imgsz * imgsz * 3
-        val input = exp21TensorBuffers.computeIfAbsent(count) {
-            ByteBuffer.allocateDirect(count * floatsPerFrame * 4).order(ByteOrder.nativeOrder())
-        }
-        val lut = lutFor(prepared.maxDn)
-        val degrees = (prepared.orientation % 360 + 360) % 360
-        val orientedW = if (degrees == 90 || degrees == 270) prepared.height else prepared.width
-        val orientedH = if (degrees == 90 || degrees == 270) prepared.width else prepared.height
-        val scale = minOf(imgsz.toFloat() / orientedW, imgsz.toFloat() / orientedH)
-        val nw = Math.round(orientedW * scale); val nh = Math.round(orientedH * scale)
-        val padX = (imgsz - nw) / 2f; val padY = (imgsz - nh) / 2f
-        NativeTensorPreprocessor.clearTensor(
-            input, 0, count * floatsPerFrame, 114f / 255f)
-
-        val stripes = when (count) { 1 -> 4; 3 -> 2; else -> 1 }
-        val futures = ArrayList<java.util.concurrent.Future<Double>>(count * stripes)
-        for ((lane, cell) in prepared.cells.withIndex()) {
-            val (gi, sj) = grid.indices(cell)
-            val rgb = requireNotNull(prepared.rgbByRow[sj])
-            for (stripe in 0 until stripes) {
-                val y0 = stripe * nh / stripes
-                val y1 = (stripe + 1) * nh / stripes
-                futures += pool.submit<Double> {
-                    val cpuStart = System.nanoTime()
-                    check(NativeTensorPreprocessor.fillOriginalSrgbStripe(
-                        rgb[0], rgb[1], rgb[2], prepared.width, prepared.height,
-                        prepared.orientation, grid.gainRatio(gi), lut, input,
-                        lane * floatsPerFrame, imgsz, y0, y1))
-                    (System.nanoTime() - cpuStart) / 1e6
-                }
-            }
-        }
-        val cpu = futures.map { it.get() }
-        input.rewind()
-        val end = System.nanoTime()
-        return Exp21TensorResult(DirectTensorBatch(input,
-            List(count) { TensorLetterbox(scale.toDouble(), padX.toDouble(), padY.toDouble()) }),
-            Exp21PathProfile("E_native_neon", count, (end - started) / 1e6,
-                cpu.sum(), 0.0, (end - started) / 1e6))
     }
 
     /**
@@ -543,60 +356,6 @@ class ParallelRawCandidateSource(
         val end = System.nanoTime()
         return Exp21TensorResult(DirectTensorBatch(input, List(count) { mapping }),
             Exp21PathProfile("V2_explicit_gains_native", count,
-                (end - started) / 1e6, cpuMs, 0.0, (end - started) / 1e6))
-    }
-
-    /**
-     * One batch whose lanes come from DIFFERENT frames: lane i is frame [laneFrame][i] at
-     * digital ratio [laneRatio][i] (burst 1). proposed_v3cause uses it to detect the base,
-     * its digitally brightened copies and the extra exposures in a single inference. Same
-     * fused native fill as every other path.
-     */
-    fun formFramesTensor(
-        frames: List<RawFrame>, laneFrame: IntArray, laneRatio: DoubleArray, imgsz: Int = 640
-    ): Exp21TensorResult {
-        require(frames.isNotEmpty() && laneFrame.size == laneRatio.size && laneRatio.isNotEmpty())
-        val started = System.nanoTime()
-        val count = laneRatio.size
-        val floatsPerFrame = imgsz * imgsz * 3
-        val input = exp21TensorBuffers.computeIfAbsent(count) {
-            ByteBuffer.allocateDirect(count * floatsPerFrame * 4).order(ByteOrder.nativeOrder())
-        }
-        val f0 = frames[0]
-        val lut = lutFor(f0.maxDn)
-        NativeTensorPreprocessor.clearTensor(input, 0, count * floatsPerFrame, 114f / 255f)
-        val degrees = (f0.sensorOrientation % 360 + 360) % 360
-        val rgbW = f0.width / 2; val rgbH = f0.height / 2
-        val orientedH = if (degrees == 90 || degrees == 270) rgbW else rgbH
-        val orientedW = if (degrees == 90 || degrees == 270) rgbH else rgbW
-        val scale = minOf(imgsz.toFloat() / orientedW, imgsz.toFloat() / orientedH)
-        val nh = Math.round(orientedH * scale)
-        val byFrame = (0 until count).groupBy { laneFrame[it] }
-        val stripes = when (byFrame.size) { 1 -> 4; 2 -> 2; else -> 1 }
-        val futures = ArrayList<java.util.concurrent.Future<Double>>()
-        for ((fi, lanes) in byFrame) {
-            val frame = frames[fi]
-            val gains = DoubleArray(lanes.size) { laneRatio[lanes[it]] }
-            val bases = IntArray(lanes.size) { lanes[it] * floatsPerFrame }
-            repeat(stripes) { stripe ->
-                val y0 = stripe * nh / stripes; val y1 = (stripe + 1) * nh / stripes
-                futures += pool.submit<Double> {
-                    val cpuStart = System.nanoTime()
-                    check(NativeTensorPreprocessor.fillFusedBayerSrgbRowStripe(
-                        arrayOf(frame.bayer), 1, frame.width, frame.height, frame.cfaPattern,
-                        frame.sensorOrientation, gains, bases, lut, input, imgsz, y0, y1, resampleMode))
-                    (System.nanoTime() - cpuStart) / 1e6
-                }
-            }
-        }
-        val cpuMs = futures.sumOf { it.get() }
-        input.rewind()
-        val nw = Math.round(orientedW * scale)
-        val mapping = TensorLetterbox(scale.toDouble(),
-            ((imgsz - nw) / 2f).toDouble(), ((imgsz - nh) / 2f).toDouble())
-        val end = System.nanoTime()
-        return Exp21TensorResult(DirectTensorBatch(input, List(count) { mapping }),
-            Exp21PathProfile("V3_frames_native", count,
                 (end - started) / 1e6, cpuMs, 0.0, (end - started) / 1e6))
     }
 

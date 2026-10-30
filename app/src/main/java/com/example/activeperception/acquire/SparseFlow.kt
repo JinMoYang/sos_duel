@@ -193,13 +193,4 @@ object SparseFlow {
         return if (!ok || gx.isNaN() || gy.isNaN()) null else doubleArrayOf(gx, gy)
     }
 
-    /** Median displacement magnitude (level-0 px) of the box's tracked points; NaN if none. */
-    fun boxMotion(prev: List<Img>, cur: List<Img>, x0: Double, y0: Double, x1: Double, y1: Double): Double {
-        val pts = corners(cur[0], x0, y0, x1, y1)
-        if (pts.isEmpty()) return Double.NaN
-        val mags = track(prev, cur, pts).filterNotNull().map { hypot(it[0], it[1]) }.sorted()
-        if (mags.isEmpty()) return Double.NaN
-        val m = mags.size
-        return if (m % 2 == 1) mags[m / 2] else 0.5 * (mags[m / 2 - 1] + mags[m / 2])
-    }
 }

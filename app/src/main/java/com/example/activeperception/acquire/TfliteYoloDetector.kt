@@ -25,8 +25,6 @@ data class DirectTensorBatch(
 
 data class TensorLetterbox(val scale: Double, val padX: Double, val padY: Double)
 
-data class TensorSnapshot(val values: FloatArray, val transforms: List<TensorLetterbox>)
-
 /**
  * `Detector<Bitmap>` via TensorFlow Lite with the Adreno GPU (OpenCL) delegate, falling
  * back to CPU/XNNPACK if the delegate can't be built.
@@ -106,9 +104,6 @@ class TfliteYoloDetector(
     private val optimizedDecoder = OptimizedYoloDecode(
         numClasses, numAnchors, confThresh, allowed, iouThresh, maxDet, preNmsTopK = 1000,
         classIdMap = classIdMap)
-    private val coco5Decoder = if (numClasses == 80) OptimizedYoloDecode(
-        numClasses, numAnchors, confThresh, allowed, iouThresh, maxDet, preNmsTopK = 1000,
-        classIndices = COCO5_CLASS_IDS) else null
     /** The same decode with no class filter, for collection runs that keep every COCO
      *  class whatever [allowed] set this instance was built with. */
     private val allClassDecoder by lazy {
@@ -309,37 +304,9 @@ class TfliteYoloDetector(
         return out
     }
 
-    /** EXP2.1-only entry point: inference over an RGB float tensor that was letterboxed
-     *  directly from the demosaiced RGB planes. Production [detectBatch] is unchanged. */
-    fun detectTensorBatch(batch: DirectTensorBatch): List<List<Detection>> {
-        val count = batch.transforms.size
-        if (count == 0) return emptyList()
-        val slot = slots.firstOrNull { it.batch == count }
-            ?: error("EXP2.1 requires an exact B=$count interpreter")
-        val expected = slot.batch * imgsz * imgsz * 3 * 4
-        require(batch.input.capacity() >= expected) {
-            "tensor buffer ${batch.input.capacity()} < expected $expected"
-        }
-        batch.input.rewind()
-        val tRun = System.nanoTime()
-        slot.interp.run(batch.input, slot.output)
-        val tDec = System.nanoTime()
-        val out = decodeSlot(slot, count, batch.transforms)
-        val tEnd = System.nanoTime()
-        lastPreprocessMs = 0.0
-        lastRunMs = (tDec - tRun) / 1e6
-        lastDecodeMs = (tEnd - tDec) / 1e6
-        lastSlotBatch = slot.batch
-        return out
-    }
-
     /** EXP2.2 treatment path. GPU execution is unchanged; only output decode/NMS differs. */
     fun detectTensorBatchOptimized(batch: DirectTensorBatch): List<List<Detection>> =
         detectTensorBatchWithDecoder(batch, optimizedDecoder, "EXP2.2")
-
-    /** EXP2.3 arm 1: retain the 80-class model output but scan only five COCO channels. */
-    fun detectTensorBatchOptimizedCoco5(batch: DirectTensorBatch): List<List<Detection>> =
-        detectTensorBatchWithDecoder(batch, requireNotNull(coco5Decoder), "EXP2.3")
 
     /** Same GPU path as [detectTensorBatchOptimized], but every class survives decode. */
     fun detectTensorBatchAllClasses(batch: DirectTensorBatch): List<List<Detection>> =
@@ -410,49 +377,6 @@ class TfliteYoloDetector(
         lastPreNmsCandidates = decoded.sumOf { it.preNmsCandidates }
         lastTopKCandidates = decoded.sumOf { it.topKCandidates }
         return decoded.map { it.detections }
-    }
-
-    /** One fixed-batch five-output detector at a time limits peak GPU memory in EXP2.3. */
-    fun createCoco5HeadDetector(asset: String, batch: Int): TfliteYoloDetector =
-        TfliteYoloDetector(
-            appContext, listOf(asset to batch), imgsz, confThresh, iouThresh, maxDet,
-            allowed, numClasses = 5, classIdMap = COCO5_CLASS_IDS,
-            accelerator = accelerator, allowFallback = false, gpuBackend = gpuBackend)
-
-    /** One-off equivalence probe used outside timed repetitions. It exposes the exact float
-     *  values produced by the current Bitmap/Canvas preprocessing path. */
-    fun snapshotBitmapTensor(images: List<Bitmap>): TensorSnapshot {
-        require(images.isNotEmpty())
-        val slot = slots.firstOrNull { it.batch == images.size }
-            ?: error("EXP2.1 requires an exact B=${images.size} interpreter")
-        val frameBytes = imgsz * imgsz * 3 * 4
-        val futures = images.mapIndexed { i, bmp ->
-            preprocPool.submit<TensorLetterbox> {
-                preprocessAt(slot.input, bmp, i * frameBytes, slot.nchwInput)
-            }
-        }
-        val mappings = futures.map { it.get() }
-        val values = FloatArray(images.size * imgsz * imgsz * 3)
-        for (i in values.indices) values[i] = slot.input.getFloat(i * 4)
-        return TensorSnapshot(values, mappings)
-    }
-
-    private fun decodeSlot(
-        slot: BatchSlot, count: Int, transforms: List<TensorLetterbox>
-    ): List<List<Detection>> {
-        val out = ArrayList<List<Detection>>(count)
-        for (i in 0 until count) {
-            val pp = transforms[i]
-            val flat = FloatArray((4 + numClasses) * slot.anchors)
-            for (c in 0 until 4 + numClasses) {
-                System.arraycopy(slot.output[i][c], 0, flat, c * slot.anchors, slot.anchors)
-            }
-            val dets = YoloDecode.decode(
-                flat, numClasses, slot.anchors, confThresh, allowed, iouThresh, maxDet)
-            val decodeMap = outputTransform(pp)
-            out.add(YoloDecode.unletterbox(dets, decodeMap.scale, decodeMap.padX, decodeMap.padY))
-        }
-        return out
     }
 
     /** Aspect-preserving letterbox to imgsz², written as RGB HWC float [0,1] into [dst]

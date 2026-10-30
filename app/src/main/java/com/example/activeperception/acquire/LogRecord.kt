@@ -35,13 +35,3 @@ object Csv {
         return out
     }
 }
-
-/** Column order per record type, as defined in MEASUREMENT_SPEC.md. */
-object LogSchema {
-    val L0_LINEARITY = listOf("iso", "channel", "exposure_us", "mean_raw", "black", "white", "saturated")
-    val L1_VERIFY = listOf("ts", "scene", "pass", "cell", "gain", "iso_applied", "exp_applied", "black", "white", "raw_path")
-    val L2_SWEEP = L1_VERIFY + listOf("frame", "lap", "regime", "yaw_rate", "lux", "accel", "n_det", "sum_conf")
-    val L3_LIVE = listOf("ts", "frame", "regime", "lux", "yaw_rate", "chosen_cell", "k", "batch_mode",
-                         "formation_ms", "infer_ms", "total_ms", "iso_req", "iso_applied", "exp_req", "exp_applied")
-    val L4_LATENCY = listOf("k", "imgsz", "quant", "batch_mode", "formation_ms", "infer_ms_p50", "infer_ms_p95")
-}

@@ -338,24 +338,6 @@ class SensorDataManager(
         }
     }
 
-    fun getLapAverages(): Triple<Double, Double, Float> {
-        synchronized(dataLock) {
-            val avgAccel = if (lapAccelCount > 0) lapAccelSum / lapAccelCount else currentAccel
-            val avgGyro = if (lapGyroCount > 0) lapGyroSum / lapGyroCount else currentGyro
-            val avgLux = if (lapLuxCount > 0) lapLuxSum / lapLuxCount else currentLux
-            return Triple(avgAccel, avgGyro, avgLux)
-        }
-    }
-
-    fun getRecentAverages(): Triple<Double, Double, Float> {
-        synchronized(dataLock) {
-            val avgAccel = if (recentAccel.isNotEmpty()) recentAccel.average() else currentAccel
-            val avgGyro = if (recentGyro.isNotEmpty()) recentGyro.average() else currentGyro
-            val avgLux = if (recentLux.isNotEmpty()) recentLux.average().toFloat() else currentLux
-            return Triple(avgAccel, avgGyro, avgLux)
-        }
-    }
-
     fun resetLapAverages() {
         synchronized(dataLock) {
             lapAccelSum = 0.0
@@ -369,12 +351,6 @@ class SensorDataManager(
 
     fun getCurrentLap(): Int = lapCount
 
-    fun resetLapCount() {
-        lapCount = 1
-        currentHeadingAngle = 0.0
-        lastGyroTimestamp = 0L
-    }
-
     private fun playLapSound() {
         try {
             toneGenerator?.startTone(ToneGenerator.TONE_CDMA_PIP, 150)
@@ -384,43 +360,5 @@ class SensorDataManager(
         }
     }
 
-    fun mapValue(value: Double, inMin: Double, inMax: Double, outMin: Long, outMax: Long): Long {
-        val result = (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin
-        return if (outMin < outMax) result.coerceIn(outMin.toDouble(), outMax.toDouble()).toLong()
-        else result.coerceIn(outMax.toDouble(), outMin.toDouble()).toLong()
-    }
 
-
-    fun mapLogLog(
-        value: Float,
-        inInit: Float,
-        inEnd: Float,
-        outInit: Float,
-        outEnd: Float
-    ): Float {
-        val sInInit = inInit.coerceAtLeast(1e-6f)
-        val sInEnd = inEnd.coerceAtLeast(1e-6f)
-        val sOutInit = outInit.coerceAtLeast(1e-6f)
-        val sOutEnd = outEnd.coerceAtLeast(1e-6f)
-        val clampedValue = value.coerceIn(min(sInInit, sInEnd), max(sInInit, sInEnd))
-        val logInInit = ln(sInInit)
-        val logInEnd = ln(sInEnd)
-        val logOutInit = ln(sOutInit)
-        val logOutEnd = ln(sOutEnd)
-        val logValue = ln(clampedValue)
-        val ratio = (logValue - logInInit) / (logInEnd - logInInit)
-        val logResult = logOutInit + ratio * (logOutEnd - logOutInit)
-        return exp(logResult)
-    }
-
-    fun setRecentFramesWindow(size: Int) {
-        synchronized(dataLock) {
-            recentFramesWindow = size
-            recentAccel.clear()
-            recentGyro.clear()
-            recentLux.clear()
-        }
-    }
-
-    fun getRecentFramesWindow(): Int = recentFramesWindow
 }

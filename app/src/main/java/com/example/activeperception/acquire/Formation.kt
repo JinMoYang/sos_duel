@@ -22,21 +22,6 @@ object Formation {
     }
 
     /**
-     * Form one candidate channel: sum the first [nSum] burst planes, apply [gainRatio],
-     * clip, encode. [frames] are linear ADU planes, all captured at the base gain.
-     */
-    fun formCandidate(frames: List<IntArray>, nSum: Int, gainRatio: Double, maxDn: Double): IntArray {
-        val n = frames[0].size
-        val out = IntArray(n)
-        for (p in 0 until n) {
-            var s = 0.0
-            for (k in 0 until nSum) s += frames[k][p].toDouble()
-            out[p] = srgbU8(s * gainRatio, maxDn)
-        }
-        return out
-    }
-
-    /**
      * 2×2-block demosaic of a linear Bayer plane -> half-resolution linear [R,G,B].
      * [pattern] is the 4-char CFA of the top-left 2×2, row-major ("RGGB", "BGGR", ...),
      * from SENSOR_INFO_COLOR_FILTER_ARRANGEMENT. Block averaging rather than full-res
@@ -86,19 +71,6 @@ object Formation {
             out[p] = (0xFF shl 24) or (rr shl 16) or (gg shl 8) or bb
         }
         return out
-    }
-
-    fun correctLinearRgb(r: Double, g: Double, b: Double, gainRatio: Double,
-                         whiteBalance: FloatArray, cameraToSrgb: DoubleArray): DoubleArray {
-        require(whiteBalance.size == 3 && cameraToSrgb.size == 9)
-        val wr = r * gainRatio * whiteBalance[0]
-        val wg = g * gainRatio * whiteBalance[1]
-        val wb = b * gainRatio * whiteBalance[2]
-        return doubleArrayOf(
-            cameraToSrgb[0] * wr + cameraToSrgb[1] * wg + cameraToSrgb[2] * wb,
-            cameraToSrgb[3] * wr + cameraToSrgb[4] * wg + cameraToSrgb[5] * wb,
-            cameraToSrgb[6] * wr + cameraToSrgb[7] * wg + cameraToSrgb[8] * wb
-        )
     }
 
     /** Rotate the sensor raster clockwise before display, detection, and JPEG logging. */

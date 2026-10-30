@@ -30,10 +30,4 @@ class SensingLogTest {
         assertEquals("plain", Csv.escape("plain"))
     }
 
-    @Test fun schemaStability() {
-        assertTrue(LogSchema.L2_SWEEP.containsAll(LogSchema.L1_VERIFY))
-        assertEquals(LogSchema.L1_VERIFY.size + 8, LogSchema.L2_SWEEP.size)
-        assertTrue(LogSchema.L3_LIVE.contains("formation_ms"))
-        assertTrue(LogSchema.L3_LIVE.contains("infer_ms"))
-    }
 }

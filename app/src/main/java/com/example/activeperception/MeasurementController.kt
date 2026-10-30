@@ -7,8 +7,6 @@ import android.graphics.ImageFormat
 import android.graphics.Paint
 import android.os.Build
 import android.os.SystemClock
-import com.example.activeperception.acquire.StepResult
-import com.example.activeperception.acquire.plan as acquirePlan
 import com.example.activeperception.acquire.CandidateSource
 import com.example.activeperception.acquire.Detection
 import com.example.activeperception.acquire.Detector
@@ -35,22 +33,6 @@ import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
-
-/**
- * Tie-break used by Proposed when sum_conf is 0 on every candidate.
- *
- * ENTROPY        Shannon entropy of the luminance histogram. Brightness-biased: in dim
- *                scenes it picks the brightest cell regardless of blur.
- * LAPLACIAN_VAR  Variance of the 5-point Laplacian. Penalizes blur, but Lap² still scales
- *                with absolute brightness.
- * TENENGRAD_NORM Σ|∇I|² / Σ I² via Sobel. Brightness-invariant since both sums scale
- *                identically, and blur still costs gradient per unit brightness.
- * CRETE_ROFFET   Crete et al. 2007 perceptual blur metric.
- * SAFE_CELL      No image metric at all. With no detection anywhere the SNR is too low for
- *                a metric to discriminate, so pick by brightness target on the motion-safe
- *                shutter row instead.
- */
-enum class FallbackMetric { ENTROPY, LAPLACIAN_VAR, TENENGRAD_NORM, CRETE_ROFFET, SAFE_CELL }
 
 /** Budget probe ([MeasurementController.runBudgetProbe]): reads per queued burst, outputs per
  *  pattern, newest reads kept for the analysis thread, and the lane patterns tried. */
@@ -84,31 +66,6 @@ enum class AeStrategy { PHONE, CUSTOM_BRIGHTNESS }
 fun AeStrategy.tag(): String = when (this) {
     AeStrategy.PHONE -> "phone"
     AeStrategy.CUSTOM_BRIGHTNESS -> "custom"
-}
-
-/** Short run-dir suffix. */
-fun FallbackMetric.tag(): String = when (this) {
-    FallbackMetric.ENTROPY -> "ent"
-    FallbackMetric.LAPLACIAN_VAR -> "lap"
-    FallbackMetric.TENENGRAD_NORM -> "ten"
-    FallbackMetric.CRETE_ROFFET -> "cre"
-    FallbackMetric.SAFE_CELL -> "safe"
-}
-/** Status-tag display char. */
-fun FallbackMetric.shortTag(): String = when (this) {
-    FallbackMetric.ENTROPY -> "E"
-    FallbackMetric.LAPLACIAN_VAR -> "L"
-    FallbackMetric.TENENGRAD_NORM -> "T"
-    FallbackMetric.CRETE_ROFFET -> "C"
-    FallbackMetric.SAFE_CELL -> "S"
-}
-/** Value written into the candidates.csv `tie_break` column when this strategy was used. */
-fun FallbackMetric.tieBreakName(): String = when (this) {
-    FallbackMetric.ENTROPY -> "entropy"
-    FallbackMetric.LAPLACIAN_VAR -> "laplacian"
-    FallbackMetric.TENENGRAD_NORM -> "tenengrad"
-    FallbackMetric.CRETE_ROFFET -> "crete_roffet"
-    FallbackMetric.SAFE_CELL -> "safe_cell"
 }
 
 /**
@@ -1761,31 +1718,8 @@ class MeasurementController(
     /** App files dir (getExternalFilesDir), where the read-noise table lives across runs. */
     @Volatile var appFilesDir: java.io.File? = null
 
-    /** Read noise in DN per analog gain, measured once per device by [runReadNoise]. Between
-     *  measured gains it is interpolated linearly in log(gain); outside, the nearest holds. */
-    private class ReadNoiseTable(val gains: DoubleArray, val rnDn: DoubleArray, val json: JSONObject) {
-        fun at(gain: Double): Double {
-            if (gains.isEmpty() || gain.isNaN()) return Double.NaN
-            if (gain <= gains.first()) return rnDn.first()
-            if (gain >= gains.last()) return rnDn.last()
-            val i = gains.indexOfLast { it <= gain }
-            val t = (kotlin.math.ln(gain) - kotlin.math.ln(gains[i])) /
-                (kotlin.math.ln(gains[i + 1]) - kotlin.math.ln(gains[i]))
-            return rnDn[i] + t * (rnDn[i + 1] - rnDn[i])
-        }
-
-        companion object {
-            const val FILE = "read_noise.json"
-            fun load(dir: java.io.File?): ReadNoiseTable? = runCatching {
-                val j = JSONObject(java.io.File(requireNotNull(dir), FILE).readText())
-                val g = j.getJSONArray("gains_req"); val r = j.getJSONArray("rn_dn")
-                val pairs = (0 until g.length()).map { g.getDouble(it) to r.getDouble(it) }
-                    .filter { it.second.isFinite() }.sortedBy { it.first }
-                ReadNoiseTable(pairs.map { it.first }.toDoubleArray(),
-                    pairs.map { it.second }.toDoubleArray(), j)
-            }.getOrNull()
-        }
-    }
+    /** The table [runReadNoise] writes: read noise in DN per analog gain. */
+    private val READ_NOISE_FILE = "read_noise.json"
 
     /** Luma of a formed lane at half resolution (320x320 for the 640 input), divided by its
      *  mean so a base-gain change between frames does not look like motion. */
@@ -1920,9 +1854,9 @@ class MeasurementController(
             .put("hot_frac", JSONArray(rows.map { if (it.hot.isNaN()) JSONObject.NULL else it.hot }))
             .put("n_frames", JSONArray(rows.map { it.n }))
             .put("complete", rows.size == gains.size && rows.all { it.n >= 2 })
-        runCatching { java.io.File(logger.dir, ReadNoiseTable.FILE).writeText(j.toString(2)) }
+        runCatching { java.io.File(logger.dir, READ_NOISE_FILE).writeText(j.toString(2)) }
         if (j.getBoolean("complete")) {
-            runCatching { appFilesDir?.let { java.io.File(it, ReadNoiseTable.FILE).writeText(j.toString(2)) } }
+            runCatching { appFilesDir?.let { java.io.File(it, READ_NOISE_FILE).writeText(j.toString(2)) } }
         }
         onStatus("read noise: " + rows.joinToString(" ") { "ISO${it.gain}=${"%.2f".format(it.rn)}DN" })
         endPass()

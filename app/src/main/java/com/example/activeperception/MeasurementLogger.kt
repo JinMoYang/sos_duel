@@ -53,7 +53,6 @@ class MeasurementLogger(context: Context, runName: String) {
         target.apply { mkdirs() }
     }
     val imgDir: File = File(dir, "img").apply { mkdirs() }
-    val rawDir: File = File(dir, "raw").apply { mkdirs() }
     private val writers = HashMap<String, BufferedWriter>()
     private val csvNames = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val queue = ArrayBlockingQueue<Runnable>(4096)
@@ -143,32 +142,6 @@ class MeasurementLogger(context: Context, runName: String) {
         return if (enqueueArtifact {
                 FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.JPEG, quality, it) }
             }) "img/${f.name}" else ""
-    }
-
-    /** Lossless candidate/overlay output for paired visual comparisons. */
-    fun savePng(name: String, bmp: Bitmap): String {
-        val f = File(imgDir, "$name.png")
-        FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        return "img/${f.name}"
-    }
-
-    /** Linear Bayer plane as uint16 LE binary. Returns the path relative to the run dir. */
-    fun saveRaw(name: String, bayer: IntArray): String {
-        val f = File(rawDir, "$name.raw16")
-        val bb = ByteBuffer.allocate(bayer.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-        for (v in bayer) bb.putShort((v and 0xFFFF).toShort())
-        FileOutputStream(f).use { it.write(bb.array()) }
-        return "raw/${f.name}"
-    }
-
-    /** Non-blocking RAW persistence. The immutable RawFrame array is transferred by reference. */
-    fun saveRawAsync(name: String, bayer: IntArray): String {
-        val f = File(rawDir, "$name.raw16")
-        return if (enqueueArtifact {
-                val bb = ByteBuffer.allocate(bayer.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-                for (v in bayer) bb.putShort((v and 0xFFFF).toShort())
-                FileOutputStream(f).use { it.write(bb.array()) }
-            }) "raw/${f.name}" else ""
     }
 
     fun flush() {
