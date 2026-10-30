@@ -45,6 +45,18 @@
             android:fontFamily="monospace"
             android:layout_gravity="top|end" />
 
+        <!-- The glass's walk session: one large line, the session's progress (WalkSession). -->
+        <TextView
+            android:id="@+id/walkText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:padding="12dp"
+            android:textSize="26sp"
+            android:textColor="@color/text_primary"
+            android:visibility="gone" />
+
         <!-- auto_collect: what is running now, in letters readable from across the room,
              a small progress line under it, and the three steps. Pressing the running
              step's button again stops it. -->

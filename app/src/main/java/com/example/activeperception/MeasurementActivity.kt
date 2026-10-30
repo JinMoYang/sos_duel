@@ -75,6 +75,10 @@ class MeasurementActivity : AppCompatActivity() {
     private lateinit var preview: ImageView
     private lateinit var overlay: OverlayView
     private lateinit var cellText: TextView
+    /** The glass's walk progress, one large line (the manual panel and the preview are hidden). */
+    private lateinit var walkText: TextView
+    /** Draw each output and its boxes; off on the glass (`--ez preview true` turns it on). */
+    private var previewOn = true
     private lateinit var methodGroup: RadioGroup
     private lateinit var periodGroup: RadioGroup
     private lateinit var boostGroup: RadioGroup
@@ -105,8 +109,9 @@ class MeasurementActivity : AppCompatActivity() {
         Thread(task, "SoS-DisplayIo").apply { priority = Thread.MIN_PRIORITY }
     }
     @Volatile private var runActive = false
-    /** Lap-driven collection (LapSession.kt). Null whenever none is in progress. */
-    private var lapSession: LapSession? = null
+    /** The session driving a plan of runs (LapSession: Limo laps; WalkSession: corridor legs on
+     *  the glass). Null whenever none is in progress. */
+    private var lapSession: PlanSession? = null
     /** Digital boost to put back when a lap session ends; negative when none is saved. */
     private var boostBeforeLapSession = -1.0
     /** How many collection blocks the current lap session has opened, minus one. */
@@ -120,11 +125,19 @@ class MeasurementActivity : AppCompatActivity() {
         // A screen-off event pauses the Activity on RayNeo. Keep the display awake during an
         // experiment; closing TFLite while Interpreter.run() is active causes a native crash.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // The glass's lock screen comes up whenever its display sleeps and would cover the app
+        // (pausing it, which stops the camera and a walk session): show over it, and wake it.
+        if (Build.MANUFACTURER.equals("RayNeo", ignoreCase = true) && Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        }
         setContentView(R.layout.activity_measurement)
         status = findViewById(R.id.statusText)
         preview = findViewById(R.id.previewImage)
         overlay = findViewById(R.id.overlayView)
         cellText = findViewById(R.id.cellText)
+        walkText = findViewById(R.id.walkText)
+        previewOn = intent.getBooleanExtra("preview", !rayNeoTouchpad)
         methodGroup = findViewById(R.id.methodGroup)
         periodGroup = findViewById(R.id.periodGroup)
         boostGroup = findViewById(R.id.boostGroup)
@@ -247,17 +260,17 @@ class MeasurementActivity : AppCompatActivity() {
         // rows, the proposed settings (period/fallback), Start/Stop and the NAE row.
         // Hidden buttons stay functional for intent-driven autorun (performClick works
         // on GONE views), and offload still arrives via the server_url extra.
+        // The glass shows only the walk session's progress: no manual panel (a long press on the
+        // temple starts and stops the session; runs still start from adb), and no preview
+        // unless asked for.
         if (rayNeoTouchpad) {
-            val keep = setOf<View>(
-                findViewById(R.id.touchpadHelp),
-                findViewById(R.id.sessionRow),
-                methodGroup, findViewById(R.id.methodGroup2),
-                proposedSettings,
-                btnStart.parent as View
-            )
-            for (i in 0 until controlsInner.childCount) {
-                val c = controlsInner.getChildAt(i)
-                if (c !in keep) c.visibility = View.GONE
+            controlsScroll.visibility = View.GONE
+            walkText.visibility = View.VISIBLE
+            walkText.text = WALK_IDLE
+            if (!previewOn) {
+                preview.visibility = View.GONE
+                overlay.visibility = View.GONE
+                cellText.visibility = View.GONE
             }
         }
         else configurePhoneProfileUi()
@@ -323,7 +336,9 @@ class MeasurementActivity : AppCompatActivity() {
                 toggleLapSession(preset, b)
             }
         }
-        showExperiments(!rayNeoTouchpad)
+        // The glass shows neither: its screen is the walk session's progress line.
+        if (rayNeoTouchpad) { expPanel.visibility = View.GONE; controlsScroll.visibility = View.GONE }
+        else showExperiments(true)
     }
 
     /** Reflows the root between portrait (preview above controls) and landscape (controls
@@ -850,6 +865,7 @@ class MeasurementActivity : AppCompatActivity() {
         // threads at 10 fps (MeasurementController.parallelCapture); the run is named par_...
         parallelNext = command.startsWith("par_")
         val cmd = command.removePrefix("par_")
+        if (cmd == "walk") { toggleWalkSession(); return }
         if (isCollect(cmd)) { startCollect(cmd); return }
         if (cmd == "readnoise") {
             start("readnoise") { mc!!.runReadNoise(::post) }
@@ -927,7 +943,67 @@ class MeasurementActivity : AppCompatActivity() {
     }
 
     private fun toggleRunFromTouchpad() {
+        // The glass: a long press on the temple starts or stops the corridor walk session.
+        if (rayNeoTouchpad) { toggleWalkSession(); return }
         if (runActive) stopMeasurement() else startSelectedMethod()
+    }
+
+    private val WALK_IDLE = "길게 눌러 걷기 시작"
+
+    /** Short names on the glass's progress line. */
+    private fun walkName(method: String) = when (method) {
+        "addl_3_sep_every" -> "proposed"
+        "par_ae_phone" -> "AE-Phone"
+        "par_prop_c" -> "Sense-well"
+        "par_physsweep_fast" -> "PhysSweep"
+        "par_shin_nm" -> "ShinNM"
+        "par_nae" -> "Neural-AE"
+        "par_fixed_1600_240" -> "fixed"
+        else -> method
+    }
+
+    /** The glass's corridor session ([WalkSession]): the final comparison's methods
+     *  (PAR_MAIN_METHODS, or `--es walk_plan`), each for `--ei walk_legs` legs (default 4: two round trips), in
+     *  `--ei walk_rounds` rounds (default 1), the order shifted by one each round. Every run of it
+     *  carries experiment_session walk_<ms>; `--es lighting` labels it. Started and stopped by a
+     *  long press on the temple, or `--es run walk`. */
+    private fun toggleWalkSession() {
+        if (lapSession != null) { stopMeasurement(); return }
+        if (runActive) { post("busy — stop first"); return }
+        if (runCatching {
+                HowToSense.Curve.parse(assets.open(CURVE_FILE).bufferedReader().use { it.readText() })
+            }.isFailure) {
+            post("the proposed method needs assets/$CURVE_FILE — walk not started"); return
+        }
+        val rounds = intent.getIntExtra("walk_rounds", 1).coerceAtLeast(1)
+        // `--es walk_plan a,b,...` replaces the methods (a rerun of some, a test).
+        val methods = intent.getStringExtra("walk_plan")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
+            ?.takeIf { it.isNotEmpty() } ?: PAR_MAIN_METHODS
+        val plan = (0 until rounds).flatMap { r -> methods.indices.map { methods[(it + r) % methods.size] } }
+        presetRunCap = null
+        ExperimentSession.lighting = intent.getStringExtra("lighting").orEmpty()
+        ExperimentSession.session = "walk_${System.currentTimeMillis()}"
+        val session = WalkSession(this, sensors, object : LapSession.Host {
+            override fun startBlock(method: String) {
+                ExperimentSession.runLap = 0
+                launchRunnerCommand(method)
+            }
+            override fun stopBlock() = stopMeasurement(userInitiated = false)
+            override fun status(text: String) { walkText.text = text }
+            override fun buzz(ms: Long) = vibrate(ms)
+            override fun beep(times: Int) = playLapBeeps(times)
+            override fun lapStarted(method: String, lapsInBlock: Int) { ExperimentSession.runLap = lapsInBlock }
+            override fun sessionEnded(completed: Boolean) {
+                lapSession = null
+                ExperimentSession.runLap = -1
+                ExperimentSession.lighting = ""; ExperimentSession.session = ""
+                walkText.text = (if (completed) "끝" else "멈춤") + "\n" + WALK_IDLE
+            }
+        }, plan, legsPerBlock = intent.getIntExtra("walk_legs", 4).coerceAtLeast(1),
+            startDelayS = intent.getIntExtra("walk_start_delay_s", 5).coerceAtLeast(0),
+            displayName = ::walkName)
+        lapSession = session
+        session.start()
     }
 
     /** DPAD-style input is emitted by some RayNeo firmware and is also useful for testing. */
@@ -1050,6 +1126,8 @@ class MeasurementActivity : AppCompatActivity() {
     }
 
     private fun activateFocusedControl() {
+        // The glass has no panel to operate: a tap must not press a hidden Start.
+        if (rayNeoTouchpad) { post("hold the temple to start or stop the walk"); return }
         val focused = currentTouchpadControl() ?: btnStart.also { it.requestFocus() }
         if (focused is Spinner) {
             if (focused.count > 0) {
@@ -1071,7 +1149,8 @@ class MeasurementActivity : AppCompatActivity() {
             focusedView.alpha = if (hasFocus) 1f else 0.9f
             if (hasFocus) {
                 scrollControlIntoView(focusedView)
-                if (!runActive) post("Focus · ${controlLabel(focusedView)} · tap")
+                // The glass's panel is hidden: no hint about a control it cannot see.
+                if (!runActive && !rayNeoTouchpad) post("Focus · ${controlLabel(focusedView)} · tap")
             }
         }
     }
@@ -1107,6 +1186,7 @@ class MeasurementActivity : AppCompatActivity() {
     /** Detection.xyxy is already in `bmp` pixel space, so the bitmap's own dims are what the
      *  overlay needs to scale against. */
     private fun showFrame(bmp: Bitmap, dets: List<Detection>, iso: Int, expUs: Int) {
+        if (!previewOn) return
         // Keep the 0.01 confidence tail in JSONL for offline analysis, but only draw boxes
         // that can actually contribute to the SoS selection score. This prevents All-COCO
         // low-confidence noise from looking like a valid on-glass detection.
@@ -1258,7 +1338,9 @@ class MeasurementActivity : AppCompatActivity() {
     override fun onResume() { super.onResume(); sensors.registerListeners() }
     override fun onPause() {
         super.onPause()
-        lapSession?.abort()
+        // A walk session is told why, so the wearer hears an alarm instead of a silent stop.
+        (lapSession as? WalkSession)?.interrupted("the app was paused (display off or covered)")
+            ?: lapSession?.abort()
         sensors.unregisterListeners()
         // Backgrounding revokes camera ownership, but Interpreter.close() must not race an
         // in-flight native run. Request stop and defer teardown until the worker has returned.

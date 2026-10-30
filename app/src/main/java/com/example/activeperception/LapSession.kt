@@ -10,6 +10,17 @@ import java.io.BufferedWriter
 import java.io.File
 import kotlin.math.abs
 
+/** A session that drives a plan of runs: [LapSession] by the laps of a track, [WalkSession] by
+ *  the legs of a corridor. The activity holds one and reports each run's end to it. */
+interface PlanSession {
+    val active: Boolean
+    fun start()
+    /** Stops driving the plan; the current run is the caller's to stop. */
+    fun abort()
+    /** A run the session started has fully ended. */
+    fun onRunEnded()
+}
+
 /**
  * One press, many laps: runs a plan of blocks while a vehicle keeps circling a closed
  * track, moving to the next block when the vehicle has completed that block's laps.
@@ -44,7 +55,7 @@ class LapSession(
     /** Seconds between the press and the real start, so the operator can let go of the
      *  phone and step back before any rotation is counted. 0 starts at once. */
     private val startDelayS: Int = 5
-) {
+) : PlanSession {
     data class Block(val method: String, val laps: Int)
 
     interface Host {
@@ -114,7 +125,7 @@ class LapSession(
     }
     private var log: BufferedWriter? = null
 
-    val active: Boolean get() = state != State.IDLE
+    override val active: Boolean get() = state != State.IDLE
 
     private val tick = object : Runnable {
         override fun run() {
@@ -124,7 +135,7 @@ class LapSession(
         }
     }
 
-    fun start() {
+    override fun start() {
         if (state != State.IDLE || plan.isEmpty()) return
         log = runCatching { logFile.bufferedWriter() }.getOrNull()
         log?.apply {
@@ -160,14 +171,14 @@ class LapSession(
     }
 
     /** Stops driving the plan. Does not stop the current run; the caller does that. */
-    fun abort() {
+    override fun abort() {
         if (state == State.IDLE) return
         event("abort")
         finish(completed = false)
     }
 
     /** The host calls this when a run it started for us has fully ended. */
-    fun onRunEnded() {
+    override fun onRunEnded() {
         when (state) {
             State.SWITCHING -> {}
             State.RUNNING -> event("block_ended_early", note = "the run stopped by itself")
