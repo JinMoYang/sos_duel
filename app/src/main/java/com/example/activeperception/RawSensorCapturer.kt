@@ -157,6 +157,9 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         /** Extra requests submitted to replace settling frames, bounded by the guard. */
         var resubmits = 0
         var error: Throwable? = null
+        /** Hand the frame over undecoded ([PendingRead]) instead of decoding it on arrival. */
+        var deferred = false
+        val pending = LinkedBlockingQueue<PendingRead>()
     }
 
     private class ContinuousTarget(
@@ -228,8 +231,16 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     /** 0 (default): every decoded site is the mean of the 4 same-colour pixels of its 4x4
      *  block, signed. 1: the pre-2026-10-15 decode (one pixel of the 4, clipped at black),
      *  kept only so a static collection can alternate old and new pipelines frame by frame.
+     *  2: the mean of the 9 same-colour pixels of its 6x6 block, signed: a frame a third of
+     *  the sensor's size each way (the glass's 4032 x 3024 -> 1344 x 1008, just above the
+     *  detector's 640 x 480 picture), so formation reads 2.25x fewer sites.
      *  Read when each frame is decoded. */
     @Volatile var decodeMode: Int = 0
+    /** The decode mode a run returns to after changing [decodeMode] (0 or 2). */
+    @Volatile var defaultDecodeMode: Int = 0
+    /** Ask for RAW10 (packed 10-bit) instead of RAW_SENSOR when the camera offers it at the
+     *  same size: 1.25 instead of 2 bytes a pixel to move and read. Set before [open]. */
+    @Volatile var preferRaw10 = false
 
     fun applyFixedFocus(builder: CaptureRequest.Builder) {
         val d = fixedFocusDiopters
@@ -322,18 +333,20 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         }
         chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)?.copyTo(staticBlack, 0)
 
-        val size = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?.getOutputSizes(ImageFormat.RAW_SENSOR)
+        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?: error("camera 0 has no stream configuration map")
+        val size = map.getOutputSizes(ImageFormat.RAW_SENSOR)
             ?.maxByOrNull { it.width * it.height }
             ?: error("RayNeo camera 0 has no RAW_SENSOR size")
+        val format = if (preferRaw10 && map.getOutputSizes(ImageFormat.RAW10)?.contains(size) == true)
+            ImageFormat.RAW10 else ImageFormat.RAW_SENSOR
         width = size.width
         height = size.height
         captureWidth = width
         captureHeight = height
-        reader = ImageReader.newInstance(width, height, ImageFormat.RAW_SENSOR, MAX_IMAGES)
-        streamFormat = ImageFormat.RAW_SENSOR
-        streamMinFrameDurationNs = (chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, size) ?: 0L)
+        reader = ImageReader.newInstance(width, height, format, MAX_IMAGES)
+        streamFormat = format
+        streamMinFrameDurationNs = map.getOutputMinFrameDuration(format, size)
             .takeIf { it > 0L } ?: BASE_FRAME_DURATION_NS
 
         val opened = CountDownLatch(1)
@@ -399,6 +412,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             // Ownership of Image moves to exactly one decode worker. No 12 MP plane copy is
             // made: native code reads plane.buffer directly and Image closes after decode.
             decodePool.execute {
+                var handedOff = false
                 try {
                     val result = awaitResult(image.timestamp, fastResults,
                         fastResultLock, 2_000) ?: return@execute
@@ -412,6 +426,15 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                         // it — the result callback resubmits the slot — rather than failing
                         // the whole capture.
                         synchronized(target.lock) { target.settlingSkips++ }
+                        return@execute
+                    }
+                    if (target.deferred) {
+                        handedOff = true
+                        synchronized(target.lock) {
+                            if (target.firstImageNs == 0L) target.firstImageNs = imageArrivalNs
+                            target.pending.offer(PendingRead(image, result, target.expected, commandId))
+                            target.lock.notifyAll()
+                        }
                         return@execute
                     }
                     val decodeStart = System.nanoTime()
@@ -441,7 +464,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                         }
                     }
                 } finally {
-                    image.close()
+                    if (!handedOff) image.close()
                 }
             }
         }, imageHandler)
@@ -620,10 +643,14 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
      *
      * [template] is shared by every shot; a caller mixing one-shot and multi-shot frames can
      * follow [captureFast]'s rule (preview for one shot, still for a burst).
+     *
+     * [deferDecode]: the shots are not decoded on arrival; take them with [takeBracketPending]
+     * and decode only the ones used.
      */
     fun beginBracketSequence(
         shots: List<Pair<Int, Int>>,
-        template: Int = CameraDevice.TEMPLATE_STILL_CAPTURE
+        template: Int = CameraDevice.TEMPLATE_STILL_CAPTURE,
+        deferDecode: Boolean = false
     ): BracketHandle {
         check(fastCaptureStarted) { "startFastCapture() must be called first" }
         require(shots.size in 1..MAX_IMAGES)
@@ -637,7 +664,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             val expected = SensorState(expUs.toLong(), iso)
             val command = scheduler.enqueue(expected)
             check(fastTargets.putIfAbsent(command.id,
-                FastTarget(expected, command.id, 1, startedNs)) == null)
+                FastTarget(expected, command.id, 1, startedNs).also { it.deferred = deferDecode }) == null)
             ids[i] = command.id
             indexOf[command.id] = i
             // One template for every shot, so nothing but exposure and ISO differs.
@@ -734,6 +761,54 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         for (id in handle.commandIds) fastTargets.remove(id)
     }
 
+    /** [takeBracketFrame] for a burst begun with deferDecode: the shot, still undecoded. */
+    fun takeBracketPending(handle: BracketHandle, index: Int, timeoutMs: Long = 6_000L): PendingRead {
+        val id = handle.commandIds[index]
+        val target = fastTargets[id] ?: error("Bracket shot $index is no longer active")
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        try {
+            while (true) {
+                target.pending.poll(100, TimeUnit.MILLISECONDS)?.let { return it }
+                val failure = target.error
+                if (failure != null || System.nanoTime() >= deadline)
+                    throw failure ?: IllegalStateException("Timed out waiting for bracket shot $index")
+            }
+        } finally {
+            fastTargets.remove(id)
+        }
+    }
+
+    /**
+     * A shot whose RAW is still the camera's buffer ([beginBracketSequence] with deferDecode):
+     * its sensor time and exposure are known; [decode] decodes it on the caller's thread and
+     * [close] releases it unread. Exactly one of the two takes effect; until then the read holds
+     * one of the reader's [MAX_IMAGES] buffers.
+     */
+    inner class PendingRead internal constructor(
+        private val image: Image,
+        private val result: TotalCaptureResult,
+        private val expected: SensorState?,
+        private val commandId: Long
+    ) {
+        val timestamp: Long = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: image.timestamp
+        val exposureUs: Long = result.sensorState().exposureUs
+        private val used = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        fun decode(): Pair<RawFrame, RawMeta> {
+            check(used.compareAndSet(false, true)) { "read already used" }
+            try {
+                val d = this@RawSensorCapturer.decode(image, result, expected, commandId, nativeDecode = true)
+                return d.frame to d.meta
+            } finally {
+                image.close()
+            }
+        }
+
+        fun close() {
+            if (used.compareAndSet(false, true)) image.close()
+        }
+    }
+
     // ---------- parallel mode (2026-10-29) ----------
 
     /** What a parallel-mode read was requested as: a manual setting, or the phone's AE. */
@@ -753,13 +828,30 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
      * before that wait, so a new setting reaches the sensor while the caller waits: about
      * [depth] reads plus the request latency (~38 ms on the S26). Every request uses the
      * preview template, as captureFast's one-shot requests do.
+     *
+     * [ahead] > 0 (demand mode, the glass 2026-10-30): the pattern is requested only while the
+     * reads in flight plus the fresh unused reads of the pattern are fewer than [ahead] takes'
+     * worth, so nothing is read (and decoded) that no take will use; windows queued with
+     * [parallelEnqueue] are still requested as they come. 0: the continuous stream.
+     *
+     * [lazy] (the glass 2026-10-30, with [ahead] 0): the stream keeps reading but keeps each read
+     * undecoded ([PendingRead]); a take decodes only the reads it picks, in parallel on the
+     * decode pool, and reads that fall out of the ring are released unread.
      */
-    private inner class ParallelStream(val depth: Int, val periodNs: Long) {
+    private inner class ParallelStream(val depth: Int, val periodNs: Long, val ahead: Int = 0,
+                                       val lazy: Boolean = false) {
+        /** A read in the ring: decoded on arrival, or (lazy) still the camera's buffer until a
+         *  take picks it ([taken]: then the take decodes it and the ring must not release it). */
+        private inner class Slot(val ts: Long, val key: ParallelKey, var read: ParallelRead?,
+                                 val pending: PendingRead?) {
+            var taken = false
+            fun release() { if (!taken) pending?.close() }
+        }
         @Volatile var pattern: List<ParallelKey> = emptyList()
         /** Keys to request once each, in order, before the stream returns to cycling [pattern]
          *  (a caller that plans its next windows ahead). */
         val queue = java.util.concurrent.ConcurrentLinkedQueue<ParallelKey>()
-        private val ring = ArrayDeque<ParallelRead>()
+        private val ring = ArrayDeque<Slot>()
         private val lock = java.lang.Object()
         @Volatile var active = true
         @Volatile var error: Throwable? = null
@@ -768,6 +860,11 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
          *  newer than that key's last one). */
         private val lastReturnedByKey = HashMap<ParallelKey, Long>()
         private var tick = 0L
+        /** Reads the last take asked for (demand mode sizes its requests by it). */
+        @Volatile private var lastN = 1
+        /** Lazy: how long before the output clock a take picks its reads, so their decoding is
+         *  done by the clock; follows the decodes measured (plus 10 ms). */
+        private var decodeLeadNs = 0L
         val thread = Thread({ loop() }, "RawParallelStream")
 
         private fun submit(key: ParallelKey): FastTarget {
@@ -785,16 +882,33 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                     request = aeRequest(id)
                 }
             }
+            target.deferred = lazy
             check(fastTargets.putIfAbsent(target.commandId, target) == null)
             (session ?: error("camera session is closed")).captureBurst(listOf(request), fastCallback(target), cameraHandler)
             return target
         }
 
-        private fun await(target: FastTarget): Decoded {
+        /** Drops one read from a full ring: the oldest read of the key with the most reads kept.
+         *  A window's reads, each queued once ([parallelEnqueue]), so survive the pattern's
+         *  stream until their take, however long the output period; with one key it is simply
+         *  the oldest read. Call under [lock]. */
+        private fun evictOne() {
+            val counts = ring.groupingBy { it.key }.eachCount()
+            val top = counts.values.max()
+            val victim = ring.first { counts[it.key] == top }
+            ring.remove(victim)
+            victim.release()
+        }
+
+        /** The read of [target] as a ring slot: decoded on arrival, or (lazy) still pending. */
+        private fun await(target: FastTarget, key: ParallelKey): Slot {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
             try {
                 while (true) {
-                    target.ready.poll(100, TimeUnit.MILLISECONDS)?.let { return it }
+                    if (lazy) target.pending.poll(100, TimeUnit.MILLISECONDS)?.let { return Slot(it.timestamp, key, null, it) }
+                    else target.ready.poll(100, TimeUnit.MILLISECONDS)?.let {
+                        return Slot(it.meta.timestamp, key, ParallelRead(it.frame, it.meta, key), null)
+                    }
                     target.error?.let { throw it }
                     if (System.nanoTime() >= deadline) error("parallel read timed out")
                 }
@@ -811,23 +925,45 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                 while (active) {
                     while (inflight.size < depth) {
                         val pat = pattern
+                        if (ahead > 0 && queue.isEmpty()) {
+                            val fresh = synchronized(lock) {
+                                ring.count { it.ts > lastReturnedTs && it.key in pat }
+                            }
+                            if (inflight.size + fresh >= ahead * lastN) break
+                        }
                         val key = queue.poll() ?: if (pat.isEmpty()) null else pat[next++ % pat.size]
                         if (key == null) break
                         inflight.addLast(submit(key) to key)
                     }
                     if (inflight.isEmpty()) { Thread.sleep(5); continue }
+                    // Demand mode: look in short steps, so a take that frees a slot gets its
+                    // request out at once instead of after the oldest read in flight lands.
+                    if (ahead > 0) {
+                        val head = inflight.first().first
+                        if (head.error == null && head.ready.isEmpty() &&
+                            System.nanoTime() - head.startedNs < TimeUnit.SECONDS.toNanos(3)) {
+                            Thread.sleep(5); continue
+                        }
+                    }
                     val (t, key) = inflight.removeFirst()
                     val d = try {
-                        await(t)
+                        await(t, key)
                     } catch (e: Throwable) {
                         Log.w(TAG, "parallel read failed", e)
                         if (++failures >= 5) throw e
                         continue
                     }
                     failures = 0
+                    readTimingSink?.let { sink ->
+                        runCatching {
+                            sink(longArrayOf(d.ts, t.startedNs, t.firstResultNs, t.firstImageNs,
+                                t.firstDecodeStartNs, t.lastDecodeEndNs, System.nanoTime(),
+                                t.settlingSkips.toLong(), t.resubmits.toLong(), if (key is ParallelKey.Ae) 1L else 0L))
+                        }
+                    }
                     synchronized(lock) {
-                        ring.addLast(ParallelRead(d.frame, d.meta, key))
-                        while (ring.size > PARALLEL_RING) ring.removeFirst()
+                        ring.addLast(d)
+                        while (ring.size > PARALLEL_RING) evictOne()
                         lock.notifyAll()
                     }
                 }
@@ -835,34 +971,42 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                 if (active) { error = e; Log.e(TAG, "parallel stream stopped", e) }
             } finally {
                 inflight.forEach { fastTargets.remove(it.first.commandId) }
-                synchronized(lock) { active = false; lock.notifyAll() }
+                synchronized(lock) {
+                    active = false
+                    ring.forEach { it.release() }; ring.clear()
+                    lock.notifyAll()
+                }
             }
         }
 
         /** Paced take: [keys] becomes the pattern (unless [setPattern] is false: the caller set
          *  it); after the output clock, the newest [n] fresh reads of keys[0] when there is one
-         *  key, else the newest fresh read of each key: keys[0] (the output's) newer than every
-         *  read handed out before, every other key newer than its own last one. */
+         *  key (in demand mode the oldest: they were requested for this take, and the newer ones
+         *  for the next), else the newest fresh read of each key: keys[0] (the output's) newer
+         *  than every read handed out before, every other key newer than its own last one. */
         fun take(keys: List<ParallelKey>, n: Int = 1, setPattern: Boolean = true): List<ParallelRead> {
             if (setPattern) pattern = keys
-            val lead = tick - System.nanoTime()
+            lastN = if (keys.size == 1) n else keys.size
+            val lead = tick - (if (lazy) decodeLeadNs else 0L) - System.nanoTime()
             if (lead > 0) Thread.sleep(lead / 1_000_000, (lead % 1_000_000).toInt())
             val t0 = System.nanoTime()
-            tick = t0 + periodNs
+            // The clock keeps its schedule when a lazy take wakes early to decode.
+            tick = maxOf(tick, t0) + periodNs
             val deadline = t0 + TimeUnit.SECONDS.toNanos(4)
-            fun pick(): List<ParallelRead>? {
-                val fresh = ring.filter { it.meta.timestamp > lastReturnedTs }
-                if (keys.size == 1) return fresh.filter { it.key == keys[0] }.takeIf { it.size >= n }?.takeLast(n)
+            fun pick(): List<Slot>? {
+                val fresh = ring.filter { it.ts > lastReturnedTs }
+                if (keys.size == 1) return fresh.filter { it.key == keys[0] }.takeIf { it.size >= n }
+                    ?.let { if (ahead > 0) it.take(n) else it.takeLast(n) }
                 return keys.mapIndexed { i, k ->
                     val after = if (i == 0) lastReturnedTs else lastReturnedByKey[k] ?: 0L
-                    ring.lastOrNull { it.key == k && it.meta.timestamp > after } ?: return null
+                    ring.lastOrNull { it.key == k && it.ts > after } ?: return null
                 }
             }
-            var got: List<ParallelRead>? = null
+            var got: List<Slot>? = null
             synchronized(lock) {
                 while (got == null) {
                     got = pick()
-                    if (got != null) break
+                    if (got != null) { got!!.forEach { it.taken = true }; break }
                     error?.let { throw it }
                     check(active) { "parallel stream is not running" }
                     val left = deadline - System.nanoTime()
@@ -870,9 +1014,19 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                     lock.wait(minOf(20L, TimeUnit.NANOSECONDS.toMillis(left).coerceAtLeast(1L)))
                 }
             }
-            val reads = got!!
-            lastReturnedTs = maxOf(lastReturnedTs, reads.maxOf { it.meta.timestamp })
-            for (r in reads) lastReturnedByKey[r.key] = r.meta.timestamp
+            val slots = got!!
+            // Lazy: decode the picked reads now, together on the decode pool.
+            val toDecode = slots.filter { it.read == null }
+            if (toDecode.isNotEmpty()) {
+                val td = System.nanoTime()
+                toDecode.map { s -> decodePool.submit<Pair<RawFrame, RawMeta>> { s.pending!!.decode() } }
+                    .forEachIndexed { i, fu -> val (fr, m) = fu.get(); toDecode[i].read = ParallelRead(fr, m, toDecode[i].key) }
+                val took = System.nanoTime() - td + 10_000_000L
+                decodeLeadNs = if (decodeLeadNs == 0L) took else (0.7 * decodeLeadNs + 0.3 * took).toLong()
+            }
+            val reads = slots.map { it.read!! }
+            lastReturnedTs = maxOf(lastReturnedTs, slots.maxOf { it.ts })
+            for (s in slots) lastReturnedByKey[s.key] = s.ts
             val metas = reads.map { it.meta }
             lastMeta = metas; lastSettlingMeta = metas
             currentState = SensorState(metas.last().appliedExpUs, metas.last().appliedIso)
@@ -884,14 +1038,20 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
 
     @Volatile private var parallel: ParallelStream? = null
 
+    /** Diagnostics: called for every parallel-mode read as it is kept, with its sensor time, the
+     *  nanoTime of each step (submitted, capture result, image, decode start, decode end, kept),
+     *  the settling frames skipped and the requests resubmitted for it, and 1 for a phone-AE read. */
+    @Volatile var readTimingSink: ((LongArray) -> Unit)? = null
+
     /** Parallel mode (see [ParallelStream]): from now on [captureFast] and [captureFastAe] hand
-     *  out the newest fresh reads of a continuous stream, one call every [periodMs]. */
+     *  out the newest fresh reads of a continuous stream (or, [ahead] > 0, of the reads requested
+     *  for the next [ahead] calls), one call every [periodMs]. */
     @Synchronized
-    fun startParallel(depth: Int = 3, periodMs: Long = 100L) {
+    fun startParallel(depth: Int = 3, periodMs: Long = 100L, ahead: Int = 0, lazy: Boolean = false) {
         check(fastCaptureStarted) { "startFastCapture() must be called first" }
         if (parallel != null) return
-        parallel = ParallelStream(depth, periodMs * 1_000_000L).also { it.thread.start() }
-        Log.i(TAG, "parallel mode: depth $depth, period $periodMs ms")
+        parallel = ParallelStream(depth, periodMs * 1_000_000L, if (lazy) 0 else ahead, lazy).also { it.thread.start() }
+        Log.i(TAG, "parallel mode: depth $depth, period $periodMs ms, ahead $ahead, lazy $lazy")
     }
 
     @Synchronized
@@ -1345,10 +1505,10 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             IntArray(4) { dynamic[it].toInt() }
         } else staticBlack.copyOf()
 
-        val outWidth = (width / 2) and 1.inv()
-        val outHeight = (height / 2) and 1.inv()
-        val out = IntArray(outWidth * outHeight)
         val mode = decodeMode
+        val outWidth = if (mode == 2) (width / 6) * 2 else (width / 2) and 1.inv()
+        val outHeight = if (mode == 2) (height / 6) * 2 else (height / 2) and 1.inv()
+        val out = IntArray(outWidth * outHeight)
         val nativeOk = nativeDecode && if (streamFormat == ImageFormat.RAW10) {
             NativeTensorPreprocessor.decodeSubsampledRaw10(
                 bytes, bytes.position(), width, height, rowStride, black, out, mode)
@@ -1437,12 +1597,14 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
 
     /** Every 4x4 sensor block -> one 2x2 Bayer quad; each site is the mean of the block's
      *  four same-colour pixels (rows iy, iy+2; columns ix, ix+2), black removed, NOT clipped.
-     *  Must match the native decoder bit for bit (floor rounding of the mean). */
+     *  Mode 2: 6x6 blocks, the mean of nine. Must match the native decoder bit for bit (floor
+     *  rounding of the mean). */
     private fun decodeReference(
         bytes: java.nio.ByteBuffer, rowStride: Int, pixelStride: Int,
         black: IntArray, outWidth: Int, outHeight: Int, out: IntArray, mode: Int = 0
     ) {
         fun px(y: Int, x: Int) = bytes.getShort(y * rowStride + x * pixelStride).toInt() and 0xFFFF
+        if (mode == 2) { decodeSixReference(::px, black, outWidth, outHeight, out); return }
         for (oy in 0 until outHeight) {
             val iy = (oy and 1.inv()) * 2 + (oy and 1)
             val rowOut = oy * outWidth
@@ -1465,6 +1627,11 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             val tails = bytes.get(offset + 4).toInt() and 0xff
             return ((bytes.get(offset + k).toInt() and 0xff) shl 2) or ((tails ushr (2 * k)) and 3)
         }
+        if (mode == 2) {
+            decodeSixReference({ y, x -> unpack(y * rowStride + (x / 4) * 5, x % 4) }, black,
+                outWidth, outHeight, out)
+            return
+        }
         for (oy in 0 until outHeight) {
             val iy = (oy and 1.inv()) * 2 + (oy and 1)
             val rowOut = oy * outWidth
@@ -1481,6 +1648,22 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                 val odd = unpack(a, 1) + unpack(a, 3) + unpack(b, 1) + unpack(b, 3)
                 out[rowOut + group * 2] = Math.floorDiv(even - 4 * black[blackRow] + 2, 4)
                 out[rowOut + group * 2 + 1] = Math.floorDiv(odd - 4 * black[blackRow + 1] + 2, 4)
+            }
+        }
+    }
+
+    /** Decode mode 2 for either format: site (ox, oy) is the mean of the nine same-colour
+     *  pixels of its 6x6 block, [px] (row, column) reading one black-unremoved pixel. */
+    private fun decodeSixReference(
+        px: (Int, Int) -> Int, black: IntArray, outWidth: Int, outHeight: Int, out: IntArray
+    ) {
+        for (oy in 0 until outHeight) {
+            val y0 = (oy shr 1) * 6 + (oy and 1)
+            for (ox in 0 until outWidth) {
+                val x0 = (ox shr 1) * 6 + (ox and 1)
+                var sum = 0
+                for (dy in 0..4 step 2) for (dx in 0..4 step 2) sum += px(y0 + dy, x0 + dx)
+                out[oy * outWidth + ox] = Math.floorDiv(sum - 9 * black[(y0 and 1) * 2 + (x0 and 1)] + 4, 9)
             }
         }
     }

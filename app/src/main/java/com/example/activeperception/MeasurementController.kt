@@ -42,14 +42,17 @@ private const val BUDGET_RING = 8
 private val BUDGET_PATTERNS = listOf(listOf(1), listOf(2), listOf(4), listOf(6), listOf(1, 1), listOf(2, 1),
     listOf(2, 2), listOf(3, 3), listOf(1, 1, 1), listOf(2, 2, 2), listOf(1, 1, 1, 1), List(6) { 1 })
 private typealias BudgetRead = Pair<RawFrame, RawSensorCapturer.RawMeta>
+/** How the budget probe's reads reach the analysis: stream = read back to back, each decoded on
+ *  arrival; lazy = read back to back, decoded only when an output takes it; paced = only the
+ *  reads an output uses are requested (the next output's while this one is worked on). */
+private val BUDGET_MODES = setOf("stream", "lazy", "paced")
 
 /** Additional-exposure check ([MeasurementController.runAddl]): reads per queued burst, bursts
  *  queued (a new key setting reaches the sensor within about ADDL_BURST x ADDL_QUEUED reads),
- *  newest reads kept, and the output period. */
+ *  newest reads kept. The output period is [MeasurementController.outputPeriodMs]. */
 private const val ADDL_BURST = 3
 private const val ADDL_QUEUED = 3
 private const val ADDL_RING = 10
-private const val ADDL_PERIOD_MS = 100L
 
 /** Fast PhysSweep ([MeasurementController.runPhysSweepFast]): sweep cells visited a window, next to
  *  the output's read (the detector fits 4 images in a 100 ms window). */
@@ -181,6 +184,23 @@ class MeasurementController(
      *  the newest fresh read of a continuous stream; their decision rules are unchanged. Set by
      *  the activity before the run starts. */
     @Volatile var parallelCapture: Boolean = false
+    /** The parallel structure's output clock, ms: [RawSensorCapturer.startParallel]'s period and
+     *  [runAddl]'s and [runPhysSweepFast]'s window. 100 = the phone's 10 fps. */
+    @Volatile var outputPeriodMs: Long = 100L
+    /** Outputs whose reads the capture side keeps requested ahead; 0 = the phone's continuous
+     *  stream (read back to back, decode every read). The glass: 2 (2026-10-30). */
+    @Volatile var captureAhead: Int = 0
+    /** The glass's lazy capture (2026-10-30): the sensor keeps reading, every read is kept
+     *  undecoded and only those an output takes are decoded; overrides [captureAhead]. */
+    @Volatile var captureLazy: Boolean = false
+    /** The images one output may detect (0 = no cap): the detector's share of the output period,
+     *  for the methods that size their work by the window (the proposed method's additional
+     *  exposures, fast PhysSweep's candidates). The glass at 500 ms: 3 (2026-10-30, budget
+     *  probe: 3 images in 450 ms for 90% of outputs). */
+    @Volatile var budgetImages: Int = 0
+    /** At most [cap] - 1 extra images besides the output's own, under [budgetImages]. */
+    private fun underBudget(extraImages: Int) =
+        if (budgetImages > 0) minOf(extraImages, budgetImages - 1) else extraImages
     /** A method with its own capture thread (runAddl, runBudgetProbe): parallel whatever
      *  [parallelCapture] says; only the manifest reads it. */
     private var ownCaptureThread = false
@@ -204,8 +224,13 @@ class MeasurementController(
         if (ExperimentSession.lighting.isNotEmpty()) m.put("lighting", ExperimentSession.lighting)
         if (ExperimentSession.session.isNotEmpty()) m.put("experiment_session", ExperimentSession.session)
         if (ExperimentSession.limoSpeed.isNotEmpty()) m.put("limo_speed_setting", ExperimentSession.limoSpeed)
-        m.put("capture_structure", if (parallelCapture || ownCaptureThread) "parallel: capture thread streams, one output every 100 ms " +
-            "from the newest fresh reads" else "serial: capture, then analysis, then the next capture")
+        m.put("capture_structure", if (parallelCapture || ownCaptureThread) "parallel: capture thread " +
+            (if (captureLazy) "streams, decoding only the reads an output takes"
+             else if (captureAhead > 0) "requests the reads of the next $captureAhead outputs" else "streams") +
+            ", one output every $outputPeriodMs ms from the newest fresh reads"
+            else "serial: capture, then analysis, then the next capture")
+        m.put("output_period_ms", outputPeriodMs).put("capture_ahead", captureAhead).put("capture_lazy", captureLazy)
+            .put("budget_images", budgetImages)
         m.put("grid", JSONObject().apply {
             put("gains", JSONArray(grid.gains.toTypedArray()))
             put("exposures_us", JSONArray(grid.exposuresUs.toTypedArray()))
@@ -336,7 +361,7 @@ class MeasurementController(
         fun open(onStatus: (String) -> Unit) {
             raw.configureDecodeThreads(4)
             raw.startFastCapture()
-            if (parallelCapture) raw.startParallel()
+            if (parallelCapture) raw.startParallel(periodMs = outputPeriodMs, ahead = captureAhead, lazy = captureLazy)
             onStatus("warming FP16 GPU B=1/3/9…")
             tfl.warmUpAllBatches()
         }
@@ -588,8 +613,16 @@ class MeasurementController(
      * end to in hand), budget_outputs.csv (every output: wait, align, form, GPU run, decode,
      * total, latency from the last read's exposure end) and budget_summary.json (medians and
      * 90th percentiles per phase; each pattern's first 2 outputs left out as warm-up).
+     *
+     * [mode] (see BUDGET_MODES, 2026-10-30 for the glass, where decoding every read slows the
+     * analysis): lazy logs the decoding of the reads an output takes as rawdec_ms, inside its
+     * total; paced has no free-running capture, so no capture-only and no held phases.
+     * [patternsIn] replaces BUDGET_PATTERNS. [ahead]: outputs whose reads paced keeps requested.
      */
-    fun runBudgetProbe(onStatus: (String) -> Unit) {
+    fun runBudgetProbe(onStatus: (String) -> Unit, mode: String = "stream",
+                       patternsIn: List<List<Int>>? = null, ahead: Int = 1) {
+        require(mode in BUDGET_MODES) { "budget mode $mode not in $BUDGET_MODES" }
+        val patterns = patternsIn ?: BUDGET_PATTERNS
         val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
             ?: error("the budget probe requires TfliteYoloDetector")
         val iso = 1600; val us = 4167
@@ -599,8 +632,11 @@ class MeasurementController(
         startPass("budget_probe", isGtReference = false, withFrames = false, methodParams = JSONObject()
             .put("rule", "capture thread: reads back to back (two bursts of $BUDGET_BURST queued); analysis " +
                 "thread: outputs from the newest unused reads, back to back, per lane pattern")
+            .put("capture_mode", mode).put("paced_ahead", ahead)
+            .put("raw_format", if (raw.streamFormat == ImageFormat.RAW10) "RAW10" else "RAW_SENSOR")
+            .put("decode_block", if (raw.decodeMode == 2) 6 else 4)
             .put("iso", iso).put("analog_iso", phys).put("exposure_us", us)
-            .put("patterns", JSONArray(BUDGET_PATTERNS.map { JSONArray(it) }))
+            .put("patterns", JSONArray(patterns.map { JSONArray(it) }))
             .put("outputs_per_pattern", BUDGET_OUTPUTS).put("warmup_outputs", 2)
             .put("align", "BurstAlign on every tile (upper bound), 4 threads")
             .put("not_run", "fusion, How-to-Sense choice")
@@ -610,15 +646,23 @@ class MeasurementController(
             "since_prev_ms", "in_hand_ms"))
         logger.csv("budget_outputs", listOf("phase", "idx", "lanes", "n_raw", "n_img", "wait_ms",
             "align_ms", "form_ms", "run_ms", "dec_ms", "total_ms", "since_prev_output_ms",
-            "latency_ms", "span_ms", "max_gap_ms", "skipped_reads", "n_dets"))
+            "latency_ms", "span_ms", "max_gap_ms", "skipped_reads", "n_dets", "rawdec_ms"))
         val src = ParallelRawCandidateSource(grid, raw,
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
         raw.startFastCapture()
+        raw.armNativeDecodeValidation()
         onStatus("budget: warming FP16 GPU batches…")
         tfl.warmUpAllBatches()
         val alignPool = Executors.newFixedThreadPool(4)
-        val ring = ArrayDeque<BudgetRead>()
+        /** A read in the ring: decoded on arrival, or (lazy) still the camera's buffer, decoded
+         *  when an output takes it and released unread when it falls out of the ring. */
+        class ProbeRead(val ts: Long, val expUs: Long, var read: BudgetRead?,
+                        val pending: RawSensorCapturer.PendingRead?) {
+            fun take(): BudgetRead = read ?: pending!!.decode().also { read = it }
+            fun release() { pending?.close() }
+        }
+        val ring = ArrayDeque<ProbeRead>()
         val lock = java.lang.Object()
         val phase = java.util.concurrent.atomic.AtomicReference("capture_only")
         val capturing = java.util.concurrent.atomic.AtomicBoolean(true)
@@ -629,7 +673,7 @@ class MeasurementController(
         val capThread = Thread({
             val queued = ArrayDeque<RawSensorCapturer.BracketHandle>()
             fun submit() { queued.addLast(raw.beginBracketSequence(List(BUDGET_BURST) { us to phys },
-                android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE)) }
+                android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE, deferDecode = mode == "lazy")) }
             var seq = 0; var prevTs = 0L; var failures = 0
             try {
                 submit(); submit()
@@ -638,20 +682,24 @@ class MeasurementController(
                     submit()
                     try {
                         for (i in 0 until h.count) {
-                            val (fr, m) = raw.takeBracketFrame(h, i)
+                            val pr = if (mode == "lazy") raw.takeBracketPending(h, i).let {
+                                ProbeRead(it.timestamp, it.exposureUs, null, it)
+                            } else raw.takeBracketFrame(h, i).let { (fr, m) ->
+                                ProbeRead(m.timestamp, m.appliedExpUs, fr to m, null)
+                            }
                             val inHand = SystemClock.elapsedRealtimeNanos()
-                            val since = if (prevTs == 0L) Double.NaN else (m.timestamp - prevTs) / 1e6
-                            val inHandMs = (inHand - m.timestamp - m.appliedExpUs * 1000L) / 1e6
+                            val since = if (prevTs == 0L) Double.NaN else (pr.ts - prevTs) / 1e6
+                            val inHandMs = (inHand - pr.ts - pr.expUs * 1000L) / 1e6
                             val ph = phase.get()
-                            logger.row("budget_raws", listOf(ph, seq, m.timestamp, m.appliedExpUs,
-                                m.frameDurationNs, "%.3f".format(since), "%.2f".format(inHandMs)))
+                            logger.row("budget_raws", listOf(ph, seq, pr.ts, pr.expUs,
+                                pr.read?.second?.frameDurationNs ?: -1, "%.3f".format(since), "%.2f".format(inHandMs)))
                             synchronized(lock) {
                                 rawStats.getOrPut(ph) { ArrayList() } += doubleArrayOf(since, inHandMs)
-                                ring.addLast(fr to m)
-                                while (ring.size > BUDGET_RING) ring.removeFirst()
+                                ring.addLast(pr)
+                                while (ring.size > BUDGET_RING) ring.removeFirst().release()
                                 lock.notifyAll()
                             }
-                            prevTs = m.timestamp; seq++
+                            prevTs = pr.ts; seq++
                         }
                         failures = 0
                     } catch (t: Throwable) {
@@ -672,6 +720,7 @@ class MeasurementController(
         }, "budget-capture")
 
         class Parts(val alignMs: Double, val formMs: Double, val runMs: Double, val decMs: Double, val nDets: Int)
+        var firstImageSaved = false
         /** One output's work on [reads] in time order: lanes of [lanes] reads, each lane's later
          *  reads moved back onto its first and summed, every lane detected in one call. */
         fun work(reads: List<BudgetRead>, lanes: List<Int>): Parts {
@@ -693,43 +742,76 @@ class MeasurementController(
             val tf = now()
             val tensor = src.formLanesTensor(laneFrames, DoubleArray(lanes.size) { ratio })
             val formMs = ms(tf)
+            if (!firstImageSaved) {     // a look at the decode + formation; a warm-up output
+                firstImageSaved = true
+                logger.saveJpegAsync("first_output", src.selectedTensorBitmap(tensor, 0))
+            }
             val dets = tfl.detectTensorBatchOptimized(tensor.batch)
             return Parts(alignMs, formMs, tfl.lastRunMs, tfl.lastDecodeMs, dets.sumOf { d -> d.count { it.confidence >= 0.25f } })
         }
         fun logOut(ph: String, idx: Int, lanes: List<Int>, waitMs: Double, p: Parts, totalMs: Double,
-                   sincePrev: Double, latency: Double, span: Double, maxGap: Double, skipped: Int) {
+                   sincePrev: Double, latency: Double, span: Double, maxGap: Double, skipped: Int,
+                   rawDecMs: Double = 0.0) {
             logger.row("budget_outputs", listOf(ph, idx, lanes.joinToString("+"), lanes.sum(), lanes.size,
                 "%.2f".format(waitMs), "%.2f".format(p.alignMs), "%.2f".format(p.formMs), "%.2f".format(p.runMs),
                 "%.2f".format(p.decMs), "%.2f".format(totalMs), "%.2f".format(sincePrev), "%.2f".format(latency),
-                "%.2f".format(span), "%.2f".format(maxGap), skipped, p.nDets))
+                "%.2f".format(span), "%.2f".format(maxGap), skipped, p.nDets, "%.2f".format(rawDecMs)))
             if (idx >= 2) outStats.getOrPut(ph) { ArrayList() } += doubleArrayOf(waitMs, p.alignMs, p.formMs,
-                p.runMs, p.decMs, totalMs, sincePrev, latency, span, maxGap, skipped.toDouble())
+                p.runMs, p.decMs, totalMs, sincePrev, latency, span, maxGap, skipped.toDouble(), rawDecMs)
         }
 
         var held: List<BudgetRead> = emptyList()
+        val pacedQueue = ArrayDeque<RawSensorCapturer.BracketHandle>()
         try {
-            capThread.start()
-            onStatus("budget: capture only")
-            Thread.sleep(3000)
+            if (mode != "paced") {
+                capThread.start()
+                onStatus("budget: capture only")
+                Thread.sleep(3000)
+            }
             var lastUsed = 0L
-            for (lanes in BUDGET_PATTERNS) {
+            var pacedSeq = 0; var pacedPrevTs = 0L
+            /** Paced: the next output's r reads, requested now so they are read while the
+             *  current output is worked on. */
+            fun pacedRequest(r: Int) = raw.beginBracketSequence(List(r) { us to phys },
+                android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE)
+            for (lanes in patterns) {
                 if (!running || capError.get() != null) break
                 val r = lanes.sum()
                 val ph = "p_" + lanes.joinToString("+")
                 phase.set(ph)
-                onStatus("budget: $ph")
+                onStatus("budget: $mode $ph")
                 var prevOut = 0L
+                while (pacedQueue.isNotEmpty()) raw.abortBracketSequence(pacedQueue.removeFirst())
+                if (mode == "paced") repeat(ahead) { pacedQueue.addLast(pacedRequest(r)) }
                 for (idx in 0 until BUDGET_OUTPUTS) {
                     val t0 = now()
-                    // The newest r reads newer than the last output's: same moment, freshest.
                     var skipped = 0
-                    val reads: List<BudgetRead> = synchronized(lock) {
-                        while (capturing.get() && ring.count { it.second.timestamp > lastUsed } < r) lock.wait(50)
-                        val fresh = ring.filter { it.second.timestamp > lastUsed }
-                        if (fresh.size < r) emptyList() else { skipped = fresh.size - r; fresh.takeLast(r) }
+                    var rawDecMs = 0.0
+                    val reads: List<BudgetRead> = if (mode == "paced") {
+                        val h = pacedQueue.removeFirst()
+                        val got = (0 until r).map { i -> raw.takeBracketFrame(h, i) }
+                        pacedQueue.addLast(pacedRequest(r))
+                        for ((_, m) in got) {
+                            val since = if (pacedPrevTs == 0L) Double.NaN else (m.timestamp - pacedPrevTs) / 1e6
+                            val inHandMs = (SystemClock.elapsedRealtimeNanos() - m.timestamp - m.appliedExpUs * 1000L) / 1e6
+                            logger.row("budget_raws", listOf(ph, pacedSeq++, m.timestamp, m.appliedExpUs,
+                                m.frameDurationNs, "%.3f".format(since), "%.2f".format(inHandMs)))
+                            rawStats.getOrPut(ph) { ArrayList() } += doubleArrayOf(since, inHandMs)
+                            pacedPrevTs = m.timestamp
+                        }
+                        got
+                    } else {
+                        // The newest r reads newer than the last output's: same moment, freshest.
+                        val picked: List<ProbeRead> = synchronized(lock) {
+                            while (capturing.get() && ring.count { it.ts > lastUsed } < r) lock.wait(50)
+                            val fresh = ring.filter { it.ts > lastUsed }
+                            if (fresh.size < r) emptyList() else { skipped = fresh.size - r; fresh.takeLast(r) }
+                        }
+                        val td = now()
+                        picked.map { it.take() }.also { if (mode == "lazy") rawDecMs = ms(td) }
                     }
                     if (reads.isEmpty()) break
-                    val waitMs = ms(t0)
+                    val waitMs = ms(t0) - rawDecMs
                     lastUsed = reads.last().second.timestamp
                     val p = work(reads, lanes)
                     val outNs = SystemClock.elapsedRealtimeNanos()
@@ -739,11 +821,11 @@ class MeasurementController(
                         if (prevOut == 0L) Double.NaN else (outNs - prevOut) / 1e6,
                         (outNs - last.timestamp - last.appliedExpUs * 1000L) / 1e6,
                         (last.timestamp + last.appliedExpUs * 1000L - reads[0].second.timestamp) / 1e6,
-                        gaps.maxOrNull() ?: 0.0, skipped)
+                        gaps.maxOrNull() ?: 0.0, skipped, rawDecMs)
                     prevOut = outNs
                 }
             }
-            held = synchronized(lock) { ring.toList().takeLast(6) }
+            if (mode == "stream") held = synchronized(lock) { ring.toList().takeLast(6).map { it.take() } }
             capturing.set(false)
             capThread.join(3000)
             raw.stopFastCapture()
@@ -760,7 +842,9 @@ class MeasurementController(
             }
         } finally {
             capturing.set(false)
+            pacedQueue.forEach { raw.abortBracketSequence(it) }
             runCatching { capThread.join(3000) }
+            synchronized(lock) { ring.forEach { it.release() }; ring.clear() }
             runCatching { raw.stopFastCapture() }
             runCatching { src.shutdown() }
             alignPool.shutdown()
@@ -772,7 +856,7 @@ class MeasurementController(
         }
         val summary = JSONObject().put("capture_error", capError.get()?.toString() ?: JSONObject.NULL)
         val names = listOf("wait_ms", "align_ms", "form_ms", "run_ms", "dec_ms", "total_ms",
-            "since_prev_output_ms", "latency_ms", "span_ms", "max_gap_ms", "skipped_reads")
+            "since_prev_output_ms", "latency_ms", "span_ms", "max_gap_ms", "skipped_reads", "rawdec_ms")
         for ((ph, rows) in outStats) {
             val o = JSONObject().put("n", rows.size)
             names.forEachIndexed { i, nm -> o.put(nm, JSONObject().put("median", q(rows.map { it[i] }, 0.5)).put("p90", q(rows.map { it[i] }, 0.9))) }
@@ -792,6 +876,7 @@ class MeasurementController(
                 .put("in_hand_ms_median", q(rs.map { it[1] }, 0.5)).put("in_hand_ms_p90", q(rs.map { it[1] }, 0.9))))
         }
         runCatching { java.io.File(logger.dir, "budget_summary.json").writeText(summary.toString(2)) }
+        writeDecodeCheck()
         onStatus("budget: done" + (capError.get()?.let { " (capture error: ${it.message})" } ?: ""))
         endPass()
     }
@@ -799,8 +884,9 @@ class MeasurementController(
     /**
      * Additional-exposure check (2026-10-29): how detection grows with the reads one output
      * spends on its moment, capture and analysis on separate threads at a fixed 10 fps. A capture
-     * thread keeps the sensor reading back to back at the key exposure's setting; every
-     * [ADDL_PERIOD_MS] the analysis thread forms one output from the newest reads:
+     * thread keeps the sensor reading back to back at the key exposure's setting (with
+     * [captureAhead] > 0, only the next outputs' reads); every [outputPeriodMs] the analysis
+     * thread forms one output from the newest reads:
      * - single exposure frame: the newest read alone (the key exposure);
      * - additional exposure frame (the frame after one whose image 0 had a weak trace): the newest
      *   [extra] + 1 consecutive reads at the key setting, the first the key exposure, the rest its
@@ -845,8 +931,10 @@ class MeasurementController(
         startPass(name, isGtReference = false, methodParams = JSONObject()
             .put("mode", name).put("extra_reads", extra).put("merge", merge)
             .put("every_frame_additional", everyFrameAdditional)
-            .put("structure", "capture thread: reads back to back at the key setting (bursts of $ADDL_BURST, " +
-                "$ADDL_QUEUED queued); analysis thread: one output every $ADDL_PERIOD_MS ms from the newest reads")
+            .put("structure", (if (captureAhead > 0) "capture thread: one burst per output at the key setting, " +
+                "the next $captureAhead outputs' requested" else "capture thread: reads back to back at the key " +
+                "setting (bursts of $ADDL_BURST, $ADDL_QUEUED queued)") +
+                "; analysis thread: one output every $outputPeriodMs ms from the newest reads")
             .put("single_frame", "the newest read alone (key exposure)")
             .put("additional_frame", "after a frame whose image 0 had a weak trace: the newest ${extra + 1} " +
                 "consecutive reads at the key setting, the first the key exposure")
@@ -868,7 +956,7 @@ class MeasurementController(
         logger.csv("addl_frames", listOf("idx", "kind", "n_reads", "n_images", "iso", "shutter_us",
             "key_ts", "last_end_ts", "t_output", "wait_ms", "align_ms", "form_ms", "infer_ms", "shift_ms",
             "fusion_ms", "choose_ms", "total_ms", "clock_late_ms", "latency_ms", "max_gap_ms", "skipped_reads",
-            "n_out", "n_weak", "moved_to_iso", "moved_to_shutter_us"))
+            "n_out", "n_weak", "moved_to_iso", "moved_to_shutter_us", "rawdec_ms"))
         val src = ParallelRawCandidateSource(grid, raw,
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
@@ -879,34 +967,70 @@ class MeasurementController(
         val alignPool = Executors.newFixedThreadPool(4)
         val chooseLead = Executors.newSingleThreadExecutor()
 
-        class Read(val frame: RawFrame, val meta: RawSensorCapturer.RawMeta, val cell: Int)
+        /** A read in the ring: decoded on arrival, or ([captureLazy]) still the camera's buffer,
+         *  decoded when an output takes it and released unread when it falls out of the ring. */
+        class Read(val ts: Long, val cell: Int, decoded: Pair<RawFrame, RawSensorCapturer.RawMeta>?,
+                   val pending: RawSensorCapturer.PendingRead?) {
+            @Volatile private var d = decoded
+            @Volatile var taken = false
+            val frame: RawFrame get() = d!!.first
+            val meta: RawSensorCapturer.RawMeta get() = d!!.second
+            fun take() { if (d == null) d = pending!!.decode() }
+            fun release() { if (!taken && d == null) pending?.close() }
+        }
         val ring = ArrayDeque<Read>()
         val lock = java.lang.Object()
         val capturing = java.util.concurrent.atomic.AtomicBoolean(true)
         val capError = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        /** Lazy: how long before the output clock the reads are picked, so their decoding is done
+         *  by the clock; follows the decodes measured (plus 10 ms). */
+        var decodeLeadNs = 120_000_000L
+        /** Sensor time of the newest read handed to an output (the capture side reads it too, under
+         *  the lock, to size its requests; a stale value only delays one request by a poll). */
+        var lastUsed = 0L
+        /** Additional exposures that fit one window's sensor time with a key read at cell c. */
+        fun fitFor(c: Int) = underBudget(maxOf(0, (outputPeriodMs / sensorHoldMs(Duel.SHUTTERS_US[c % 5])).toInt() - 1))
         val capThread = Thread({
             val queued = ArrayDeque<Pair<RawSensorCapturer.BracketHandle, Int>>()
+            /** Demand mode: one burst = one output's reads at cell c (the key and the additional
+             *  exposures that fit); otherwise ADDL_BURST. */
+            val ahead = if (captureLazy) 0 else captureAhead
+            fun burstFor(c: Int) = if (ahead > 0) 1 + (if (extra > 0) minOf(extra, fitFor(c)) else 0) else ADDL_BURST
             fun submit() {
                 val c = cell.get()
                 val us = Duel.SHUTTERS_US[c % 5]; val phys = minOf(Duel.ISOS[c / 5], ceil)
-                queued.addLast(raw.beginBracketSequence(List(ADDL_BURST) { us to phys },
-                    android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE) to c)
+                queued.addLast(raw.beginBracketSequence(List(burstFor(c)) { us to phys },
+                    android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE, deferDecode = captureLazy) to c)
+            }
+            /** Demand mode: fewer than [captureAhead] outputs' reads at the requested cell are in
+             *  flight or arrived unused. */
+            fun wanted(): Boolean {
+                val c = cell.get()
+                val unused = synchronized(lock) { ring.count { it.ts > lastUsed && it.cell == c } }
+                return queued.sumOf { if (it.second == c) it.first.count else 0 } + unused < ahead * burstFor(c)
+            }
+            fun drain(h: RawSensorCapturer.BracketHandle, c: Int) {
+                for (i in 0 until h.count) {
+                    val r = if (captureLazy) raw.takeBracketPending(h, i).let { Read(it.timestamp, c, null, it) }
+                        else raw.takeBracketFrame(h, i).let { (fr, m) -> Read(m.timestamp, c, fr to m, null) }
+                    synchronized(lock) {
+                        ring.addLast(r)
+                        while (ring.size > ADDL_RING) ring.removeFirst().release()
+                        lock.notifyAll()
+                    }
+                }
             }
             var failures = 0
             try {
-                repeat(ADDL_QUEUED) { submit() }
+                if (ahead == 0) repeat(ADDL_QUEUED) { submit() }
                 while (capturing.get() && running) {
-                    val (h, c) = queued.removeFirst()
-                    submit()
+                    if (ahead > 0) while (queued.size < ADDL_QUEUED && wanted()) submit()
+                    val head = queued.removeFirstOrNull()
+                    if (head == null) { synchronized(lock) { lock.wait(5) }; continue }
+                    val (h, c) = head
+                    if (ahead == 0) submit()
                     try {
-                        for (i in 0 until h.count) {
-                            val (fr, m) = raw.takeBracketFrame(h, i)
-                            synchronized(lock) {
-                                ring.addLast(Read(fr, m, c))
-                                while (ring.size > ADDL_RING) ring.removeFirst()
-                                lock.notifyAll()
-                            }
-                        }
+                        drain(h, c)
                         failures = 0
                     } catch (t: Throwable) {
                         android.util.Log.e("Addl", "burst failed", t)
@@ -926,7 +1050,6 @@ class MeasurementController(
         val map = HowToSense.ObjectMap()
         var prevTrace = false
         var prevTraceCells = BooleanArray(HowToSense.N)
-        var lastUsed = 0L
         fun jsonBox(b: DoubleArray) = JSONArray(b.toList())
         fun median(v: List<Double>): Double {
             val s = v.sorted(); val m = s.size
@@ -937,19 +1060,21 @@ class MeasurementController(
             var f = 0
             var tick = now()
             while (running && f < maxFrames && capError.get() == null) {
-                // ---- the output clock: a frame ADDL_PERIOD_MS after the previous one started, at once
+                // ---- the output clock: a frame outputPeriodMs after the previous one started, at once
                 // when that one overran (lateMs: by how much).
-                val lead = tick - now()
+                // Lazy: wake early by the decoding time so the reads are decoded by the clock.
+                val lead = tick - (if (captureLazy) decodeLeadNs else 0L) - now()
                 if (lead > 0) Thread.sleep(lead / 1_000_000, (lead % 1_000_000).toInt())
                 val t0 = now()
-                val lateMs = (t0 - tick) / 1e6
-                tick = t0 + ADDL_PERIOD_MS * 1_000_000L
+                val lateMs = (t0 - (tick - (if (captureLazy) decodeLeadNs else 0L))) / 1e6
+                tick = maxOf(tick, t0) + outputPeriodMs * 1_000_000L
                 stepClock.begin()
                 // ---- 1. reads: the newest 1 or 1 + additional at the newest read's setting, never used
                 // before. Additional exposures: [extra], or fewer when the key's reads would not fit
                 // the window's sensor time (a 1/30 key: 1, a 1/15 key: none).
-                val keyUs = Duel.SHUTTERS_US[synchronized(lock) { ring.lastOrNull()?.cell ?: cell.get() } % 5]
-                val fit = maxOf(0, (ADDL_PERIOD_MS / sensorHoldMs(keyUs)).toInt() - 1)
+                val keyCell = synchronized(lock) { ring.lastOrNull()?.cell ?: cell.get() }
+                val keyUs = Duel.SHUTTERS_US[keyCell % 5]
+                val fit = fitFor(keyCell)
                 val additional = extra > 0 && fit > 0 && (prevTrace || everyFrameAdditional)
                 val kind = if (additional) "additional" else "single"
                 val need = if (additional) 1 + minOf(extra, fit) else 1
@@ -957,15 +1082,27 @@ class MeasurementController(
                 val reads: List<Read> = synchronized(lock) {
                     fun fresh(): List<Read> {
                         val newest = ring.lastOrNull() ?: return emptyList()
-                        return ring.filter { it.meta.timestamp > lastUsed && it.cell == newest.cell }
+                        return ring.filter { it.ts > lastUsed && it.cell == newest.cell }
                     }
                     while (capturing.get() && fresh().size < need) lock.wait(20)
                     val fr = fresh()
-                    if (fr.size < need) emptyList() else { skipped = fr.size - need; fr.takeLast(need) }
+                    // Demand mode takes the oldest: they were requested for this output, the newer
+                    // ones for the next.
+                    if (fr.size < need) emptyList()
+                    else {
+                        skipped = fr.size - need
+                        (if (captureAhead > 0 && !captureLazy) fr.take(need) else fr.takeLast(need))
+                            .also { picked -> picked.forEach { it.taken = true } }
+                    }
                 }
                 if (reads.isEmpty()) break
+                // Lazy: decode the picked reads now, together.
+                val tDec = now()
+                if (captureLazy) reads.map { r -> alignPool.submit { r.take() } }.forEach { it.get() }
+                val rawDecMs = ms(tDec)
+                if (captureLazy) decodeLeadNs = (0.7 * decodeLeadNs + 0.3 * (rawDecMs + 10.0) * 1e6).toLong()
                 val waitMs = ms(t0)
-                lastUsed = reads.last().meta.timestamp
+                lastUsed = reads.last().ts
                 val key = reads[0]
                 val metas = reads.map { it.meta }
                 stepClock.captured(metas)
@@ -1170,7 +1307,8 @@ class MeasurementController(
                     "%.1f".format(chooseMs), "%.1f".format(totalMs), "%.1f".format(lateMs),
                     "%.1f".format((tOutputNs - lastEnd) / 1e6), "%.1f".format(gaps.maxOrNull() ?: 0.0), skipped,
                     outDets.size, per[0].weak.size,
-                    if (moved) Duel.ISOS[cell.get() / 5] else "", if (moved) Duel.SHUTTERS_US[cell.get() % 5] else ""))
+                    if (moved) Duel.ISOS[cell.get() / 5] else "", if (moved) Duel.SHUTTERS_US[cell.get() % 5] else "",
+                    "%.1f".format(rawDecMs)))
                 val bmp = src.selectedTensorBitmap(tensor, 0)
                 val path = saveImage("${frameName(f)}_base", bmp)
                 logFrame(f, name, lattice.cell(gIdx, sIdx), iso, Duel.SHUTTERS_US[sIdx], n, reads.size > 1,
@@ -1184,6 +1322,7 @@ class MeasurementController(
         } finally {
             capturing.set(false)
             runCatching { capThread.join(3000) }
+            synchronized(lock) { ring.forEach { it.release() }; ring.clear() }
             runCatching { chooseLead.shutdownNow(); alignPool.shutdownNow() }
             runCatching { raw.stopFastCapture() }
             runCatching { src.shutdown() }
@@ -1286,10 +1425,17 @@ class MeasurementController(
      *  up to 1/60 one 16.7 ms slot; a 1/30 read ~46 ms before the next read starts; a 1/15 read
      *  ~146 ms, with or without an explicit frame duration. Budgeted a little above (50, 170): at
      *  46 / 146 fast PhysSweep's windows after a long read still ran ~6% over 100 ms on average. */
-    private fun sensorHoldMs(exposureUs: Int) = when (exposureUs) {
-        in 0..16_667 -> 16.7
-        in 16_668..33_334 -> 50.0
-        else -> 170.0
+    /** Sensor time one read at [exposureUs] holds: the S26's measured 16.7 / 50 / 170 ms
+     *  (1/240-1/60, 1/30, 1/15) when its frames are 16.7 ms; otherwise (the glass, 33.3 ms
+     *  frames) the whole frames that cover the exposure, an estimate not yet measured. */
+    private fun sensorHoldMs(exposureUs: Int): Double {
+        val frameMs = raw.streamMinFrameDurationNs / 1e6
+        if (frameMs < 25.0) return when (exposureUs) {
+            in 0..16_667 -> 16.7
+            in 16_668..33_334 -> 50.0
+            else -> 170.0
+        }
+        return frameMs * maxOf(1.0, Math.ceil(exposureUs / 1000.0 / frameMs - 1e-6))
     }
 
     /**
@@ -1316,11 +1462,12 @@ class MeasurementController(
         }
         fun ratio(c: Int): Double { val gain = g.gains[g.indices(c).first]; return gain.toDouble() / minOf(gain, ceil) }
         fun holdMs(c: Int) = sensorHoldMs(g.exposuresUs[g.indices(c).second])
+        val candidates = underBudget(PHYS_FAST_CANDIDATES)
         startPass("physsweep_fast_v2", isGtReference = false, methodParams = JSONObject()
             .put("baseline", "phys_sweep_lens_iclr25 in the parallel structure (fast)")
             .put("rule", "output = the best-scored cell's read; spare slots of each window visit the next " +
                 "sweep cells, detected only to score them; continuous sweep, no hold; best = highest latest score")
-            .put("candidates_per_output", PHYS_FAST_CANDIDATES).put("slots_per_output", 6)
+            .put("candidates_per_output", candidates).put("slots_per_output", 6)
             .put("score", "V3 sum of confidences of the cell's own image (as PhysSweep)")
             .put("cold_start", "cell 0 (PhysSweep's first frame)")
             .put("space", "v2_lattice_5x5").put("session", v2SessionTag)
@@ -1337,9 +1484,9 @@ class MeasurementController(
              *  in a window with no debt. Returns them and how far the cursor moves. */
             fun window(b: Int): Pair<List<Int>, Int> {
                 val out = ArrayList<Int>()
-                val avail = ADDL_PERIOD_MS - holdMs(b) - debtMs
+                val avail = outputPeriodMs - holdMs(b) - debtMs
                 var used = 0.0; var k = 0; var moved = 0
-                while (out.size < PHYS_FAST_CANDIDATES && k < nCells) {
+                while (out.size < candidates && k < nCells) {
                     val c = (cursor + k) % nCells
                     k++
                     if (c == b) { moved = k; continue }
@@ -1347,7 +1494,7 @@ class MeasurementController(
                     if (!fits) break
                     out += c; used += holdMs(c); moved = k
                 }
-                debtMs = maxOf(0.0, debtMs + holdMs(b) + used - ADDL_PERIOD_MS)
+                debtMs = maxOf(0.0, debtMs + holdMs(b) + used - outputPeriodMs)
                 return out to moved
             }
             // Windows are planned two ahead and each queued once (candidates first, the output's
@@ -1664,7 +1811,7 @@ class MeasurementController(
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
         raw.startFastCapture()
-        if (parallelCapture) raw.startParallel()
+        if (parallelCapture) raw.startParallel(periodMs = outputPeriodMs, ahead = captureAhead, lazy = captureLazy)
         tfl?.warmUpAllBatches()
         var f = 0
         try { while (running && f < maxFrames) {
@@ -2003,7 +2150,7 @@ class MeasurementController(
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
         raw.startFastCapture()
-        if (parallelCapture) raw.startParallel()
+        if (parallelCapture) raw.startParallel(periodMs = outputPeriodMs, ahead = captureAhead, lazy = captureLazy)
         onStatus("warming FP16 GPU batches...")
         tfl.warmUpAllBatches()
         var gi = 2; var sj = 2               // cold start: ISO 400 / rung 2 (1/60 s on the 1/240-1/15 rungs)
@@ -2379,7 +2526,7 @@ class MeasurementController(
                 }
                 val legacy = pipelineAB && f % 2 == 1
                 val pipeline = if (legacy) "legacy" else "current"
-                raw.decodeMode = if (legacy) 1 else 0
+                raw.decodeMode = if (legacy) 1 else raw.defaultDecodeMode
                 src.resampleMode = if (legacy) 1 else 0
 
                 val units = ArrayList<Unit55>()
@@ -2640,7 +2787,7 @@ class MeasurementController(
                 f++
             }
         } finally {
-            raw.decodeMode = 0
+            raw.decodeMode = raw.defaultDecodeMode
             src.resampleMode = 0
             runCatching { raw.stopFastCapture() }
             runCatching { src.shutdown() }
@@ -2719,6 +2866,11 @@ class MeasurementController(
         writeManifest(method, isGtReference, w, h, methodParams)
         if (withFrames) logger.csv("frames", headers())
         wireImuLog()
+        if (parallelCapture) {      // every read's journey (RawSensorCapturer.readTimingSink)
+            logger.csv("read_timing", listOf("sensor_ts", "submit_ns", "result_ns", "image_ns",
+                "decode_start_ns", "decode_end_ns", "kept_ns", "settling_skips", "resubmits", "ae"))
+            raw.readTimingSink = { v -> logger.row("read_timing", v.toList()) }
+        }
         detectionTotalAboveThresh = 0
         detectionTotalAtFloor = 0
         totalFramesLogged = 0
@@ -2726,6 +2878,7 @@ class MeasurementController(
     }
 
     private fun endPass() {
+        raw.readTimingSink = null
         unwireImuLog()
         logger.flush()
         // Written so the run's totals can be cited from the logs alone.

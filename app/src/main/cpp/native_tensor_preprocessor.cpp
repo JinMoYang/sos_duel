@@ -23,6 +23,10 @@ inline int floor_div4(int v) {
     return v >= 0 ? v / 4 : -((-v + 3) / 4);
 }
 
+inline int floor_div9(int v) {
+    return v >= 0 ? v / 9 : -((-v + 8) / 9);
+}
+
 inline float encoded(const jint* plane, int p, double gain, const jint* lut, int lut_max) {
     int index = static_cast<int>(static_cast<double>(plane[p]) * gain);
     index = std::max(0, std::min(index, lut_max));
@@ -346,6 +350,7 @@ Java_com_example_activeperception_NativeTensorPreprocessor_decodeSubsampledBayer
     // mode 0: mean of the four same-colour pixels, signed (current).
     // mode 1: the pre-2026-10-15 decode, kept for the before/after comparison: one pixel
     // of the four, clipped at black.
+    // mode 2: 6x6 blocks, mean of the nine same-colour pixels, signed (the glass).
     auto* base = static_cast<const uint8_t*>(env->GetDirectBufferAddress(source));
     if (!base || !black_array || !destination_array) return JNI_FALSE;
     auto* black = static_cast<jint*>(env->GetPrimitiveArrayCritical(black_array, nullptr));
@@ -359,12 +364,40 @@ Java_com_example_activeperception_NativeTensorPreprocessor_decodeSubsampledBayer
     }
 
     base += source_byte_offset;
-    const int output_width = (source_width / 2) & ~1;
-    const int output_height = (source_height / 2) & ~1;
+    const int output_width = mode == 2 ? (source_width / 6) * 2 : (source_width / 2) & ~1;
+    const int output_height = mode == 2 ? (source_height / 6) * 2 : (source_height / 2) & ~1;
     if (env->GetArrayLength(destination_array) < output_width * output_height) {
         env->ReleasePrimitiveArrayCritical(destination_array, destination, JNI_ABORT);
         env->ReleasePrimitiveArrayCritical(black_array, black, JNI_ABORT);
         return JNI_FALSE;
+    }
+
+    if (mode == 2) {
+        // Every 6x6 sensor block becomes one 2x2 Bayer quad: each site is the mean of the
+        // block's nine same-colour pixels (rows y0, y0+2, y0+4; columns x0, x0+2, x0+4),
+        // signed, not clipped, floor rounding as the Kotlin reference.
+        auto px = [&](const uint8_t* row, int x) -> int {
+            const uint8_t* p = row + static_cast<size_t>(x) * pixel_stride;
+            return static_cast<int>(p[0]) | (static_cast<int>(p[1]) << 8);
+        };
+        for (int oy = 0; oy < output_height; ++oy) {
+            const int y0 = (oy >> 1) * 6 + (oy & 1);
+            const uint8_t* r0 = base + static_cast<size_t>(y0) * row_stride;
+            const uint8_t* r1 = r0 + 2 * static_cast<size_t>(row_stride);
+            const uint8_t* r2 = r1 + 2 * static_cast<size_t>(row_stride);
+            jint* out = destination + static_cast<size_t>(oy) * output_width;
+            const int channel_row = (y0 & 1) * 2;
+            for (int ox = 0; ox < output_width; ++ox) {
+                const int x0 = (ox >> 1) * 6 + (ox & 1);
+                const int sum = px(r0, x0) + px(r0, x0 + 2) + px(r0, x0 + 4) +
+                                px(r1, x0) + px(r1, x0 + 2) + px(r1, x0 + 4) +
+                                px(r2, x0) + px(r2, x0 + 2) + px(r2, x0 + 4);
+                out[ox] = floor_div9(sum - 9 * black[channel_row + (x0 & 1)] + 4);
+            }
+        }
+        env->ReleasePrimitiveArrayCritical(destination_array, destination, 0);
+        env->ReleasePrimitiveArrayCritical(black_array, black, JNI_ABORT);
+        return JNI_TRUE;
     }
 
     if (mode == 1) {
@@ -468,12 +501,39 @@ Java_com_example_activeperception_NativeTensorPreprocessor_decodeSubsampledRaw10
     }
 
     base += source_byte_offset;
-    const int output_width = (source_width / 2) & ~1;
-    const int output_height = (source_height / 2) & ~1;
+    const int output_width = mode == 2 ? (source_width / 6) * 2 : (source_width / 2) & ~1;
+    const int output_height = mode == 2 ? (source_height / 6) * 2 : (source_height / 2) & ~1;
     if (env->GetArrayLength(destination_array) < output_width * output_height) {
         env->ReleasePrimitiveArrayCritical(destination_array, destination, JNI_ABORT);
         env->ReleasePrimitiveArrayCritical(black_array, black, JNI_ABORT);
         return JNI_FALSE;
+    }
+
+    if (mode == 2) {
+        // 6x6 blocks as in decodeSubsampledBayer's mode 2; a pixel is unpacked from its group.
+        auto px = [&](const uint8_t* row, int x) -> int {
+            const uint8_t* q = row + static_cast<size_t>(x >> 2) * 5;
+            const int k = x & 3;
+            return (static_cast<int>(q[k]) << 2) | ((q[4] >> (2 * k)) & 0x3);
+        };
+        for (int oy = 0; oy < output_height; ++oy) {
+            const int y0 = (oy >> 1) * 6 + (oy & 1);
+            const uint8_t* r0 = base + static_cast<size_t>(y0) * row_stride;
+            const uint8_t* r1 = r0 + 2 * static_cast<size_t>(row_stride);
+            const uint8_t* r2 = r1 + 2 * static_cast<size_t>(row_stride);
+            jint* out = destination + static_cast<size_t>(oy) * output_width;
+            const int channel_row = (y0 & 1) * 2;
+            for (int ox = 0; ox < output_width; ++ox) {
+                const int x0 = (ox >> 1) * 6 + (ox & 1);
+                const int sum = px(r0, x0) + px(r0, x0 + 2) + px(r0, x0 + 4) +
+                                px(r1, x0) + px(r1, x0 + 2) + px(r1, x0 + 4) +
+                                px(r2, x0) + px(r2, x0 + 2) + px(r2, x0 + 4);
+                out[ox] = floor_div9(sum - 9 * black[channel_row + (x0 & 1)] + 4);
+            }
+        }
+        env->ReleasePrimitiveArrayCritical(destination_array, destination, 0);
+        env->ReleasePrimitiveArrayCritical(black_array, black, JNI_ABORT);
+        return JNI_TRUE;
     }
 
     if (mode == 1) {           // pre-2026-10-15: pixels 0 and 1 of each group, clipped

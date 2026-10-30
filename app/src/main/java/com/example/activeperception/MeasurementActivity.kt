@@ -410,10 +410,10 @@ class MeasurementActivity : AppCompatActivity() {
                 return
             }
             R.id.methodPhysSweep -> {
-                // Phones search the v2 lattice — the same 5x5 space Prop-C lives on —
-                // so the comparison isolates the method, not the search space. The glass
-                // keeps its device grid.
-                val v2 = !rayNeoTouchpad
+                // Every device searches the v2 lattice — the same 5x5 space Prop-C and the
+                // proposed method live on — so the comparison isolates the method, not the
+                // search space (the glass too since 2026-10-30).
+                val v2 = true
                 val n = if (v2) 25 else grid.nGain * grid.nShutter
                 start(if (v2) "physsweep_v2_full_h$n" else "physsweep_full_h$n") {
                     mc!!.runPhysSweep(true, n, NO_FRAME_CAP, ::post, v2 = v2,
@@ -422,7 +422,7 @@ class MeasurementActivity : AppCompatActivity() {
                 return
             }
             R.id.methodShinNM -> {
-                val v2 = !rayNeoTouchpad
+                val v2 = true
                 start(if (v2) "shin_nm_v2" else "shin_nm") {
                     mc!!.runShinNM("restart_int", NO_FRAME_CAP, ::post, v2 = v2,
                         onFrame = ::showFrame)
@@ -433,7 +433,7 @@ class MeasurementActivity : AppCompatActivity() {
                 val w = loadNaeWeights()
                 if (w == null) post("NAE weights missing — push nae_hist_scalar_3x3.bin to the app files dir")
                 else {
-                    val v2 = !rayNeoTouchpad
+                    val v2 = true
                     start(if (v2) "nae_v2" else "nae") {
                         mc!!.runNeuralAe(w, NO_FRAME_CAP, ::post, v2 = v2,
                             onFrame = ::showFrame)
@@ -865,8 +865,14 @@ class MeasurementActivity : AppCompatActivity() {
         }
         // Desk test, phone still: what one output can spend with capture and analysis on
         // separate threads (MeasurementController.runBudgetProbe).
+        // `--es budget_mode stream|lazy|paced` (how reads reach the analysis) and
+        // `--es budget_patterns "1|1,1|2"` (lane patterns, | between outputs' patterns).
         if (cmd == "budget_probe") {
-            start(cmd) { mc!!.runBudgetProbe(::post) }
+            val mode = intent.getStringExtra("budget_mode") ?: "stream"
+            val patterns = intent.getStringExtra("budget_patterns")
+                ?.split('|')?.map { pat -> pat.split(',').map { it.trim().toInt() } }
+            val ahead = intent.getIntExtra("budget_ahead", 1)
+            start("${cmd}_$mode") { mc!!.runBudgetProbe(::post, mode, patterns, ahead) }
             return
         }
         // The additional-exposure check: addl_0, addl_<extra>_merge | _sep (extra 1-5), the key
@@ -1174,7 +1180,9 @@ class MeasurementActivity : AppCompatActivity() {
                 }
                 if (!opened) {
                     post("opening camera…")
-                    raw = RawSensorCapturer(this); raw.open()
+                    // `--ez raw10 true`: RAW10 instead of RAW_SENSOR (the glass budget).
+                    raw = RawSensorCapturer(this).apply { preferRaw10 = intent.getBooleanExtra("raw10", false) }
+                    raw.open()
                     raw.mountOffsetDeg = mountOffsetDeg
                     // Keep the paper's FP16 640px YOLOv8n and select the exact fixed batch for
                     // K=1/3/9. AUTO was validated on X3 Pro as OpenCL GPU delegate V2.
@@ -1182,6 +1190,12 @@ class MeasurementActivity : AppCompatActivity() {
                     detector = createProfiledDetector()
                     post("GPU ready ${detector.backendSummary} — capturing first frame…")
                     opened = true
+                }
+                // `--ei decode_block 4|6`: the decode's block size (RawSensorCapturer.decodeMode);
+                // the glass decodes 6x6 blocks by default (formation reads 2.25x fewer sites).
+                when (intent.getIntExtra("decode_block", if (rayNeoTouchpad) 6 else 0)) {
+                    4 -> { raw.defaultDecodeMode = 0; raw.decodeMode = 0 }
+                    6 -> { raw.defaultDecodeMode = 2; raw.decodeMode = 2 }
                 }
                 // Platform leads the name so a mixed directory groups by rig, while the
                 // epoch stays last for the parsers that split on it.
@@ -1193,6 +1207,15 @@ class MeasurementActivity : AppCompatActivity() {
                 mcLocal.deviceId = device
                 mcLocal.saveImages = saveImagesNow
                 mcLocal.parallelCapture = par
+                // The parallel structure's output clock (`--ei par_period_ms`), the outputs whose
+                // reads are requested ahead (`--ei par_ahead`) and the images one output may detect
+                // (`--ei budget_images`). Phone: 100 ms, continuous stream, no cap. The glass
+                // (2026-10-30 budget): 2 fps, two outputs ahead, 3 images.
+                mcLocal.outputPeriodMs = intent.getIntExtra("par_period_ms", if (rayNeoTouchpad) 500 else 100).toLong()
+                mcLocal.captureAhead = intent.getIntExtra("par_ahead", if (rayNeoTouchpad) 2 else 0)
+                mcLocal.budgetImages = intent.getIntExtra("budget_images", if (rayNeoTouchpad) 3 else 0)
+                // `--ez par_lazy true`: the lazy capture (MeasurementController.captureLazy).
+                mcLocal.captureLazy = intent.getBooleanExtra("par_lazy", false)
                 mcLocal.appFilesDir = getExternalFilesDir(null)
                 raw.fixedFocusDiopters = focusNow
                 mc = mcLocal
