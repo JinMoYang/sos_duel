@@ -12,7 +12,6 @@ import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.ArrayAdapter
@@ -75,8 +74,12 @@ class MeasurementActivity : AppCompatActivity() {
     private lateinit var preview: ImageView
     private lateinit var overlay: OverlayView
     private lateinit var cellText: TextView
-    /** The glass's walk progress, one large line (the manual panel and the preview are hidden). */
-    private lateinit var walkText: TextView
+    /** The glass's walk screen (the manual panel and the preview are hidden): the method,
+     *  the lap and leg, the place in the plan, and the start button. */
+    private lateinit var walkTitle: TextView
+    private lateinit var walkDetail: TextView
+    private lateinit var walkSub: TextView
+    private lateinit var walkButton: Button
     /** Draw each output and its boxes; off on the glass (`--ez preview true` turns it on). */
     private var previewOn = true
     private lateinit var methodGroup: RadioGroup
@@ -136,7 +139,10 @@ class MeasurementActivity : AppCompatActivity() {
         preview = findViewById(R.id.previewImage)
         overlay = findViewById(R.id.overlayView)
         cellText = findViewById(R.id.cellText)
-        walkText = findViewById(R.id.walkText)
+        walkTitle = findViewById(R.id.walkTitle)
+        walkDetail = findViewById(R.id.walkDetail)
+        walkSub = findViewById(R.id.walkSub)
+        walkButton = findViewById(R.id.walkButton)
         previewOn = intent.getBooleanExtra("preview", !rayNeoTouchpad)
         methodGroup = findViewById(R.id.methodGroup)
         periodGroup = findViewById(R.id.periodGroup)
@@ -255,18 +261,15 @@ class MeasurementActivity : AppCompatActivity() {
         // every control need TWO taps (focusableInTouchMode: first tap focuses, second
         // clicks), so the phone profile keeps plain touch and hides the glass-only chrome.
         if (rayNeoTouchpad) configureStaticTouchpadControls()
-        // Glass simple mode: the temple touchpad makes the dense phone UI painful, so on
-        // RayNeo everything except the essentials is hidden — session, the two method
-        // rows, the proposed settings (period/fallback), Start/Stop and the NAE row.
-        // Hidden buttons stay functional for intent-driven autorun (performClick works
-        // on GONE views), and offload still arrives via the server_url extra.
-        // The glass shows only the walk session's progress: no manual panel (a long press on the
-        // temple starts and stops the session; runs still start from adb), and no preview
-        // unless asked for.
+        // The glass shows only the walk screen: no manual panel (its hidden buttons still work
+        // for runs started from adb, since performClick works on GONE views), and no preview
+        // unless asked for. A tap on the temple presses the start button.
         if (rayNeoTouchpad) {
             controlsScroll.visibility = View.GONE
-            walkText.visibility = View.VISIBLE
-            walkText.text = WALK_IDLE
+            findViewById<View>(R.id.walkPanel).visibility = View.VISIBLE
+            walkButton.text = "시작"
+            walkButton.setOnClickListener { if (lapSession == null) toggleWalkSession() }
+            showWalk("걷기 실험", "", "방법 ${walkPlan().size}개 · 방법마다 편도 ${walkLegs()}번", idle = true)
             if (!previewOn) {
                 preview.visibility = View.GONE
                 overlay.visibility = View.GONE
@@ -275,8 +278,6 @@ class MeasurementActivity : AppCompatActivity() {
         }
         else configurePhoneProfileUi()
         wireExperimentPanel()
-        // Start is the safest useful default: one tap launches the default Proposed mode.
-        if (rayNeoTouchpad) btnStart.post { btnStart.requestFocus() }
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED) {
@@ -942,15 +943,33 @@ class MeasurementActivity : AppCompatActivity() {
         runOnUiThread { overlay.clear(); cellText.text = "—" }
     }
 
-    private fun toggleRunFromTouchpad() {
-        // The glass: a long press on the temple starts or stops the corridor walk session.
-        if (rayNeoTouchpad) { toggleWalkSession(); return }
-        if (runActive) stopMeasurement() else startSelectedMethod()
+    /** Until when a second tap on the glass stops the walk (0 = not asked). */
+    private var walkStopArmedUntil = 0L
+
+    /** The glass's walk screen: [title] large, [detail] and [sub] under it (an empty one is
+     *  hidden); the start button only while [idle]. */
+    private fun showWalk(title: String, detail: String, sub: String, idle: Boolean = false) {
+        walkTitle.text = title
+        walkDetail.text = detail
+        walkDetail.visibility = if (detail.isEmpty()) View.GONE else View.VISIBLE
+        walkSub.text = sub
+        walkSub.visibility = if (sub.isEmpty()) View.GONE else View.VISIBLE
+        walkButton.visibility = if (idle) View.VISIBLE else View.GONE
     }
 
-    private val WALK_IDLE = "길게 눌러 걷기 시작"
+    /** The walk's methods in order: PAR_MAIN_METHODS (or `--es walk_plan a,b,...`, a rerun of
+     *  some, a test) in `--ei walk_rounds` rounds (default 1), the order shifted by one each round. */
+    private fun walkPlan(): List<String> {
+        val rounds = intent.getIntExtra("walk_rounds", 1).coerceAtLeast(1)
+        val methods = intent.getStringExtra("walk_plan")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
+            ?.takeIf { it.isNotEmpty() } ?: PAR_MAIN_METHODS
+        return (0 until rounds).flatMap { r -> methods.indices.map { methods[(it + r) % methods.size] } }
+    }
 
-    /** Short names on the glass's progress line. */
+    /** Legs (one-way walks) per method: `--ei walk_legs`, default 4 = two laps of the corridor. */
+    private fun walkLegs() = intent.getIntExtra("walk_legs", 4).coerceAtLeast(1)
+
+    /** Short names on the glass's walk screen. */
     private fun walkName(method: String) = when (method) {
         "addl_3_sep_every" -> "proposed"
         "par_ae_phone" -> "AE-Phone"
@@ -962,11 +981,10 @@ class MeasurementActivity : AppCompatActivity() {
         else -> method
     }
 
-    /** The glass's corridor session ([WalkSession]): the final comparison's methods
-     *  (PAR_MAIN_METHODS, or `--es walk_plan`), each for `--ei walk_legs` legs (default 4: two round trips), in
-     *  `--ei walk_rounds` rounds (default 1), the order shifted by one each round. Every run of it
-     *  carries experiment_session walk_<ms>; `--es lighting` labels it. Started and stopped by a
-     *  long press on the temple, or `--es run walk`. */
+    /** The glass's corridor session ([WalkSession]): [walkPlan]'s methods, each for [walkLegs]
+     *  legs. Every run of it carries experiment_session walk_<ms>; `--es lighting` labels it.
+     *  Started by the start button (a tap on the temple) or `--es run walk`; stopped by two taps
+     *  (see [activateFocusedControl]). */
     private fun toggleWalkSession() {
         if (lapSession != null) { stopMeasurement(); return }
         if (runActive) { post("busy — stop first"); return }
@@ -975,11 +993,7 @@ class MeasurementActivity : AppCompatActivity() {
             }.isFailure) {
             post("the proposed method needs assets/$CURVE_FILE — walk not started"); return
         }
-        val rounds = intent.getIntExtra("walk_rounds", 1).coerceAtLeast(1)
-        // `--es walk_plan a,b,...` replaces the methods (a rerun of some, a test).
-        val methods = intent.getStringExtra("walk_plan")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
-            ?.takeIf { it.isNotEmpty() } ?: PAR_MAIN_METHODS
-        val plan = (0 until rounds).flatMap { r -> methods.indices.map { methods[(it + r) % methods.size] } }
+        val plan = walkPlan()
         presetRunCap = null
         ExperimentSession.lighting = intent.getStringExtra("lighting").orEmpty()
         ExperimentSession.session = "walk_${System.currentTimeMillis()}"
@@ -989,7 +1003,7 @@ class MeasurementActivity : AppCompatActivity() {
                 launchRunnerCommand(method)
             }
             override fun stopBlock() = stopMeasurement(userInitiated = false)
-            override fun status(text: String) { walkText.text = text }
+            override fun status(text: String) = post(text)
             override fun buzz(ms: Long) = vibrate(ms)
             override fun beep(times: Int) = playLapBeeps(times)
             override fun lapStarted(method: String, lapsInBlock: Int) { ExperimentSession.runLap = lapsInBlock }
@@ -997,11 +1011,13 @@ class MeasurementActivity : AppCompatActivity() {
                 lapSession = null
                 ExperimentSession.runLap = -1
                 ExperimentSession.lighting = ""; ExperimentSession.session = ""
-                walkText.text = (if (completed) "끝" else "멈춤") + "\n" + WALK_IDLE
+                // The session's last screen (done or stopped) stays; the start button returns.
+                walkButton.visibility = View.VISIBLE
             }
-        }, plan, legsPerBlock = intent.getIntExtra("walk_legs", 4).coerceAtLeast(1),
+        }, plan, legsPerBlock = walkLegs(),
             startDelayS = intent.getIntExtra("walk_start_delay_s", 5).coerceAtLeast(0),
-            displayName = ::walkName)
+            displayName = ::walkName,
+            screen = { title, detail, sub -> showWalk(title, detail, sub) })
         lapSession = session
         session.start()
     }
@@ -1048,6 +1064,8 @@ class MeasurementActivity : AppCompatActivity() {
     /**
      * RayNeo reports the temple pad as a direct absolute touchscreen. Coordinates therefore
      * cannot be used for hit-testing: swipes move focus and taps operate the focused control.
+     * A long press counts as a tap: the glass's own system menu takes long presses (and
+     * covers the app), so nothing here may depend on one.
      */
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (!rayNeoTouchpad) return super.dispatchTouchEvent(event)
@@ -1066,13 +1084,7 @@ class MeasurementActivity : AppCompatActivity() {
                     moveTouchpadFocus(if (forward) 1 else -1)
                 }
             }
-            MotionEvent.ACTION_UP -> if (!pointerSwipeHandled) {
-                if (event.eventTime - event.downTime >= ViewConfiguration.getLongPressTimeout()) {
-                    toggleRunFromTouchpad()
-                } else {
-                    activateFocusedControl()
-                }
-            }
+            MotionEvent.ACTION_UP -> if (!pointerSwipeHandled) activateFocusedControl()
         }
         return true
     }
@@ -1126,8 +1138,24 @@ class MeasurementActivity : AppCompatActivity() {
     }
 
     private fun activateFocusedControl() {
-        // The glass has no panel to operate: a tap must not press a hidden Start.
-        if (rayNeoTouchpad) { post("hold the temple to start or stop the walk"); return }
+        // The glass: a tap presses the walk's start button. During the walk a tap only asks,
+        // and a second tap within 3 s stops it, so touching the temple while walking cannot
+        // end the session.
+        if (rayNeoTouchpad) {
+            val now = SystemClock.elapsedRealtime()
+            when {
+                lapSession == null -> walkButton.performClick()
+                now < walkStopArmedUntil -> { walkStopArmedUntil = 0L; toggleWalkSession() }
+                else -> {
+                    walkStopArmedUntil = now + 3_000L
+                    val shown = walkSub.text
+                    val ask = "한 번 더 누르면 정지"
+                    walkSub.text = ask
+                    walkSub.postDelayed({ if (walkSub.text == ask) walkSub.text = shown }, 3_000L)
+                }
+            }
+            return
+        }
         val focused = currentTouchpadControl() ?: btnStart.also { it.requestFocus() }
         if (focused is Spinner) {
             if (focused.count > 0) {

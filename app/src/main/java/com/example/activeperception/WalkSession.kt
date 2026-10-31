@@ -27,6 +27,9 @@ import kotlin.math.abs
  * plan done, three long beeps; a run that stopped by itself, a switch that did not finish in
  * [SWITCH_TIMEOUT_MS], or the session stopped by the app being paused ([interrupted]), an alarm.
  *
+ * The wearer also sees where they are ([Screen]): the method in large type, the lap and the
+ * leg under it (lap 1/2 · leg 2/4), and the place in the plan.
+ *
  * Logs walksession_<wall ms>.csv beside the runs (every event with the sensor clock and the
  * heading); each run's frames.csv carries the leg in run_lap. Everything here runs on the main
  * thread.
@@ -39,9 +42,15 @@ class WalkSession(
     private val legsPerBlock: Int = 4,
     /** Seconds between the long press and the first method, to settle the glass on the head. */
     private val startDelayS: Int = 5,
-    /** The name the progress line shows for a method. */
-    private val displayName: (String) -> String = { it }
+    /** The name the screen shows for a method. */
+    private val displayName: (String) -> String = { it },
+    private val screen: Screen = Screen { title, detail, sub ->
+        host.status(listOf(title, detail, sub).filter { it.isNotEmpty() }.joinToString(" · "))
+    }
 ) : PlanSession {
+    /** The wearer's screen: [title] in large type, [detail] and [sub] under it. */
+    fun interface Screen { fun show(title: String, detail: String, sub: String) }
+
     companion object {
         const val TURN_DEG = 150.0
         const val TURN_HOLD_DEG = 120.0
@@ -124,7 +133,7 @@ class WalkSession(
         event("block_start")
         play(Sound.BLOCK)
         host.buzz(120)
-        host.status(label())
+        showProgress()
         host.startBlock(plan[blockIdx])
     }
 
@@ -132,7 +141,7 @@ class WalkSession(
     override fun abort() {
         if (state == State.IDLE) return
         event("abort")
-        finish(completed = false)
+        finish(completed = false, "두 번 눌러 멈춤")
     }
 
     /** Stopped by something other than the wearer ([why] is logged): the alarm sounds. */
@@ -140,7 +149,7 @@ class WalkSession(
         if (state == State.IDLE) return
         event("interrupted", note = why)
         play(Sound.ALARM)
-        finish(completed = false)
+        finish(completed = false, "앱이 가려져서 멈춤")
     }
 
     /** The host calls this when a run it started for us has fully ended. */
@@ -159,7 +168,7 @@ class WalkSession(
             event("done")
             play(Sound.DONE)
             host.buzz(800)
-            finish(completed = true)
+            finish(completed = true, "방법 ${plan.size}개 모두 완료")
             return
         }
         beginBlock()
@@ -173,7 +182,10 @@ class WalkSession(
                 if (leftMs <= 0L) begin()
                 else {
                     val s = ((leftMs + 999L) / 1000L).toInt()
-                    if (s != countdownShownS) { countdownShownS = s; host.status("시작까지 ${s}초") }
+                    if (s != countdownShownS) {
+                        countdownShownS = s
+                        screen.show("시작까지 ${s}초", "첫 방법: ${displayName(plan[0])}", "방법 1/${plan.size}")
+                    }
                 }
             }
             State.RUNNING -> if (turned(nowMs)) {
@@ -184,9 +196,11 @@ class WalkSession(
                     state = State.SWITCHING
                     switchStartMs = nowMs
                     event("block_stop_request")
+                    screen.show("바꾸는 중",
+                        if (blockIdx + 1 < plan.size) "다음: ${displayName(plan[blockIdx + 1])}" else "마무리 중", "")
                     host.stopBlock()
                 } else {
-                    host.status(label())
+                    showProgress()
                     host.lapStarted(plan[blockIdx], legsInBlock)
                 }
             }
@@ -222,8 +236,13 @@ class WalkSession(
         return true
     }
 
-    private fun label(): String =
-        "${blockIdx + 1}/${plan.size}  ${displayName(plan[blockIdx])}\n구간 ${legsInBlock + 1}/$legsPerBlock"
+    /** The running method; its lap (a corridor round trip, two legs) and leg; the place in the plan. */
+    private fun showProgress() {
+        val laps = (legsPerBlock + 1) / 2
+        screen.show(displayName(plan[blockIdx]),
+            "바퀴 ${legsInBlock / 2 + 1}/$laps  ·  편도 ${legsInBlock + 1}/$legsPerBlock",
+            "방법 ${blockIdx + 1}/${plan.size}  ·  정지: 두 번 누르기")
+    }
 
     private fun play(sound: Sound) {
         val t = tone ?: return
@@ -237,8 +256,9 @@ class WalkSession(
         }
     }
 
-    private fun finish(completed: Boolean) {
+    private fun finish(completed: Boolean, detail: String) {
         state = State.IDLE
+        screen.show(if (completed) "끝" else "멈춤", detail, "시작 버튼: 처음부터 다시")
         handler.removeCallbacks(tick)
         runCatching { log?.flush(); log?.close() }
         log = null

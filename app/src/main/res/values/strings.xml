@@ -3,7 +3,7 @@
 
     <string name="preview_description">Most recent formed frame</string>
     <string name="status_initial">RayNeo SoS — optimized pipeline ready</string>
-    <string name="touchpad_help">TOUCHPAD · Swipe: focus · Tap: select · Hold: walk session start/stop · Back: Stop/Exit</string>
+    <string name="touchpad_help">TOUCHPAD · Tap: start the walk · Tap twice: stop it · Back: Stop/Exit</string>
     <string name="cell_readout_empty">—</string>
 
     <string name="method_fixed">Fixed</string>

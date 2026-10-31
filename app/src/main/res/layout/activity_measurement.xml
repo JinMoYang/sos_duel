@@ -45,17 +45,49 @@
             android:fontFamily="monospace"
             android:layout_gravity="top|end" />
 
-        <!-- The glass's walk session: one large line, the session's progress (WalkSession). -->
-        <TextView
-            android:id="@+id/walkText"
+        <!-- The glass's walk session (WalkSession): the method in large type, the lap and the
+             leg under it, then the place in the plan; the start button while idle. -->
+        <LinearLayout
+            android:id="@+id/walkPanel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
-            android:gravity="center"
-            android:padding="12dp"
-            android:textSize="26sp"
-            android:textColor="@color/text_primary"
-            android:visibility="gone" />
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/walkTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="48sp"
+                android:textStyle="bold"
+                android:textColor="@color/text_primary" />
+
+            <TextView
+                android:id="@+id/walkDetail"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textSize="30sp"
+                android:textColor="@color/text_readout" />
+
+            <TextView
+                android:id="@+id/walkSub"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textSize="18sp"
+                android:textColor="@color/text_label" />
+
+            <Button
+                android:id="@+id/walkButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:minWidth="200dp"
+                android:textSize="26sp" />
+        </LinearLayout>
 
         <!-- auto_collect: what is running now, in letters readable from across the room,
              a small progress line under it, and the three steps. Pressing the running
