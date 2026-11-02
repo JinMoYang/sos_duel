@@ -3587,6 +3587,7 @@ class MeasurementController(
         runCatching {
             val summary = JSONObject()
                 .put("total_frames_logged", totalFramesLogged)
+                .put("parallel_reasks", raw.parallelReasks)
                 .put("total_dets_above_threshold", detectionTotalAboveThresh)
                 .put("total_dets_at_floor", detectionTotalAtFloor)
                 .put("select_conf_threshold", selectConf)

@@ -1424,6 +1424,16 @@ class MeasurementActivity : AppCompatActivity() {
                 if (stopPending) mcLocal.stop()
                 try {
                     block()
+                } catch (e: Throwable) {
+                    // A run that fails leaves why in its own folder (2026-11-03: a PhysSweep stop
+                    // showed only on the screen).
+                    android.util.Log.e("MeasurementActivity", "run $runName failed", e)
+                    runCatching {
+                        java.io.File(logger.dir, "error.json").writeText(org.json.JSONObject()
+                            .put("error", e.toString()).put("stack", android.util.Log.getStackTraceString(e))
+                            .put("ts_ms", System.currentTimeMillis()).toString(2))
+                    }
+                    throw e
                 } finally {
                     logger.close()
                 }

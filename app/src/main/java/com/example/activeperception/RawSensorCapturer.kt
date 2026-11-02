@@ -1087,6 +1087,8 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             fun release() { if (!taken) pending?.close() }
         }
         @Volatile var pattern: List<ParallelKey> = emptyList()
+        /** Reads a take asked for again ([take]): logged in the run's summary. */
+        @Volatile var reasks = 0
         /** Keys to request once each, in order, before the stream returns to cycling [pattern]
          *  (a caller that plans its next windows ahead). */
         val queue = java.util.concurrent.ConcurrentLinkedQueue<ParallelKey>()
@@ -1242,12 +1244,34 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                 }
             }
             var got: List<Slot>? = null
+            // A read meant for this take can go to an earlier take or out of the ring, and then
+            // nothing asks for its setting again: the take waited out its 4 s and the run stopped
+            // (fast PhysSweep 2026-10-31 and 2026-11-03, reads still arriving at the pattern's
+            // other settings). A key still without its fresh read one output period after the
+            // take began is requested again, and again every period.
+            val reaskNs = maxOf(periodNs, 300_000_000L)
+            var nextAsk = t0 + reaskNs
             synchronized(lock) {
                 while (got == null) {
                     got = pick()
                     if (got != null) { got!!.forEach { it.taken = true }; break }
                     error?.let { throw it }
                     check(active) { "parallel stream is not running" }
+                    val nowNs = System.nanoTime()
+                    if (nowNs >= nextAsk) {
+                        val missing = if (keys.size == 1)
+                            List(maxOf(0, n - ring.count { it.ts > lastReturnedTs && it.key == keys[0] })) { keys[0] }
+                        else keys.filterIndexed { i, k ->
+                            val after = if (i == 0) lastReturnedTs else lastReturnedByKey[k] ?: 0L
+                            ring.none { it.key == k && it.ts > after }
+                        }
+                        if (missing.isNotEmpty()) {
+                            queue.addAll(missing)
+                            reasks += missing.size
+                            Log.i(TAG, "parallel: asked again for ${missing.size} read(s) of $missing")
+                        }
+                        nextAsk = nowNs + reaskNs
+                    }
                     val left = deadline - System.nanoTime()
                     check(left > 0) { "parallel: no fresh read of $keys" }
                     lock.wait(minOf(20L, TimeUnit.NANOSECONDS.toMillis(left).coerceAtLeast(1L)))
@@ -1276,6 +1300,9 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     }
 
     @Volatile private var parallel: ParallelStream? = null
+    /** Reads the parallel stream's takes asked for again this run (0 when the mode is off). */
+    val parallelReasks: Int get() = parallel?.reasks ?: lastParallelReasks
+    private var lastParallelReasks = 0
 
     /** Diagnostics: called for every parallel-mode read as it is kept, with its sensor time, the
      *  nanoTime of each step (submitted, capture result, image, decode start, decode end, kept),
@@ -1289,6 +1316,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     fun startParallel(depth: Int = 3, periodMs: Long = 100L, ahead: Int = 0, lazy: Boolean = false) {
         check(fastCaptureStarted) { "startFastCapture() must be called first" }
         if (parallel != null) return
+        lastParallelReasks = 0
         parallel = ParallelStream(depth, periodMs * 1_000_000L, if (lazy) 0 else ahead, lazy).also { it.thread.start() }
         Log.i(TAG, "parallel mode: depth $depth, period $periodMs ms, ahead $ahead, lazy $lazy")
     }
@@ -1296,6 +1324,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     @Synchronized
     fun stopParallel() {
         val p = parallel ?: return
+        lastParallelReasks = p.reasks
         parallel = null
         p.active = false
         runCatching { p.thread.join(3000) }
