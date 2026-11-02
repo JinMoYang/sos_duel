@@ -884,12 +884,42 @@ class MeasurementActivity : AppCompatActivity() {
         // separate threads (MeasurementController.runBudgetProbe).
         // `--es budget_mode stream|lazy|paced` (how reads reach the analysis) and
         // `--es budget_patterns "1|1,1|2"` (lane patterns, | between outputs' patterns).
+        // 2026-11-03: `--ei budget_outputs` per pattern, `--ei budget_period_ms` (output clock,
+        // 0 = back to back), `--ez budget_nested true` (lanes share reads: "1,2,4" = key, key + 1,
+        // key + 3), `--es budget_align_frac 0.25` (share of tiles aligned); the next-setting
+        // choice runs with the proposed method's curve.
         if (cmd == "budget_probe") {
             val mode = intent.getStringExtra("budget_mode") ?: "stream"
             val patterns = intent.getStringExtra("budget_patterns")
                 ?.split('|')?.map { pat -> pat.split(',').map { it.trim().toInt() } }
             val ahead = intent.getIntExtra("budget_ahead", 1)
-            start("${cmd}_$mode") { mc!!.runBudgetProbe(::post, mode, patterns, ahead) }
+            val outputs = intent.getIntExtra("budget_outputs", 12)
+            val periodMs = intent.getIntExtra("budget_period_ms", 0).toLong()
+            val nested = intent.getBooleanExtra("budget_nested", false)
+            val alignFrac = intent.getStringExtra("budget_align_frac")?.toDoubleOrNull() ?: 1.0
+            val curve = runCatching {
+                HowToSense.Curve.parse(assets.open(CURVE_FILE).bufferedReader().use { it.readText() })
+            }.getOrNull()
+            // Beeps, for a run the operator unplugs: 1 when the first pattern starts, 2 at each
+            // next pattern, 3 when done.
+            var patternsStarted = 0
+            val status: (String) -> Unit = { s ->
+                post(s)
+                when {
+                    s.startsWith("budget: done") -> playLapBeeps(3)
+                    s.startsWith("budget: $mode ") -> playLapBeeps(if (patternsStarted++ == 0) 1 else 2)
+                }
+            }
+            start("${cmd}_$mode") {
+                mc!!.runBudgetProbe(status, mode, patterns, ahead, outputs, periodMs, nested, alignFrac, curve)
+            }
+            return
+        }
+        // Desk test, device still: read interval per shutter and how many reads a new setting
+        // takes (MeasurementController.runReadProbe); `--ei probe_iso` (default 800).
+        if (cmd == "read_probe") {
+            val iso = intent.getIntExtra("probe_iso", 800)
+            start(cmd) { mc!!.runReadProbe(::post, iso) }
             return
         }
         // The additional-exposure check: addl_0, addl_<extra>_merge | _sep (extra 1-5), the key

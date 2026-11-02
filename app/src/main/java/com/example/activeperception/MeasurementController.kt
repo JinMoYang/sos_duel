@@ -39,6 +39,8 @@ import java.util.concurrent.Future
 private const val BUDGET_BURST = 6
 private const val BUDGET_OUTPUTS = 12
 private const val BUDGET_RING = 8
+/** Read probe: one-shot requests in flight in its queue phase. */
+private const val QUEUE_DEPTH = 3
 private val BUDGET_PATTERNS = listOf(listOf(1), listOf(2), listOf(4), listOf(6), listOf(1, 1), listOf(2, 1),
     listOf(2, 2), listOf(3, 3), listOf(1, 1, 1), listOf(2, 2, 2), listOf(1, 1, 1, 1), List(6) { 1 })
 private typealias BudgetRead = Pair<RawFrame, RawSensorCapturer.RawMeta>
@@ -618,9 +620,20 @@ class MeasurementController(
      * analysis): lazy logs the decoding of the reads an output takes as rawdec_ms, inside its
      * total; paced has no free-running capture, so no capture-only and no held phases.
      * [patternsIn] replaces BUDGET_PATTERNS. [ahead]: outputs whose reads paced keeps requested.
+     *
+     * 2026-11-03 (the device-cost measurement, before fps and image counts are fixed): [outputs]
+     * per pattern; [periodMs] > 0 runs the outputs on that clock instead of back to back; [nested]
+     * makes a pattern's lanes share reads, as the proposed method's sums do: lane k = the newest
+     * read (the key) plus the k - 1 reads before it, moved onto the key, so "1,2,4" is the key,
+     * the key + 1 and the key + 3 from 4 reads aligned once; [alignFrac] < 1 tracks only that
+     * share of the tiles (a spread set, standing in for the map's and the hesitations' tiles).
+     * Every output then also runs the union (boxes >= 0.25 in score order, IoU 0.3 NMS over the
+     * lanes) and, with [curve], the next-setting choice on the key lane, and logs their times.
      */
     fun runBudgetProbe(onStatus: (String) -> Unit, mode: String = "stream",
-                       patternsIn: List<List<Int>>? = null, ahead: Int = 1) {
+                       patternsIn: List<List<Int>>? = null, ahead: Int = 1,
+                       outputs: Int = BUDGET_OUTPUTS, periodMs: Long = 0L, nested: Boolean = false,
+                       alignFrac: Double = 1.0, curve: HowToSense.Curve? = null) {
         require(mode in BUDGET_MODES) { "budget mode $mode not in $BUDGET_MODES" }
         val patterns = patternsIn ?: BUDGET_PATTERNS
         val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
@@ -637,16 +650,24 @@ class MeasurementController(
             .put("decode_block", if (raw.decodeMode == 2) 6 else 4)
             .put("iso", iso).put("analog_iso", phys).put("exposure_us", us)
             .put("patterns", JSONArray(patterns.map { JSONArray(it) }))
-            .put("outputs_per_pattern", BUDGET_OUTPUTS).put("warmup_outputs", 2)
-            .put("align", "BurstAlign on every tile (upper bound), 4 threads")
-            .put("not_run", "fusion, How-to-Sense choice")
+            .put("outputs_per_pattern", outputs).put("warmup_outputs", 2)
+            .put("output_period_ms", periodMs).put("nested_lanes", nested).put("align_tile_share", alignFrac)
+            .put("align", if (alignFrac >= 1.0) "BurstAlign on every tile (upper bound), 4 threads"
+                else "BurstAlign on a spread $alignFrac of the tiles, 4 threads")
+            .put("union", "boxes >= 0.25 of every lane, score order, IoU 0.3 NMS (union_ms)")
+            .put("choice", if (curve != null) "How-to-Sense stats + choose on the key lane, gyro over the key " +
+                "(choose_ms, sequential: an upper bound)" else "not run")
             .put("timestamp_source", raw.timestampSource)
             .put("detector_slots", tfl.backendSummary))
         logger.csv("budget_raws", listOf("phase", "seq", "sensor_ts", "exp_us", "frame_duration_ns",
             "since_prev_ms", "in_hand_ms"))
         logger.csv("budget_outputs", listOf("phase", "idx", "lanes", "n_raw", "n_img", "wait_ms",
             "align_ms", "form_ms", "run_ms", "dec_ms", "total_ms", "since_prev_output_ms",
-            "latency_ms", "span_ms", "max_gap_ms", "skipped_reads", "n_dets", "rawdec_ms"))
+            "latency_ms", "span_ms", "max_gap_ms", "skipped_reads", "n_dets", "rawdec_ms",
+            "union_ms", "choose_ms", "late_ms"))
+        // Every output: the device's state (energy only means something unplugged: plugged 0).
+        logger.csv("budget_health", listOf("phase", "idx", "t_ns", "batt_temp_c", "thermal", "cpu_pct",
+            "cpu_mhz", "current_ua", "voltage_mv", "batt_pct", "plugged"))
         val src = ParallelRawCandidateSource(grid, raw,
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
@@ -659,8 +680,9 @@ class MeasurementController(
          *  when an output takes it and released unread when it falls out of the ring. */
         class ProbeRead(val ts: Long, val expUs: Long, var read: BudgetRead?,
                         val pending: RawSensorCapturer.PendingRead?) {
+            @Volatile var taken = false
             fun take(): BudgetRead = read ?: pending!!.decode().also { read = it }
-            fun release() { pending?.close() }
+            fun release() { if (!taken && read == null) pending?.close() }
         }
         val ring = ArrayDeque<ProbeRead>()
         val lock = java.lang.Object()
@@ -719,24 +741,38 @@ class MeasurementController(
             }
         }, "budget-capture")
 
-        class Parts(val alignMs: Double, val formMs: Double, val runMs: Double, val decMs: Double, val nDets: Int)
+        class Parts(val alignMs: Double, val formMs: Double, val runMs: Double, val decMs: Double, val nDets: Int,
+                    val unionMs: Double = 0.0, val chooseMs: Double = 0.0)
         var firstImageSaved = false
+        /** Reads one output of [lanes] takes: shared when [nested]. */
+        fun readsFor(lanes: List<Int>) = if (nested) lanes.max() else lanes.sum()
+        val alignTiles: BooleanArray? = if (alignFrac >= 1.0) null
+            else BooleanArray(HowToSense.N) { t -> (t * 0.6180339887) % 1.0 < alignFrac }
+        /** [rs] with every later read moved back onto rs[0]. */
+        fun aligned(rs: List<RawFrame>): List<RawFrame> {
+            if (rs.size == 1) return rs
+            val pyr = rs.map { fr -> BurstAlign.pyramid(fr.bayer, fr.width, fr.height, alignPool) }
+            val acc = BurstAlign.accumulate((1 until rs.size).map { j ->
+                BurstAlign.step(pyr[j - 1], pyr[j], alignPool, alignTiles) })
+            return listOf(rs[0]) + acc.withIndex().map { (j, m) ->
+                val fr = rs[j + 1]
+                RawFrame(BurstAlign.moveBack(fr.bayer, fr.width, fr.height, m, alignPool), fr.width, fr.height,
+                    fr.cfaPattern, fr.maxDn, fr.sensorOrientation, fr.whiteBalance, fr.cameraToSrgb)
+            }
+        }
+        val map = HowToSense.ObjectMap()
+        val keyCell = HowToSense.cell(Duel.ISOS.indexOf(iso), Duel.SHUTTERS_US.indexOf(us))
         /** One output's work on [reads] in time order: lanes of [lanes] reads, each lane's later
-         *  reads moved back onto its first and summed, every lane detected in one call. */
+         *  reads moved back onto its first and summed (nested: every lane ends at the newest read,
+         *  the earlier reads moved onto it once), every lane detected in one call. */
         fun work(reads: List<BudgetRead>, lanes: List<Int>): Parts {
             val ta = now()
-            var at = 0
-            val laneFrames = lanes.map { k ->
-                val rs = reads.subList(at, at + k).map { it.first }; at += k
-                if (rs.size == 1) rs else {
-                    val pyr = rs.map { fr -> BurstAlign.pyramid(fr.bayer, fr.width, fr.height, alignPool) }
-                    val acc = BurstAlign.accumulate((1 until rs.size).map { j -> BurstAlign.step(pyr[j - 1], pyr[j], alignPool) })
-                    listOf(rs[0]) + acc.withIndex().map { (j, m) ->
-                        val fr = rs[j + 1]
-                        RawFrame(BurstAlign.moveBack(fr.bayer, fr.width, fr.height, m, alignPool), fr.width, fr.height,
-                            fr.cfaPattern, fr.maxDn, fr.sensorOrientation, fr.whiteBalance, fr.cameraToSrgb)
-                    }
-                }
+            val laneFrames = if (nested) {
+                val moved = aligned(reads.map { it.first }.reversed())
+                lanes.map { k -> moved.take(k) }
+            } else {
+                var at = 0
+                lanes.map { k -> aligned(reads.subList(at, at + k).map { it.first }).also { at += k } }
             }
             val alignMs = ms(ta)
             val tf = now()
@@ -747,17 +783,46 @@ class MeasurementController(
                 logger.saveJpegAsync("first_output", src.selectedTensorBitmap(tensor, 0))
             }
             val dets = tfl.detectTensorBatchOptimized(tensor.batch)
-            return Parts(alignMs, formMs, tfl.lastRunMs, tfl.lastDecodeMs, dets.sumOf { d -> d.count { it.confidence >= 0.25f } })
+            val runMs = tfl.lastRunMs; val decMs = tfl.lastDecodeMs
+            // The union: every lane's cars >= 0.25, score order, IoU 0.3 NMS.
+            val tu = now()
+            val union = V.nms(dets.flatten().filter { it.classId in V.VEH && it.confidence >= V.OUT_THR }
+                .map { d -> V.D(d.confidence.toDouble(), DoubleArray(4) { d.xyxy[it].toDouble() }, d.classId) })
+            val unionMs = ms(tu)
+            // The next setting from the key lane, as runAddl's step 5 (its picture stats run there
+            // alongside the detector; here after it).
+            var chooseMs = 0.0
+            if (curve != null) {
+                val tc = now()
+                val mp0 = tensor.batch.transforms[0]
+                val top = mp0.padY.toInt()
+                val pic = DoubleArray(HowToSense.W * HowToSense.H)
+                HowToSense.pictureRows(tensorRgbRows(tensor, 0, top), pic, 0 until HowToSense.H)
+                val st = HowToSense.stats(pic, keyCell)
+                for (d in union) map.add(doubleArrayOf(d.box[0] * mp0.scale + mp0.padX, d.box[1] * mp0.scale + mp0.padY - top,
+                    d.box[2] * mp0.scale + mp0.padX, d.box[3] * mp0.scale + mp0.padY - top))
+                val key = reads.last().second
+                val gyro = gyroWindow.mean(key.timestamp, key.timestamp + key.appliedExpUs * 1_000L)
+                HowToSense.choose(curve, st, HowToSense.gyroSpeeds(gyro.first, map.sizes()), map.weights(),
+                    map.sizes(), keyCell, HowToSense.DENS)
+                chooseMs = ms(tc)
+            }
+            return Parts(alignMs, formMs, runMs, decMs, union.size, unionMs, chooseMs)
         }
         fun logOut(ph: String, idx: Int, lanes: List<Int>, waitMs: Double, p: Parts, totalMs: Double,
                    sincePrev: Double, latency: Double, span: Double, maxGap: Double, skipped: Int,
-                   rawDecMs: Double = 0.0) {
-            logger.row("budget_outputs", listOf(ph, idx, lanes.joinToString("+"), lanes.sum(), lanes.size,
+                   rawDecMs: Double = 0.0, lateMs: Double = 0.0) {
+            logger.row("budget_outputs", listOf(ph, idx, lanes.joinToString("+"), readsFor(lanes), lanes.size,
                 "%.2f".format(waitMs), "%.2f".format(p.alignMs), "%.2f".format(p.formMs), "%.2f".format(p.runMs),
                 "%.2f".format(p.decMs), "%.2f".format(totalMs), "%.2f".format(sincePrev), "%.2f".format(latency),
-                "%.2f".format(span), "%.2f".format(maxGap), skipped, p.nDets, "%.2f".format(rawDecMs)))
+                "%.2f".format(span), "%.2f".format(maxGap), skipped, p.nDets, "%.2f".format(rawDecMs),
+                "%.2f".format(p.unionMs), "%.2f".format(p.chooseMs), "%.2f".format(lateMs)))
+            val h = health.sample()
+            logger.row("budget_health", listOf(ph, idx, SystemClock.elapsedRealtimeNanos(), h.batteryTemperatureC,
+                h.thermalStatus, h.cpuPercent, h.cpuMaxMhz, h.currentUA, h.voltageMv, h.batteryPct, h.pluggedState))
             if (idx >= 2) outStats.getOrPut(ph) { ArrayList() } += doubleArrayOf(waitMs, p.alignMs, p.formMs,
-                p.runMs, p.decMs, totalMs, sincePrev, latency, span, maxGap, skipped.toDouble(), rawDecMs)
+                p.runMs, p.decMs, totalMs, sincePrev, latency, span, maxGap, skipped.toDouble(), rawDecMs,
+                p.unionMs, p.chooseMs, lateMs)
         }
 
         var held: List<BudgetRead> = emptyList()
@@ -776,15 +841,26 @@ class MeasurementController(
                 android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE)
             for (lanes in patterns) {
                 if (!running || capError.get() != null) break
-                val r = lanes.sum()
-                val ph = "p_" + lanes.joinToString("+")
+                val r = readsFor(lanes)
+                val ph = (if (nested) "n_" else "p_") + lanes.joinToString("+")
                 phase.set(ph)
                 onStatus("budget: $mode $ph")
                 var prevOut = 0L
                 while (pacedQueue.isNotEmpty()) raw.abortBracketSequence(pacedQueue.removeFirst())
                 if (mode == "paced") repeat(ahead) { pacedQueue.addLast(pacedRequest(r)) }
-                for (idx in 0 until BUDGET_OUTPUTS) {
+                var tick = 0L
+                for (idx in 0 until outputs) {
+                    if (!running) break
+                    // The output clock (periodMs > 0): an output periodMs after the previous one
+                    // started, at once when that one overran (lateMs: by how much).
+                    if (periodMs > 0) {
+                        if (tick == 0L) tick = now()
+                        val lead = tick - now()
+                        if (lead > 0) Thread.sleep(lead / 1_000_000, (lead % 1_000_000).toInt())
+                    }
                     val t0 = now()
+                    val lateMs = if (periodMs > 0) (t0 - tick) / 1e6 else 0.0
+                    if (periodMs > 0) tick = maxOf(tick, t0) + periodMs * 1_000_000L
                     var skipped = 0
                     var rawDecMs = 0.0
                     val reads: List<BudgetRead> = if (mode == "paced") {
@@ -805,7 +881,11 @@ class MeasurementController(
                         val picked: List<ProbeRead> = synchronized(lock) {
                             while (capturing.get() && ring.count { it.ts > lastUsed } < r) lock.wait(50)
                             val fresh = ring.filter { it.ts > lastUsed }
-                            if (fresh.size < r) emptyList() else { skipped = fresh.size - r; fresh.takeLast(r) }
+                            if (fresh.size < r) emptyList() else {
+                                skipped = fresh.size - r
+                                // Taken: the ring may drop them while they decode, not close them.
+                                fresh.takeLast(r).also { picked -> picked.forEach { it.taken = true } }
+                            }
                         }
                         val td = now()
                         picked.map { it.take() }.also { if (mode == "lazy") rawDecMs = ms(td) }
@@ -821,7 +901,7 @@ class MeasurementController(
                         if (prevOut == 0L) Double.NaN else (outNs - prevOut) / 1e6,
                         (outNs - last.timestamp - last.appliedExpUs * 1000L) / 1e6,
                         (last.timestamp + last.appliedExpUs * 1000L - reads[0].second.timestamp) / 1e6,
-                        gaps.maxOrNull() ?: 0.0, skipped, rawDecMs)
+                        gaps.maxOrNull() ?: 0.0, skipped, rawDecMs, lateMs)
                     prevOut = outNs
                 }
             }
@@ -856,7 +936,8 @@ class MeasurementController(
         }
         val summary = JSONObject().put("capture_error", capError.get()?.toString() ?: JSONObject.NULL)
         val names = listOf("wait_ms", "align_ms", "form_ms", "run_ms", "dec_ms", "total_ms",
-            "since_prev_output_ms", "latency_ms", "span_ms", "max_gap_ms", "skipped_reads", "rawdec_ms")
+            "since_prev_output_ms", "latency_ms", "span_ms", "max_gap_ms", "skipped_reads", "rawdec_ms",
+            "union_ms", "choose_ms", "late_ms")
         for ((ph, rows) in outStats) {
             val o = JSONObject().put("n", rows.size)
             names.forEachIndexed { i, nm -> o.put(nm, JSONObject().put("median", q(rows.map { it[i] }, 0.5)).put("p90", q(rows.map { it[i] }, 0.9))) }
@@ -878,6 +959,94 @@ class MeasurementController(
         runCatching { java.io.File(logger.dir, "budget_summary.json").writeText(summary.toString(2)) }
         writeDecodeCheck()
         onStatus("budget: done" + (capError.get()?.let { " (capture error: ${it.message})" } ?: ""))
+        endPass()
+    }
+
+    /**
+     * Read probe (2026-11-03, desk test, device still): the read interval at each shutter, and
+     * how many reads a new setting takes to show, by the result's metadata and by the pixels
+     * (the mean RAW level), for three ways of asking:
+     * - switch: the repeating request replaced (the camera reads the last setting until then);
+     * - insert: one-shot requests sent beside a repeating request at another setting;
+     * - queue: one-shot requests only, [QUEUE_DEPTH] in flight, the setting alternating every
+     *   request (the glass's demand capture and the baselines' stream are of this kind).
+     * Settings alternate between 1/240 and 1/60 at [isoIn] (capped at the analog ceiling), two
+     * stops apart, so the level tells them apart. Nothing is decoded or detected.
+     *
+     * Logs probe_reads.csv (every read: tag and requested setting, applied setting, frame
+     * duration, exposure-start / result / image times, level, black) and probe_events.csv
+     * (every request: phase, kind, when sent, tag, setting).
+     */
+    fun runReadProbe(onStatus: (String) -> Unit, isoIn: Int = 800) {
+        val iso = minOf(isoIn, v2AnalogCeil())
+        val a = 4167; val b = 16667
+        startPass("read_probe", isGtReference = false, withFrames = false, methodParams = JSONObject()
+            .put("iso", iso).put("shutters_us", JSONArray(Duel.SHUTTERS_US.toList())).put("switch_pair_us", JSONArray(listOf(a, b)))
+            .put("phases", "interval: repeating at each shutter, 2 s each; switch: repeating at 1/240, then " +
+                "replaced every 500 ms (1/60, 1/240, ...), 12 times; insert: repeating at 1/240, one 1/60 request " +
+                "every 500 ms, 10 times; queue: one-shot requests only, $QUEUE_DEPTH in flight, 1/240 and 1/60 " +
+                "alternating, 60 requests")
+            .put("level", "mean RAW of 2x2 quads every 96 px (RAW10: high 8 bits x 4); black logged per read")
+            .put("raw_format", if (raw.streamFormat == ImageFormat.RAW10) "RAW10" else "RAW_SENSOR")
+            .put("timestamp_source", raw.timestampSource).put("sync_max_latency", raw.syncMaxLatency))
+        logger.csv("probe_reads", listOf("phase", "sensor_ts", "frame_number", "tag", "req_exp_us", "req_iso",
+            "exp_us", "iso", "frame_duration_ns", "started_ns", "completed_ns", "arrival_ns", "level", "black"))
+        logger.csv("probe_events", listOf("phase", "event", "t_ns", "tag", "exp_us", "iso"))
+        val phase = java.util.concurrent.atomic.AtomicReference("idle")
+        val lock = java.lang.Object()
+        // queue: one-shot requests sent and not yet read.
+        val waiting = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+        raw.startReadProbe { r ->
+            logger.row("probe_reads", listOf(phase.get(), r.ts, r.frameNumber, r.tag, r.reqExpUs, r.reqIso,
+                r.appliedExpUs, r.appliedIso, r.frameDurationNs, r.startedNs, r.completedNs, r.arrivalNs,
+                "%.2f".format(r.level), "%.1f".format(r.black)))
+            if (waiting.remove(r.tag)) synchronized(lock) { lock.notifyAll() }
+        }
+        var tag = 100L
+        fun send(kind: String, us: Int): Long {
+            val t = tag++
+            logger.row("probe_events", listOf(phase.get(), kind, SystemClock.elapsedRealtimeNanos(), t, us, iso))
+            if (kind == "repeat") raw.probeRepeat(us, iso, t) else raw.probeOnce(us, iso, t)
+            return t
+        }
+        fun hold(ms: Long) {
+            val end = SystemClock.elapsedRealtime() + ms
+            while (running && SystemClock.elapsedRealtime() < end) Thread.sleep(5)
+        }
+        try {
+            phase.set("interval")
+            for (us in Duel.SHUTTERS_US) {
+                if (!running) break
+                onStatus("read probe: interval 1/${1_000_000 / us}")
+                send("repeat", us); hold(2000)
+            }
+            phase.set("switch"); onStatus("read probe: switch")
+            send("repeat", a); hold(1000)
+            for (i in 0 until 12) { if (!running) break; send("repeat", if (i % 2 == 0) b else a); hold(500) }
+            phase.set("insert"); onStatus("read probe: insert")
+            send("repeat", a); hold(1000)
+            for (i in 0 until 10) { if (!running) break; send("once", b); hold(500) }
+            raw.probeStopRepeating(); hold(500)
+            phase.set("queue"); onStatus("read probe: queue")
+            for (i in 0 until 60) {
+                if (!running) break
+                synchronized(lock) {
+                    val giveUp = SystemClock.elapsedRealtime() + 2000
+                    while (running && waiting.size >= QUEUE_DEPTH && SystemClock.elapsedRealtime() < giveUp) lock.wait(10)
+                }
+                if (waiting.size >= QUEUE_DEPTH) {     // a read never came: log and go on
+                    logger.row("probe_events", listOf(phase.get(), "timeout", SystemClock.elapsedRealtimeNanos(),
+                        waiting.joinToString(" "), 0, iso))
+                    waiting.clear()
+                }
+                waiting += tag
+                send("once", if (i % 2 == 0) a else b)
+            }
+            hold(1000)
+        } finally {
+            raw.stopReadProbe()
+        }
+        onStatus("read probe: done")
         endPass()
     }
 

@@ -809,6 +809,133 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         }
     }
 
+    // ---------- read probe (2026-11-03) ----------
+
+    /** One read of the read probe: the request's tag and setting, what its result says was
+     *  applied, when its exposure started (callback), its result and its image reached the app
+     *  (elapsedRealtimeNanos), and [level], the mean RAW of a sparse grid of 2x2 quads: the
+     *  exposure as the pixels show it ([black]: the read's black level, not subtracted). */
+    class ProbeRead(val ts: Long, val frameNumber: Long, val tag: Long, val reqExpUs: Long, val reqIso: Int,
+                    val appliedExpUs: Long, val appliedIso: Int, val frameDurationNs: Long,
+                    val startedNs: Long, val completedNs: Long, val arrivalNs: Long,
+                    val level: Double, val black: Double)
+
+    /** A read's result and image, joined by sensor timestamp as they come. */
+    private class ProbeHalf {
+        var result: TotalCaptureResult? = null
+        var completedNs = 0L
+        var image = false
+        var arrivalNs = 0L
+        var level = Double.NaN
+    }
+    private val probeHalves = HashMap<Long, ProbeHalf>()
+    private val probeStarted = ConcurrentHashMap<Long, Long>()
+    @Volatile private var probeSink: ((ProbeRead) -> Unit)? = null
+    private var probePool: java.util.concurrent.ExecutorService? = null
+
+    private fun probeJoin(ts: Long, fill: (ProbeHalf) -> Unit) {
+        val done = synchronized(probeHalves) {
+            val h = probeHalves.getOrPut(ts) { ProbeHalf() }
+            fill(h)
+            if (h.result != null && h.image) probeHalves.remove(ts) else null
+        } ?: return
+        val r = done.result!!
+        val actual = r.sensorState()
+        val dyn = r.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
+        probeSink?.invoke(ProbeRead(ts, r.frameNumber, r.request.tag as? Long ?: -1L,
+            (r.request.get(CaptureRequest.SENSOR_EXPOSURE_TIME) ?: -1_000L) / 1_000L,
+            r.request.get(CaptureRequest.SENSOR_SENSITIVITY) ?: -1, actual.exposureUs, actual.iso,
+            r.get(CaptureResult.SENSOR_FRAME_DURATION) ?: -1L, probeStarted.remove(ts) ?: 0L,
+            done.completedNs, done.arrivalNs, done.level,
+            if (dyn != null && dyn.isNotEmpty()) dyn.average() else staticBlack.average()))
+    }
+
+    private val probeCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureStarted(session: CameraCaptureSession, request: CaptureRequest,
+                                      timestamp: Long, frameNumber: Long) {
+            probeStarted[timestamp] = SystemClock.elapsedRealtimeNanos()
+        }
+
+        override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest,
+                                        result: TotalCaptureResult) {
+            val now = SystemClock.elapsedRealtimeNanos()
+            val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+            probeJoin(ts) { it.result = result; it.completedNs = now }
+        }
+    }
+
+    /** Mean RAW of the 2x2 quads at every 96th row and column (RAW10: each pixel's high 8 bits
+     *  x 4), ~1300 quads: cheap enough for every read at 30 fps even in a debug build (every
+     *  32nd, 2026-11-03's first try, fell behind: the held images stalled the camera). */
+    private fun probeLevel(image: Image): Double {
+        val plane = image.planes[0]
+        val buf = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        val rs = plane.rowStride
+        val raw10 = streamFormat == ImageFormat.RAW10
+        fun px(x: Int, y: Int): Int = if (raw10) (buf.get(y * rs + (x / 4) * 5 + (x % 4)).toInt() and 0xff) shl 2
+            else buf.getShort(y * rs + x * 2).toInt() and 0xffff
+        var sum = 0L; var n = 0
+        var y = 0
+        while (y + 1 < image.height) {
+            var x = 0
+            while (x + 1 < image.width) {
+                sum += px(x, y) + px(x + 1, y) + px(x, y + 1) + px(x + 1, y + 1); n += 4
+                x += 96
+            }
+            y += 96
+        }
+        return if (n > 0) sum.toDouble() / n else Double.NaN
+    }
+
+    /** The read probe's own listener on the RAW reader: every read goes to [sink], with its
+     *  result, until [stopReadProbe]. Requests: [probeRepeat], [probeOnce]. */
+    @Synchronized
+    fun startReadProbe(sink: (ProbeRead) -> Unit) {
+        check(!fastCaptureStarted && !continuousStarted) { "another capture mode is active" }
+        val imageReader = reader ?: error("RAW reader is closed")
+        drainReader(imageReader)
+        synchronized(probeHalves) { probeHalves.clear() }
+        probeStarted.clear()
+        probeSink = sink
+        val pool = Executors.newFixedThreadPool(2).also { probePool = it }
+        imageReader.setOnImageAvailableListener({ source ->
+            val image = runCatching { source.acquireNextImage() }.getOrNull()
+                ?: return@setOnImageAvailableListener
+            val arrival = SystemClock.elapsedRealtimeNanos()
+            pool.execute {
+                val ts = image.timestamp
+                val level = try { probeLevel(image) } catch (t: Throwable) { Double.NaN } finally { image.close() }
+                probeJoin(ts) { it.image = true; it.arrivalNs = arrival; it.level = level }
+            }
+        }, cameraHandler)
+    }
+
+    /** Replaces the repeating request with [expUs] / [iso], tagged [tag]. */
+    fun probeRepeat(expUs: Int, iso: Int, tag: Long) {
+        (session ?: error("camera session is closed"))
+            .setRepeatingRequest(manualRequest(SensorState(expUs.toLong(), iso), tag), probeCallback, cameraHandler)
+    }
+
+    /** One request at [expUs] / [iso], tagged [tag], beside any repeating request. */
+    fun probeOnce(expUs: Int, iso: Int, tag: Long) {
+        (session ?: error("camera session is closed"))
+            .capture(manualRequest(SensorState(expUs.toLong(), iso), tag), probeCallback, cameraHandler)
+    }
+
+    fun probeStopRepeating() { runCatching { session?.stopRepeating() } }
+
+    @Synchronized
+    fun stopReadProbe() {
+        probeStopRepeating()
+        reader?.setOnImageAvailableListener(null, null)
+        probePool?.let { it.shutdown(); runCatching { it.awaitTermination(2, TimeUnit.SECONDS) } }
+        probePool = null
+        reader?.let { drainReader(it) }
+        probeSink = null
+        synchronized(probeHalves) { probeHalves.clear() }
+        probeStarted.clear()
+    }
+
     // ---------- parallel mode (2026-10-29) ----------
 
     /** What a parallel-mode read was requested as: a manual setting, or the phone's AE. */
