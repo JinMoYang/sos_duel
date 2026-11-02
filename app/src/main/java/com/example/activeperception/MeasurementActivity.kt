@@ -860,6 +860,10 @@ class MeasurementActivity : AppCompatActivity() {
         handler.postDelayed({ runCatching { tone.release() } }, times * 750L + 1_000L)
     }
 
+    /** A stop asked for while a run was still opening ([stopMeasurement]); [start] stops the
+     *  run's controller as soon as it exists. */
+    @Volatile private var stopPending = false
+
     /** Set by a "par_" command for the run it starts ([start] takes it). */
     private var parallelNext = false
 
@@ -985,6 +989,9 @@ class MeasurementActivity : AppCompatActivity() {
     private fun stopMeasurement(userInitiated: Boolean = true) {
         // A stop the operator asked for ends the lap plan too, not just the current block.
         if (userInitiated) lapSession?.abort()
+        // A run still opening (mc is the previous run's until the new controller exists) stops
+        // as soon as it has one.
+        if (runActive) stopPending = true
         mc?.stop()
         post("stopping…")
         runOnUiThread { overlay.clear(); cellText.text = "—" }
@@ -1325,6 +1332,7 @@ class MeasurementActivity : AppCompatActivity() {
         val saveImagesNow = launchSaveImages ?: presetSaveImages ?: true
         val focusNow = launchFocusDiopters ?: DEFAULT_FOCUS_DIOPTERS
         applyMountOffset()
+        stopPending = false
         runActive = true
         inferenceExecutor.execute {
             try {
@@ -1375,6 +1383,7 @@ class MeasurementActivity : AppCompatActivity() {
                 mcLocal.appFilesDir = getExternalFilesDir(null)
                 raw.fixedFocusDiopters = focusNow
                 mc = mcLocal
+                if (stopPending) mcLocal.stop()
                 try {
                     block()
                 } finally {
@@ -1392,6 +1401,7 @@ class MeasurementActivity : AppCompatActivity() {
                 post("error: ${e.message}")
             } finally {
                 runActive = false
+                stopPending = false
                 runOnUiThread {
                     findViewById<TextView>(R.id.limoMeasured)?.text = ExperimentSession.lastLapS
                         .let { if (it.isNaN()) "lap —" else "lap %.1f s".format(it) }

@@ -101,7 +101,10 @@ class MeasurementController(
     private val colorPipeline: ColorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB
 ) {
     @Volatile var running = false; private set
-    fun stop() { running = false }
+    /** A stop that came before the pass started (a run still metering or warming up): the
+     *  pass then starts stopped instead of [startPass] setting [running] over it. */
+    @Volatile private var stopRequested = false
+    fun stop() { stopRequested = true; running = false }
 
     /** The canonical per-pass frame index: the `f` that names img/frame_XXXX.jpg and fills
      *  frames.csv `idx`. Published by [logFrame] just before each onFrame callback so
@@ -1589,7 +1592,8 @@ class MeasurementController(
         val src = ParallelRawCandidateSource(grid, raw,
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
-        raw.armNativeDecodeValidation()
+        // No native-decode validation here: its reference decode made the first output ~3.5 s
+        // late (2026-11-03 walk desk test); the probes keep it.
         onStatus("warming FP16 GPU batches…")
         tfl.warmUpAllBatches()
         val alignPool = Executors.newFixedThreadPool(4)
@@ -3370,7 +3374,7 @@ class MeasurementController(
         detectionTotalAboveThresh = 0
         detectionTotalAtFloor = 0
         totalFramesLogged = 0
-        running = true
+        running = !stopRequested
     }
 
     private fun endPass() {
