@@ -63,10 +63,11 @@ object HowToSense {
      * [TRANS_PER_S] car lengths per second ([size]: the map's typical long side), so that
      * [choose]'s blur is shutter x (rotation / size + [TRANS_PER_S]) as in the curve built by
      * ToleranceCurveSosCf with -Dsos.speed=hybrid.
+     * [fPx]: the camera's focal length in picture px ([F_PX] is the S26's).
      */
-    fun gyroSpeeds(w: DoubleArray, size: DoubleArray): DoubleArray = DoubleArray(N) { k ->
+    fun gyroSpeeds(w: DoubleArray, size: DoubleArray, fPx: Double = F_PX): DoubleArray = DoubleArray(N) { k ->
         val cx = (k % GX + 0.5) * CS - W / 2.0; val cy = (k / GX + 0.5) * CS - H / 2.0
-        sqrt(F_PX * F_PX * (w[0] * w[0] + w[1] * w[1]) + w[2] * w[2] * (cx * cx + cy * cy)) + TRANS_PER_S * size[k]
+        sqrt(fPx * fPx * (w[0] * w[0] + w[1] * w[1]) + w[2] * w[2] * (cx * cx + cy * cy)) + TRANS_PER_S * size[k]
     }
 
     /** Inverse sRGB of each 8-bit level. */

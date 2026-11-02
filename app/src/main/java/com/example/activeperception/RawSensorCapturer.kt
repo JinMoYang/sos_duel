@@ -211,6 +211,11 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     /** SENSOR_MAX_ANALOG_SENSITIVITY — above this the sensor applies digital gain. 0 when
      *  the HAL does not report it. */
     var maxAnalogIso: Int = 0; private set
+    /** Focal length in px of a 640-px-wide picture of the whole RAW frame (the detector input's
+     *  width): how far a rotation moves the picture per radian, from this camera's own
+     *  LENS_INFO_AVAILABLE_FOCAL_LENGTHS, SENSOR_INFO_PHYSICAL_SIZE and PIXEL_ARRAY_SIZE. NaN
+     *  when the HAL does not report them. */
+    var focalPx640: Double = Double.NaN; private set
     var streamFormat: Int = ImageFormat.RAW_SENSOR; private set
     /** Manual focus in diopters, applied to EVERY request this capturer builds (AF off), so
      *  no method carries the autofocus's own hunting into a comparison. NaN or negative
@@ -348,6 +353,13 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         streamFormat = format
         streamMinFrameDurationNs = map.getOutputMinFrameDuration(format, size)
             .takeIf { it > 0L } ?: BASE_FRAME_DURATION_NS
+        focalPx640 = run {
+            val f = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+            val phys = chars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            val pix = chars.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+            if (f == null || phys == null || pix == null || phys.width <= 0f) Double.NaN
+            else f / phys.width * pix.width * (640.0 / width)
+        }
 
         val opened = CountDownLatch(1)
         manager.openCamera(CAMERA_ID, object : CameraDevice.StateCallback() {
@@ -934,6 +946,104 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         probeSink = null
         synchronized(probeHalves) { probeHalves.clear() }
         probeStarted.clear()
+    }
+
+    // ---------- repeating stream (2026-11-03, the proposed method "sense") ----------
+
+    /** One read of the repeating stream, still the camera's buffer ([pending]: decode it or
+     *  close it), read at the setting labelled [label]. */
+    class StreamRead(val pending: PendingRead, val label: Int, val timestamp: Long, val exposureUs: Long)
+
+    private class StreamSetting(val expected: SensorState, val tag: Long, val label: Int)
+    private class StreamHalf {
+        var result: TotalCaptureResult? = null
+        var image: Image? = null
+    }
+    private val streamSettings = ConcurrentHashMap<Long, StreamSetting>()
+    private val streamHalves = LinkedHashMap<Long, StreamHalf>()
+    @Volatile private var streamSink: ((StreamRead) -> Unit)? = null
+    @Volatile private var streamStarted = false
+    /** Stream reads whose result disagreed with their request's setting, closed unread (the
+     *  2026-11-03 read probe saw none: a tagged read is read at its tag's setting). */
+    val streamMismatched = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private fun streamJoin(ts: Long, fill: (StreamHalf) -> Unit) {
+        var stale: List<Image> = emptyList()
+        val done = synchronized(streamHalves) {
+            val h = streamHalves.getOrPut(ts) { StreamHalf() }
+            fill(h)
+            // A half whose other half never came (a lost result or image) is dropped.
+            if (streamHalves.size > 16) {
+                val old = streamHalves.entries.take(streamHalves.size - 16)
+                stale = old.mapNotNull { it.value.image }
+                old.map { it.key }.forEach { streamHalves.remove(it) }
+            }
+            if (h.result != null && h.image != null) streamHalves.remove(ts) else null
+        }
+        stale.forEach { runCatching { it.close() } }
+        if (done == null) return
+        val r = done.result!!; val image = done.image!!
+        val s = (r.request.tag as? Long)?.let { streamSettings[it] }
+        val sink = streamSink
+        val actual = r.sensorState()
+        if (s == null || sink == null || !scheduler.matches(s.expected, actual)) {
+            if (s != null && sink != null) streamMismatched.incrementAndGet()
+            image.close(); return
+        }
+        sink(StreamRead(PendingRead(image, r, s.expected, s.tag), s.label, ts, actual.exposureUs))
+    }
+
+    private val streamCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest,
+                                        result: TotalCaptureResult) {
+            val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+            streamJoin(ts) { it.result = result }
+        }
+    }
+
+    /** The repeating stream's listener on the RAW reader: every read whose result matches its
+     *  request goes to [sink] undecoded, until [stopStream]. The setting: [streamSet]. */
+    @Synchronized
+    fun startStream(sink: (StreamRead) -> Unit) {
+        check(!fastCaptureStarted && !continuousStarted && !streamStarted) { "another capture mode is active" }
+        val imageReader = reader ?: error("RAW reader is closed")
+        drainReader(imageReader)
+        synchronized(streamHalves) { streamHalves.clear() }
+        streamSettings.clear()
+        streamMismatched.set(0)
+        streamSink = sink
+        imageReader.setOnImageAvailableListener({ source ->
+            val image = runCatching { source.acquireNextImage() }.getOrNull()
+                ?: return@setOnImageAvailableListener
+            streamJoin(image.timestamp) { it.image = image }
+        }, cameraHandler)
+        streamStarted = true
+    }
+
+    /** Makes [expUs] / [iso] the repeating request; its reads come out labelled [label]. The
+     *  reads already queued keep the old setting and label: the new one shows ~8 reads
+     *  (~0.3 s) later (read probe 2026-11-03). */
+    fun streamSet(expUs: Int, iso: Int, label: Int) {
+        val expected = SensorState(expUs.toLong(), iso)
+        val tag = scheduler.enqueue(expected).id
+        streamSettings[tag] = StreamSetting(expected, tag, label)
+        (session ?: error("camera session is closed"))
+            .setRepeatingRequest(manualRequest(expected, tag), streamCallback, cameraHandler)
+    }
+
+    @Synchronized
+    fun stopStream() {
+        if (!streamStarted) return
+        streamSink = null
+        runCatching { session?.stopRepeating() }
+        reader?.setOnImageAvailableListener(null, null)
+        synchronized(streamHalves) {
+            streamHalves.values.forEach { h -> h.image?.let { runCatching { it.close() } } }
+            streamHalves.clear()
+        }
+        reader?.let { drainReader(it) }
+        streamSettings.clear()
+        streamStarted = false
     }
 
     // ---------- parallel mode (2026-10-29) ----------

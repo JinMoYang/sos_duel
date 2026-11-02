@@ -571,8 +571,9 @@ class MeasurementActivity : AppCompatActivity() {
      *  on separate threads, 10 fps): the proposed method (addl_3_sep_every: the key read at the
      *  curve's setting plus up to 3 more at that setting every frame, each detected on its own, fused)
      *  and the baselines moved unchanged onto the parallel capture (par_*), PhysSweep as fast
-     *  PhysSweep. 21 runs, ~12 min per lighting. */
-    private val PAR_MAIN_METHODS = listOf("addl_3_sep_every", "par_ae_phone", "par_prop_c", "par_physsweep_fast",
+     *  PhysSweep. 21 runs, ~12 min per lighting. From 2026-11-03 the proposed method is sense (the
+     *  app spec of that day, MeasurementController.runSense); addl_3_sep_every stays runnable by name. */
+    private val PAR_MAIN_METHODS = listOf("sense", "par_ae_phone", "par_prop_c", "par_physsweep_fast",
         "par_shin_nm", "par_nae", "par_fixed_1600_240")
     private val PAR_MAIN_PLAN = rounds(PAR_MAIN_METHODS)
 
@@ -667,7 +668,8 @@ class MeasurementActivity : AppCompatActivity() {
             "addl_5_merge" -> "check: key + 5 more, merged"
             "addl_5_sep" -> "check: key + 5 more, separate"
             "addl_3_merge_every" -> "check: key + 3 more every frame, merged"
-            "addl_3_sep_every" -> "proposed: key + up to 3 more every frame, separate"
+            "addl_3_sep_every" -> "proposed (10-31): key + up to 3 more every frame, separate"
+            "sense" -> "proposed: Key Exposure + new samples (spec 2026-11-03)"
             "fixed_1600_240" -> "reference: fixed 1600 · 1/240"
             "nae" -> "baseline: Neural-AE"
             "prop_c" -> "baseline: Sense-well"
@@ -925,6 +927,21 @@ class MeasurementActivity : AppCompatActivity() {
         // The additional-exposure check: addl_0, addl_<extra>_merge | _sep (extra 1-5), the key
         // read plus that many more at its setting after a trace; a trailing _every, on every
         // frame (MeasurementController.runAddl).
+        // The proposed method of the 2026-11-03 app spec (MeasurementController.runSense):
+        // `--ei sense_images` = B, the images one output may detect (default 2: the glass's
+        // 2026-11-03 costs at 2 fps, docs/RAYNEO_COSTS_2026-11-03.md).
+        if (cmd == "sense") {
+            val curve = runCatching {
+                HowToSense.Curve.parse(assets.open(CURVE_FILE).bufferedReader().use { it.readText() })
+            }.getOrElse { post("sense needs assets/$CURVE_FILE: ${it.message}"); return }
+            val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
+            val images = intent.getIntExtra("sense_images", 2).coerceIn(1, 3)
+            // Desk tests: --ez sense_every true (once, then forgotten): the sums on every output.
+            val every = intent?.getBooleanExtra("sense_every", false) == true
+            intent?.removeExtra("sense_every")
+            start(cmd) { mc!!.runSense(curve, images, cap, ::post, ::showFrame, everyOutput = every) }
+            return
+        }
         Regex("""addl_([0-5])(?:_(merge|sep))?(_every)?""").matchEntire(cmd)?.let { m ->
             val extra = m.groupValues[1].toInt(); val use = m.groupValues[2]
             if ((extra == 0) != use.isEmpty()) { post("addl: $cmd takes _merge or _sep exactly when extra > 0"); return }
@@ -1001,7 +1018,8 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** Short names on the glass's walk screen. */
     private fun walkName(method: String) = when (method) {
-        "addl_3_sep_every" -> "proposed"
+        "sense" -> "proposed"
+        "addl_3_sep_every" -> "proposed (10-31)"
         "par_ae_phone" -> "AE-Phone"
         "par_prop_c" -> "Sense-well"
         "par_physsweep_fast" -> "PhysSweep"
