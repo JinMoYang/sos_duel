@@ -1344,6 +1344,16 @@ class MeasurementActivity : AppCompatActivity() {
                     closeResources()
                     resourcesMustClose = false
                 }
+                // The camera service can drop the camera mid-session (2026-11-03: its provider
+                // died on SIGPIPE during a walk and the run stopped); the next run opens it again
+                // instead of failing on the dead one. The detector stays loaded.
+                if (opened && !raw.cameraAlive) {
+                    post("camera lost — reopening…")
+                    runCatching { raw.close() }
+                    raw = RawSensorCapturer(this).apply { preferRaw10 = intent.getBooleanExtra("raw10", false) }
+                    raw.open()
+                    raw.mountOffsetDeg = mountOffsetDeg
+                }
                 if (!opened) {
                     post("opening camera…")
                     // `--ez raw10 true`: RAW10 instead of RAW_SENSOR (the glass budget).

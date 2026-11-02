@@ -41,6 +41,11 @@ private const val BUDGET_OUTPUTS = 12
 private const val BUDGET_RING = 8
 /** Read probe: one-shot requests in flight in its queue phase. */
 private const val QUEUE_DEPTH = 3
+/** sense: reads with no more than this between one's exposure end and the next's start are
+ *  gap-free. The frame duration is pinned to the exposure + 1 ms (RawSensorCapturer.manualRequest),
+ *  so gap-free reads on the glass show 1.0 ms (1/30, 1/15) and the shortest gap is 16.7 ms (1/60;
+ *  read probe 2026-11-03). */
+private const val GAPFREE_NS = 1_500_000L
 /** sense: undecoded reads kept for the next outputs (a 1/240-1/60 read every 33 ms: ~0.27 s). */
 private const val SENSE_RING = 8
 private val BUDGET_PATTERNS = listOf(listOf(1), listOf(2), listOf(4), listOf(6), listOf(1, 1), listOf(2, 1),
@@ -1565,7 +1570,9 @@ class MeasurementController(
             .put("key", "the newest read at the setting the camera reads")
             .put("new_sample", "after an output with a hesitation (phone boxes .05-.25, IoU < .3 to every box " +
                 ">= .25, any image): the key + 1 read" + (if (images >= 3) " and the key + 3 reads" else "") +
-                ", earlier reads at the key setting moved onto the key (BurstAlign, every tile) and summed; " +
+                ", earlier reads at the key setting summed onto the key: moved onto it first (BurstAlign, every " +
+                "tile) when the reads have gaps between them (1/240-1/60), as they are when gap-free (1/30, 1/15: " +
+                "a real longer exposure, sos_cf_v1 question 1); " +
                 "otherwise the key alone; one detector call")
             .put("union", "car boxes >= 0.25 of every image, score order, IoU 0.3 NMS, own scores")
             .put("key_exposure", "How-to-Sense on the key picture, tolerance curve, car prior weights, " +
@@ -1588,7 +1595,7 @@ class MeasurementController(
         logger.csv("sense_frames", listOf("idx", "kind", "n_reads", "n_images", "iso", "shutter_us", "key_ts",
             "reads_ts", "last_end_ts", "t_output", "wait_ms", "rawdec_ms", "align_ms", "align_residual",
             "form_ms", "infer_ms", "union_ms", "choose_ms", "total_ms", "late_ms", "latency_ms", "n_out", "n_hes",
-            "moved_to_iso", "moved_to_shutter_us", "stream_mismatched"))
+            "moved_to_iso", "moved_to_shutter_us", "stream_mismatched", "gapped"))
         val src = ParallelRawCandidateSource(grid, raw,
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
@@ -1708,9 +1715,13 @@ class MeasurementController(
                 val iso = Duel.ISOS[gIdx]; val phys = minOf(iso, ceil); val ratio = iso.toDouble() / phys
 
                 // ---- 2. images: the key, and the sums of the key and the reads before it moved onto it.
+                // Gap-free reads (each exposure ends ~1 ms before the next starts) sum to a real longer
+                // exposure and are added as they are; reads with gaps are moved onto the key first.
+                val gapped = metas.zipWithNext { a, b -> b.timestamp - (a.timestamp + a.appliedExpUs * 1_000L) }
+                    .any { it > GAPFREE_NS }
                 val tA = now()
                 val rs = picked.reversed().map { it.frame }
-                val moved: List<RawFrame> = if (rs.size == 1) rs else {
+                val moved: List<RawFrame> = if (rs.size == 1 || !gapped) rs else {
                     val pyr = rs.map { fr -> BurstAlign.pyramid(fr.bayer, fr.width, fr.height, alignPool) }
                     val acc = BurstAlign.accumulate((1 until rs.size).map { j -> BurstAlign.step(pyr[j - 1], pyr[j], alignPool) })
                     listOf(rs[0]) + acc.withIndex().map { (j, mv) ->
@@ -1791,7 +1802,7 @@ class MeasurementController(
                     "%.1f".format(unionMs), "%.1f".format(chooseMs), "%.1f".format(totalMs), "%.1f".format(lateMs),
                     "%.1f".format((tOutputNs - lastEnd) / 1e6), outDets.size, hes.size,
                     if (movedCell) Duel.ISOS[cell.get() / 5] else "", if (movedCell) Duel.SHUTTERS_US[cell.get() % 5] else "",
-                    raw.streamMismatched.get()))
+                    raw.streamMismatched.get(), if (picked.size > 1) (if (gapped) 1 else 0) else ""))
                 val roles = laneSizes.map { k -> if (k == 1) "key" else "sum$k" }
                 for (a in 0 until n) {
                     val arr = JSONArray()
@@ -1799,6 +1810,7 @@ class MeasurementController(
                         .put("xyxy", jsonBox(DoubleArray(4) { d.xyxy[it].toDouble() })).put("conf", d.confidence.toDouble())
                         .put("class", d.classId))
                     logger.jsonl("candidate_dets", JSONObject().put("frame", f).put("role", roles[a])
+                        .put("made_by", if (laneSizes[a] == 1) "frame" else if (gapped) "aligned_sum" else "gapfree_sum")
                         .put("n_reads", laneSizes[a]).put("reads_ts", JSONArray(picked.reversed().take(laneSizes[a]).map { it.ts }))
                         .put("iso", iso).put("analog_gain", key.meta.appliedIso).put("digital_gain", ratio)
                         .put("frame_exposure_us", key.meta.appliedExpUs)

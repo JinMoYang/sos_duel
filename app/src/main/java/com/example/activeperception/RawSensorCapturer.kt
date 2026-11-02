@@ -265,7 +265,9 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
 
     private val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private lateinit var chars: CameraCharacteristics
-    private var device: CameraDevice? = null
+    @Volatile private var device: CameraDevice? = null
+    /** False once the camera service dropped the device (onDisconnected / onError). */
+    val cameraAlive: Boolean get() = device != null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
     private var width = 0
@@ -1939,6 +1941,8 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     fun close() {
         runCatching { stopContinuousCapture() }
         runCatching { stopFastCapture() }
+        runCatching { stopStream() }
+        runCatching { stopReadProbe() }
         runCatching { reader?.setOnImageAvailableListener(null, null) }
         runCatching { session?.close() }
         runCatching { device?.close() }
