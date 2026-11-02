@@ -572,8 +572,10 @@ class MeasurementActivity : AppCompatActivity() {
      *  curve's setting plus up to 3 more at that setting every frame, each detected on its own, fused)
      *  and the baselines moved unchanged onto the parallel capture (par_*), PhysSweep as fast
      *  PhysSweep. 21 runs, ~12 min per lighting. From 2026-11-03 the proposed method is sense (the
-     *  app spec of that day, MeasurementController.runSense); addl_3_sep_every stays runnable by name. */
-    private val PAR_MAIN_METHODS = listOf("sense", "par_ae_phone", "par_prop_c", "par_physsweep_fast",
+     *  app spec of that day, MeasurementController.runSense); addl_3_sep_every stays runnable by name.
+     *  Sense-well (par_prop_c) left out on 2026-11-03: in that day's walks it stopped by itself
+     *  ~8 s into its block; it stays runnable by name. */
+    private val PAR_MAIN_METHODS = listOf("sense", "par_ae_phone", "par_physsweep_fast",
         "par_shin_nm", "par_nae", "par_fixed_1600_240")
     private val PAR_MAIN_PLAN = rounds(PAR_MAIN_METHODS)
 
