@@ -931,6 +931,28 @@ class MeasurementActivity : AppCompatActivity() {
         // The additional-exposure check: addl_0, addl_<extra>_merge | _sep (extra 1-5), the key
         // read plus that many more at its setting after a trace; a trailing _every, on every
         // frame (MeasurementController.runAddl).
+        // The glass's dedicated capture session (MeasurementController.runGlassCollect): 15 s, then
+        // one beep: stand facing cars; two beeps: walk; three beeps: done. `--ei collect_stand_s`,
+        // `--ei collect_walk_s`, `--ei collect_countdown_s`.
+        if (cmd == "collect_glass") {
+            val countdown = intent.getIntExtra("collect_countdown_s", 15)
+            val stand = intent.getIntExtra("collect_stand_s", 60)
+            val walk = intent.getIntExtra("collect_walk_s", 180)
+            val status: (String) -> Unit = { s ->
+                post(s)
+                when {
+                    s.startsWith("collect: countdown ") -> runOnUiThread {
+                        showWalk("시작까지 ${s.removePrefix("collect: countdown ")}초", "전용 촬영", "삑: 차를 보고 서 있기") }
+                    s == "collect: stand" -> { playLapBeeps(1); runOnUiThread {
+                        showWalk("서 있기", "${stand}초", "삑삑: 걷기 시작") } }
+                    s == "collect: walk" -> { playLapBeeps(2); runOnUiThread {
+                        showWalk("걷기", "${walk}초", "삑삑삑: 끝") } }
+                    s == "collect: done" -> { playLapBeeps(3); runOnUiThread { showWalk("끝", "전용 촬영 완료", "") } }
+                }
+            }
+            start(cmd) { mc!!.runGlassCollect(status, countdown, stand, walk) }
+            return
+        }
         // The proposed method of the 2026-11-03 app spec (MeasurementController.runSense):
         // `--ei sense_images` = B, the images one output may detect (default 2: the glass's
         // 2026-11-03 costs at 2 fps, docs/RAYNEO_COSTS_2026-11-03.md).
@@ -1021,7 +1043,9 @@ class MeasurementActivity : AppCompatActivity() {
     }
 
     /** Legs (one-way walks) per method: `--ei walk_legs`, default 4 = two laps of the corridor. */
-    private fun walkLegs() = intent.getIntExtra("walk_legs", 4).coerceAtLeast(1)
+    /** Legs (one-way walks) per method: 2 = one round trip, both directions (2026-11-03, was 4:
+     *  the session halves to ~5 min). `--ei walk_legs` overrides. */
+    private fun walkLegs() = intent.getIntExtra("walk_legs", 2).coerceAtLeast(1)
 
     /** Short names on the glass's walk screen. */
     private fun walkName(method: String) = when (method) {
@@ -1070,9 +1094,9 @@ class MeasurementActivity : AppCompatActivity() {
                 walkButton.visibility = View.VISIBLE
             }
         }, plan, legsPerBlock = walkLegs(),
-            // 10 s (2026-11-03): time to unplug the cable and put the glasses on; the block-start
+            // 15 s (2026-11-03): time to unplug the cable and put the glasses on; the block-start
             // beeps mark the end. `--ei walk_start_delay_s` overrides.
-            startDelayS = intent.getIntExtra("walk_start_delay_s", 10).coerceAtLeast(0),
+            startDelayS = intent.getIntExtra("walk_start_delay_s", 15).coerceAtLeast(0),
             displayName = ::walkName,
             screen = { title, detail, sub -> showWalk(title, detail, sub) })
         lapSession = session

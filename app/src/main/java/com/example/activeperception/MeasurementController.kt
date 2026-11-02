@@ -1591,11 +1591,14 @@ class MeasurementController(
             .put("analog_ceiling", ceil)
             .put("pictures", "detector input (640 px, letterboxed), JPEG 95: frame_*_key, and frame_*_sum2 / _sum4 " +
                 "when used")
-            .put("detector", "yolov8n tflite, every box >= 0.01 recorded").put("input_size", 640))
+            .put("detector", "yolov8n tflite (vehicle classes), every box >= 0.01 recorded").put("input_size", 640)
+            .put("align_motion", "sense_frames align_motion: per alignment step (read to the read before it, " +
+                "~33 ms), the median over the 16 x 12 tiles of (dx, dy) in BurstAlign's half-quad px of the decoded " +
+                "RAW (${raw.captureWidth} x ${raw.captureHeight} sensor, decode block ${if (raw.decodeMode == 2) 6 else 4})"))
         logger.csv("sense_frames", listOf("idx", "kind", "n_reads", "n_images", "iso", "shutter_us", "key_ts",
             "reads_ts", "last_end_ts", "t_output", "wait_ms", "rawdec_ms", "align_ms", "align_residual",
             "form_ms", "infer_ms", "union_ms", "choose_ms", "total_ms", "late_ms", "latency_ms", "n_out", "n_hes",
-            "moved_to_iso", "moved_to_shutter_us", "stream_mismatched", "gapped"))
+            "moved_to_iso", "moved_to_shutter_us", "stream_mismatched", "gapped", "align_motion"))
         val src = ParallelRawCandidateSource(grid, raw,
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
@@ -1643,15 +1646,6 @@ class MeasurementController(
                 return if (s > 0) DoubleArray(HowToSense.N) { w[it] / s } else DoubleArray(HowToSense.N) { 1.0 / HowToSense.N }
             }
         }
-        /** Mean |a - b| over the mean of a, every 7th sample: how far a read moved onto the key
-         *  still differs from it (motion the alignment missed, plus noise). */
-        fun alignResidual(a: RawFrame, b: RawFrame): Double {
-            var dSum = 0.0; var sSum = 0.0; var i = 0
-            val n = minOf(a.bayer.size, b.bayer.size)
-            while (i < n) { dSum += kotlin.math.abs(a.bayer[i] - b.bayer[i]); sSum += a.bayer[i]; i += 7 }
-            return if (sSum > 0) dSum / sSum else Double.NaN
-        }
-
         val ring = ArrayList<Read>()
         val lock = java.lang.Object()
         var decodeLeadNs = 120_000_000L
@@ -1721,16 +1715,18 @@ class MeasurementController(
                     .any { it > GAPFREE_NS }
                 val tA = now()
                 val rs = picked.reversed().map { it.frame }
+                var steps: List<Array<DoubleArray>> = emptyList()
                 val moved: List<RawFrame> = if (rs.size == 1 || !gapped) rs else {
                     val pyr = rs.map { fr -> BurstAlign.pyramid(fr.bayer, fr.width, fr.height, alignPool) }
-                    val acc = BurstAlign.accumulate((1 until rs.size).map { j -> BurstAlign.step(pyr[j - 1], pyr[j], alignPool) })
+                    steps = (1 until rs.size).map { j -> BurstAlign.step(pyr[j - 1], pyr[j], alignPool) }
+                    val acc = BurstAlign.accumulate(steps)
                     listOf(rs[0]) + acc.withIndex().map { (j, mv) ->
                         val fr = rs[j + 1]
                         RawFrame(BurstAlign.moveBack(fr.bayer, fr.width, fr.height, mv, alignPool), fr.width, fr.height,
                             fr.cfaPattern, fr.maxDn, fr.sensorOrientation, fr.whiteBalance, fr.cameraToSrgb)
                     }
                 }
-                val residuals = (1 until moved.size).map { alignResidual(moved[0], moved[it]) }
+                val residuals = (1 until moved.size).map { rawResidual(moved[0], moved[it]) }
                 val laneSizes = when (moved.size) { 1 -> listOf(1); 2, 3 -> listOf(1, 2); else -> listOf(1, 2, 4) }
                 val lanes = laneSizes.map { k -> moved.take(k) }
                 val alignMs = ms(tA)
@@ -1802,7 +1798,8 @@ class MeasurementController(
                     "%.1f".format(unionMs), "%.1f".format(chooseMs), "%.1f".format(totalMs), "%.1f".format(lateMs),
                     "%.1f".format((tOutputNs - lastEnd) / 1e6), outDets.size, hes.size,
                     if (movedCell) Duel.ISOS[cell.get() / 5] else "", if (movedCell) Duel.SHUTTERS_US[cell.get() % 5] else "",
-                    raw.streamMismatched.get(), if (picked.size > 1) (if (gapped) 1 else 0) else ""))
+                    raw.streamMismatched.get(), if (picked.size > 1) (if (gapped) 1 else 0) else "",
+                    steps.joinToString(" ") { st -> stepMotion(st).let { m -> "%.2f/%.2f".format(m[0], m[1]) } }))
                 val roles = laneSizes.map { k -> if (k == 1) "key" else "sum$k" }
                 for (a in 0 until n) {
                     val arr = JSONArray()
@@ -1840,6 +1837,183 @@ class MeasurementController(
             runCatching { chooseLead.shutdownNow(); alignPool.shutdownNow() }
             runCatching { src.shutdown() }
         }
+        endPass()
+    }
+
+    // ---------- collect_glass: the device's one-time estimates and the synthetic-image checks ----------
+
+    /**
+     * The glass's dedicated capture session (app spec 2026-11-03 §4.1, §4.3), in one lighting:
+     * [countdownS] after the run starts, [standS] standing (no motion: synthetic against real
+     * images without motion), then [walkS] walking (the curve's blur bins, and the same checks in
+     * motion). One group of one-shot reads in one burst, its blocks in a shuffled order (logged),
+     * ~0.4 s of sensor time; the next group's burst is read while this one is processed (one
+     * group every ~2 s instead of ~3 s, desk test 2026-11-03):
+     * - ref: 4 consecutive reads at ISO 1600 x 1/240 (the chance size, recovery, the sums);
+     * - real 1/120 and real 1/60 at ISO 1600 (the totals of the 2- and 4-read sums);
+     * - analog ISO 800 and ISO 400 at 1/120 (digital = analog: ISO 400 x digital 2);
+     * - 3 lattice cells, rotating through all 25 (the curve: each against ref in the same group).
+     * Made on the glass: sum2 / sum4 = the newest ref read and the 1 / 3 before it moved onto it
+     * (BurstAlign, every tile) and summed, as sense makes them; iso400x2 = the ISO 400 read at
+     * digital 2; cf800_120 = sum2 at digital 0.5 (a synthetic ISO 800 x 1/120 cell against the
+     * real one). Every real and synthetic image is detected (boxes >= 0.01) and saved (detector
+     * input, JPEG 95); nothing is decided here, the analysis is the server's. One-shot requests
+     * change the setting on every read (read probe 2026-11-03), which a repeating request cannot.
+     *
+     * Records collect_groups.csv (every group: phase, block order, sensor span, alignment motion,
+     * times) and collect_dets.jsonl (every image: group, role, setting, reads' times, gyro over
+     * its exposure, alignment residual, boxes). "collect: ..." status lines drive the beeps.
+     */
+    fun runGlassCollect(onStatus: (String) -> Unit, countdownS: Int = 15, standS: Int = 60, walkS: Int = 180) {
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+            ?: error("collect_glass requires TfliteYoloDetector")
+        val runStartMs = SystemClock.elapsedRealtime()
+        val ceil = v2AnalogCeil()
+        startPass("collect_glass", isGtReference = false, withFrames = false, methodParams = JSONObject()
+            .put("spec", "app spec 2026-11-03 §4.1 (curve, recovery), §4.3 (synthetic vs real)")
+            .put("phases", "countdown ${countdownS}s from the run start, stand ${standS}s, walk ${walkS}s")
+            .put("group", "one burst of one-shot reads, blocks shuffled: ref = 4 x ISO 1600 1/240; real120, real60 " +
+                "(ISO 1600); iso800, iso400 (1/120); 3 lattice cells rotating through 25")
+            .put("synthetic", "sum2 / sum4: newest ref + 1 / 3 earlier refs moved onto it (BurstAlign, every tile), " +
+                "summed; iso400x2: ISO 400 read x digital 2; cf800_120: sum2 x digital 0.5")
+            .put("pictures", "detector input (640 px, letterboxed), JPEG 95: g<group>_<role>")
+            .put("detector", "yolov8n tflite (vehicle classes), boxes >= 0.01")
+            .put("analog_ceiling", ceil)
+            .put("align_motion", "collect_groups align_motion: per step (ref read to the one before it), median " +
+                "over tiles of (dx, dy) in BurstAlign's half-quad px of the decoded RAW (${raw.captureWidth} x " +
+                "${raw.captureHeight} sensor, decode block ${if (raw.decodeMode == 2) 6 else 4})"))
+        logger.csv("collect_groups", listOf("group", "phase", "order", "first_ts", "last_end_ts", "span_ms",
+            "capture_ms", "process_ms", "n_images", "align_motion", "align_residual"))
+        val src = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
+        onStatus("warming FP16 GPU batches…")
+        tfl.warmUpAllBatches()
+        val alignPool = Executors.newFixedThreadPool(4)
+        val rnd = java.util.Random(20261103L)
+        val cellOrder = (0 until 25).toMutableList().also { it.shuffle(rnd) }
+        var cellAt = 0
+        class Shot(val role: String, val us: Int, val iso: Int)
+        /** A group's burst, submitted: its blocks (in order), shots, handle, phase, when sent. */
+        class Burst(val blocks: List<List<Shot>>, val shots: List<Shot>, val h: RawSensorCapturer.BracketHandle,
+                    val phase: String, val sentNs: Long)
+        fun submit(phase: String): Burst {
+            val blocks = mutableListOf(List(4) { Shot("ref$it", 4167, 1600) },
+                listOf(Shot("real120", 8333, 1600)), listOf(Shot("real60", 16667, 1600)),
+                listOf(Shot("iso800", 8333, 800)), listOf(Shot("iso400", 8333, 400)))
+            repeat(3) {
+                val c = cellOrder[cellAt++ % 25]
+                blocks += listOf(Shot("cell${Duel.ISOS[c / 5]}_${Duel.SHUTTERS_US[c % 5]}", Duel.SHUTTERS_US[c % 5], Duel.ISOS[c / 5]))
+            }
+            blocks.shuffle(rnd)
+            val shots = blocks.flatten()
+            val sent = now()
+            return Burst(blocks, shots, raw.beginBracketSequence(shots.map { it.us to minOf(it.iso, ceil) },
+                android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE), phase, sent)
+        }
+        var pending: Burst? = null
+        class Img(val role: String, val madeBy: String, val nominalIso: Int, val lane: List<RawFrame>,
+                  val ratio: Double, val metas: List<RawSensorCapturer.RawMeta>, val residual: List<Double>?)
+        try {
+            // The countdown runs from the run's start, the camera and GPU set-up included.
+            while (running) {
+                val left = countdownS * 1000L - (SystemClock.elapsedRealtime() - runStartMs)
+                if (left <= 0) break
+                onStatus("collect: countdown ${(left + 999) / 1000}")
+                Thread.sleep(minOf(left, 1000L))
+            }
+            var phase = "stand"
+            if (running) onStatus("collect: stand")
+            val startMs = SystemClock.elapsedRealtime()
+            var g = 0
+            /** The phase now, announcing the switch to walking once. */
+            fun phaseNow(): String? {
+                val elapsed = SystemClock.elapsedRealtime() - startMs
+                if (elapsed >= (standS + walkS) * 1000L) return null
+                if (phase == "stand" && elapsed >= standS * 1000L) { phase = "walk"; onStatus("collect: walk") }
+                return phase
+            }
+            if (running) pending = phaseNow()?.let { submit(it) }
+            while (running) {
+                val cur = pending ?: break
+                pending = null
+                val got = cur.shots.indices.map { raw.takeBracketFrame(cur.h, it) }
+                val captureMs = ms(cur.sentNs)
+                // The next group is read while this one is processed.
+                pending = phaseNow()?.let { submit(it) }
+                val tP = now()
+                val blocks = cur.blocks; val shots = cur.shots; val groupPhase = cur.phase
+                val at = HashMap<String, Int>().also { m -> shots.forEachIndexed { i, sh -> m.putIfAbsent(sh.role, i) } }
+                fun fr(role: String) = got[at.getValue(role)].first
+                fun meta(role: String) = got[at.getValue(role)].second
+                // ---- made on the glass: sums of the refs onto the newest, digital gains.
+                val rs = listOf(fr("ref3"), fr("ref2"), fr("ref1"), fr("ref0"))
+                val pyr = rs.map { BurstAlign.pyramid(it.bayer, it.width, it.height, alignPool) }
+                val steps = (1 until rs.size).map { j -> BurstAlign.step(pyr[j - 1], pyr[j], alignPool) }
+                val moved = listOf(rs[0]) + BurstAlign.accumulate(steps).withIndex().map { (j, mv) ->
+                    val f = rs[j + 1]
+                    RawFrame(BurstAlign.moveBack(f.bayer, f.width, f.height, mv, alignPool), f.width, f.height,
+                        f.cfaPattern, f.maxDn, f.sensorOrientation, f.whiteBalance, f.cameraToSrgb)
+                }
+                val residual = (1 until moved.size).map { rawResidual(moved[0], moved[it]) }
+                val refMetas = listOf(meta("ref3"), meta("ref2"), meta("ref1"), meta("ref0"))
+                val imgs = ArrayList<Img>()
+                shots.forEachIndexed { i, sh ->
+                    imgs += Img(sh.role, "frame", sh.iso, listOf(got[i].first), sh.iso.toDouble() / minOf(sh.iso, ceil),
+                        listOf(got[i].second), null)
+                }
+                imgs += Img("sum2", "aligned_sum", 1600, moved.take(2), 1.0, refMetas.take(2), residual.take(1))
+                imgs += Img("sum4", "aligned_sum", 1600, moved, 1.0, refMetas, residual)
+                imgs += Img("iso400x2", "digital_x2", 800, listOf(fr("iso400")), 2.0, listOf(meta("iso400")), null)
+                imgs += Img("cf800_120", "aligned_sum_digital_0.5", 800, moved.take(2), 0.5, refMetas.take(2), residual.take(1))
+                // ---- detect (3 images a call: the glass's largest batch) and save.
+                val dets = ArrayList<List<Detection>>()
+                for (chunk in imgs.chunked(3)) {
+                    val tensor = src.formLanesTensor(chunk.map { it.lane }, DoubleArray(chunk.size) { chunk[it].ratio })
+                    val d = tfl.detectTensorBatchOptimized(tensor.batch)
+                    chunk.forEachIndexed { a, im ->
+                        dets += d[a]
+                        saveImage("g%04d_%s".format(g, im.role), src.selectedTensorBitmap(tensor, a))
+                    }
+                }
+                val processMs = ms(tP)
+                // ---- records.
+                imgs.forEachIndexed { i, im ->
+                    val arr = JSONArray()
+                    for (d in dets[i]) if (d.confidence >= 0.01f) arr.put(JSONObject()
+                        .put("xyxy", JSONArray(d.xyxy.map { it.toDouble() })).put("conf", d.confidence.toDouble())
+                        .put("class", d.classId))
+                    val t0 = im.metas.minOf { it.timestamp }
+                    val t1 = im.metas.maxOf { it.timestamp + it.appliedExpUs * 1_000L }
+                    val gyro = gyroWindow.mean(t0, t1)
+                    logger.jsonl("collect_dets", JSONObject().put("group", g).put("phase", groupPhase).put("role", im.role)
+                        .put("made_by", im.madeBy).put("iso_nominal", im.nominalIso)
+                        .put("analog_iso", im.metas[0].appliedIso).put("digital_gain", im.ratio)
+                        .put("exposure_us_each", im.metas[0].appliedExpUs).put("n_reads", im.lane.size)
+                        .put("reads_ts", JSONArray(im.metas.map { it.timestamp }))
+                        .put("gyro", JSONArray(gyro.first.toList())).put("gyro_samples", gyro.second)
+                        .put("align_residual", im.residual?.let { JSONArray(it) } ?: JSONObject.NULL)
+                        .put("dets", arr))
+                }
+                val firstTs = got.minOf { it.second.timestamp }
+                val lastEnd = got.maxOf { it.second.timestamp + it.second.appliedExpUs * 1_000L }
+                logger.row("collect_groups", listOf(g, groupPhase, blocks.joinToString(" ") { b -> b.joinToString("+") { it.role } },
+                    firstTs, lastEnd, "%.1f".format((lastEnd - firstTs) / 1e6), "%.1f".format(captureMs),
+                    "%.1f".format(processMs), imgs.size,
+                    steps.joinToString(" ") { st -> stepMotion(st).let { m -> "%.2f/%.2f".format(m[0], m[1]) } },
+                    residual.joinToString(" ") { "%.4f".format(it) }))
+                onStatus("collect $groupPhase g=$g span ${"%.0f".format((lastEnd - firstTs) / 1e6)}ms " +
+                    "process ${"%.0f".format(processMs)}ms")
+                g++
+            }
+        } finally {
+            pending?.let { p -> runCatching { raw.abortBracketSequence(p.h) } }
+            runCatching { raw.stopFastCapture() }
+            runCatching { alignPool.shutdownNow() }
+            runCatching { src.shutdown() }
+        }
+        onStatus("collect: done")
         endPass()
     }
 
@@ -2392,6 +2566,22 @@ class MeasurementController(
         val f = FloatArray(w * h * 3)
         buf.asFloatBuffer().get(f)
         return f
+    }
+
+    /** Mean |a - b| over the mean of a, every 7th sample: how far a read moved onto another still
+     *  differs from it (motion the alignment missed, plus noise). */
+    private fun rawResidual(a: RawFrame, b: RawFrame): Double {
+        var dSum = 0.0; var sSum = 0.0; var i = 0
+        val n = minOf(a.bayer.size, b.bayer.size)
+        while (i < n) { dSum += kotlin.math.abs(a.bayer[i] - b.bayer[i]); sSum += a.bayer[i]; i += 7 }
+        return if (sSum > 0) dSum / sSum else Double.NaN
+    }
+
+    /** The median (dx, dy) over the tiles of one [BurstAlign.step]: the picture's motion between
+     *  two reads, in BurstAlign's half-quad px. */
+    private fun stepMotion(step: Array<DoubleArray>): DoubleArray {
+        val xs = step.map { it[0] }.sorted(); val ys = step.map { it[1] }.sorted()
+        return doubleArrayOf(xs[xs.size / 2], ys[ys.size / 2])
     }
 
     private fun tensorGrayHalf(t: Exp21TensorResult, lane: Int, imgsz: Int = 640):
