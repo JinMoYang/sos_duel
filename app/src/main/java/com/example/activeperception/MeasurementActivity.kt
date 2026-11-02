@@ -1070,7 +1070,9 @@ class MeasurementActivity : AppCompatActivity() {
                 walkButton.visibility = View.VISIBLE
             }
         }, plan, legsPerBlock = walkLegs(),
-            startDelayS = intent.getIntExtra("walk_start_delay_s", 5).coerceAtLeast(0),
+            // 10 s (2026-11-03): time to unplug the cable and put the glasses on; the block-start
+            // beeps mark the end. `--ei walk_start_delay_s` overrides.
+            startDelayS = intent.getIntExtra("walk_start_delay_s", 10).coerceAtLeast(0),
             displayName = ::walkName,
             screen = { title, detail, sub -> showWalk(title, detail, sub) })
         lapSession = session
