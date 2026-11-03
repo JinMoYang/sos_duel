@@ -3570,7 +3570,8 @@ class MeasurementController(
         wireImuLog()
         if (parallelCapture) {      // every read's journey (RawSensorCapturer.readTimingSink)
             logger.csv("read_timing", listOf("sensor_ts", "submit_ns", "result_ns", "image_ns",
-                "decode_start_ns", "decode_end_ns", "kept_ns", "settling_skips", "resubmits", "ae"))
+                "decode_start_ns", "decode_end_ns", "kept_ns", "settling_skips", "resubmits", "ae",
+                "key_exp_us", "key_iso"))
             raw.readTimingSink = { v -> logger.row("read_timing", v.toList()) }
         }
         detectionTotalAboveThresh = 0

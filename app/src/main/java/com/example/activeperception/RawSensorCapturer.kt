@@ -1129,14 +1129,28 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             return target
         }
 
-        /** Drops one read from a full ring: the oldest read of the key with the most reads kept.
-         *  A window's reads, each queued once ([parallelEnqueue]), so survive the pattern's
-         *  stream until their take, however long the output period; with one key it is simply
-         *  the oldest read. Call under [lock]. */
+        /** A take with several keys has run: from then on a key's read can serve while older
+         *  than the output's last read ([take]: newer than its own key's last is enough). */
+        private var multiKey = false
+
+        /** Whether a later take can still hand [s] out: newer than every read handed out, or
+         *  (several-key takes) newer than its own key's last. Call under [lock]. */
+        private fun usable(s: Slot) = s.ts > lastReturnedTs ||
+            (multiKey && s.ts > (lastReturnedByKey[s.key] ?: 0L))
+
+        /** Drops one read from a full ring: the oldest read no take can use any more, else the
+         *  oldest read of the key with the most reads kept. A window's reads, each queued once
+         *  ([parallelEnqueue]), so survive the pattern's stream until their take, however long
+         *  the output period. Spent reads go first: counted with the rest, they held the ring
+         *  while a 4-read take's new key, now the most kept, lost its own oldest read to every
+         *  new one and never reached 4 (Sense-well's probe stalled 2026-11-03, reads arriving
+         *  for 4 s). Call under [lock]. */
         private fun evictOne() {
-            val counts = ring.groupingBy { it.key }.eachCount()
-            val top = counts.values.max()
-            val victim = ring.first { counts[it.key] == top }
+            val victim = ring.firstOrNull { !usable(it) } ?: run {
+                val counts = ring.groupingBy { it.key }.eachCount()
+                val top = counts.values.max()
+                ring.first { counts[it.key] == top }
+            }
             ring.remove(victim)
             victim.release()
         }
@@ -1199,7 +1213,9 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                         runCatching {
                             sink(longArrayOf(d.ts, t.startedNs, t.firstResultNs, t.firstImageNs,
                                 t.firstDecodeStartNs, t.lastDecodeEndNs, System.nanoTime(),
-                                t.settlingSkips.toLong(), t.resubmits.toLong(), if (key is ParallelKey.Ae) 1L else 0L))
+                                t.settlingSkips.toLong(), t.resubmits.toLong(), if (key is ParallelKey.Ae) 1L else 0L,
+                                (key as? ParallelKey.Manual)?.state?.exposureUs ?: 0L,
+                                (key as? ParallelKey.Manual)?.state?.iso?.toLong() ?: 0L))
                         }
                     }
                     synchronized(lock) {
@@ -1252,6 +1268,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             val reaskNs = maxOf(periodNs, 300_000_000L)
             var nextAsk = t0 + reaskNs
             synchronized(lock) {
+                if (keys.size > 1) multiKey = true
                 while (got == null) {
                     got = pick()
                     if (got != null) { got!!.forEach { it.taken = true }; break }
@@ -1288,8 +1305,10 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                 decodeLeadNs = if (decodeLeadNs == 0L) took else (0.7 * decodeLeadNs + 0.3 * took).toLong()
             }
             val reads = slots.map { it.read!! }
-            lastReturnedTs = maxOf(lastReturnedTs, slots.maxOf { it.ts })
-            for (s in slots) lastReturnedByKey[s.key] = s.ts
+            synchronized(lock) {
+                lastReturnedTs = maxOf(lastReturnedTs, slots.maxOf { it.ts })
+                for (s in slots) lastReturnedByKey[s.key] = s.ts
+            }
             val metas = reads.map { it.meta }
             lastMeta = metas; lastSettlingMeta = metas
             currentState = SensorState(metas.last().appliedExpUs, metas.last().appliedIso)
@@ -1306,7 +1325,8 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
 
     /** Diagnostics: called for every parallel-mode read as it is kept, with its sensor time, the
      *  nanoTime of each step (submitted, capture result, image, decode start, decode end, kept),
-     *  the settling frames skipped and the requests resubmitted for it, and 1 for a phone-AE read. */
+     *  the settling frames skipped and the requests resubmitted for it, 1 for a phone-AE read,
+     *  and the setting it was requested at (exposure us, ISO; 0 for phone AE). */
     @Volatile var readTimingSink: ((LongArray) -> Unit)? = null
 
     /** Parallel mode (see [ParallelStream]): from now on [captureFast] and [captureFastAe] hand
