@@ -1716,8 +1716,14 @@ class MeasurementActivity : AppCompatActivity() {
         /** Lighting the operator declared by the button pressed; goes into every manifest. */
         val lighting: String? = null,
         /** Prefix of the experiment_session label every run of a lighting preset carries. */
-        val sessionTag: String = "duel2_main"
+        val sessionTag: String = "duel2_main",
+        /** Every run of the session records the network beside it (NetProbe, app spec
+         *  2026-11-03 §2.2), as `--ez net_probe true` does for an adb launch. */
+        val netProbe: Boolean = false
     )
+
+    /** True while a lap session whose preset asks for the network record runs (start() reads it). */
+    @Volatile private var sessionNetProbe = false
 
     /** Laps per run: 3 until the 2026-10-26 bright session; 2 since the Limo was slowed to
      *  ~20 s a lap (that session took 24 min). */
@@ -1737,13 +1743,13 @@ class MeasurementActivity : AppCompatActivity() {
         "physsweep", "shin_nm", "nae", "fixed_1600_240")
     private val MAIN_PLAN = rounds(MAIN_METHODS)
 
-    /** The final comparison (2026-10-29), parallel structure for every method (capture and analysis
-     *  on separate threads, 10 fps): the proposed method (addl_3_sep_every: the key read at the
-     *  curve's setting plus up to 3 more at that setting every frame, each detected on its own, fused)
-     *  and the baselines moved unchanged onto the parallel capture (par_*), PhysSweep as fast
-     *  PhysSweep. 21 runs, ~12 min per lighting. The serial MAIN_PLAN above stays startable by
-     *  lap_plan. */
-    private val PAR_MAIN_METHODS = listOf("addl_3_sep_every", "par_ae_phone", "par_prop_c", "par_physsweep_fast",
+    /** The final comparison, parallel structure for every method (capture and analysis on separate
+     *  threads, 10 fps): the proposed method and the baselines moved unchanged onto the parallel
+     *  capture (par_*), PhysSweep as fast PhysSweep. 21 runs, ~12 min per lighting. The proposed
+     *  method is sense (2026-11-04: app spec 2026-11-03, MeasurementController.runSense); the
+     *  2026-10-29 comparison ran addl_3_sep_every, still startable by lap_plan, as is the serial
+     *  MAIN_PLAN above. */
+    private val PAR_MAIN_METHODS = listOf("sense", "par_ae_phone", "par_prop_c", "par_physsweep_fast",
         "par_shin_nm", "par_nae", "par_fixed_1600_240")
     private val PAR_MAIN_PLAN = rounds(PAR_MAIN_METHODS)
 
@@ -1809,11 +1815,11 @@ class MeasurementActivity : AppCompatActivity() {
         // Main tab: the Duel experiment, one press per lighting (5 s countdown, a lead-in
         // lap, then 24 runs; one beep at the start, three at the end).
         R.id.expMainBright to LapPreset("main (parallel), bright", PAR_MAIN_PLAN, 1, lighting = "bright",
-            sessionTag = "par_main"),
+            sessionTag = "par_main_sense", netProbe = true),
         R.id.expMainDim to LapPreset("main (parallel), dim", PAR_MAIN_PLAN, 1, lighting = "dim",
-            sessionTag = "par_main"),
+            sessionTag = "par_main_sense", netProbe = true),
         R.id.expMainDark to LapPreset("main (parallel), dark", PAR_MAIN_PLAN, 1, lighting = "dark",
-            sessionTag = "par_main"),
+            sessionTag = "par_main_sense", netProbe = true),
         // Check tab: Duel's two modes, one 3-lap run each (spec 7, track part).
         R.id.expTrackTest to LapPreset("track test", "duel2_trace:3,duel2_every:3", 1),
         // Check tab: when to spend the additional exposures, dim and dark (see VERIFY_E_PLAN).
@@ -1998,8 +2004,8 @@ class MeasurementActivity : AppCompatActivity() {
         if (plan.isEmpty()) { post("lap plan is empty"); return }
         // Duel2 cannot start without its tolerance curves; refuse the whole session up front
         // rather than let its blocks silently not start while the laps are counted.
-        val curvesNeeded = plan.filter { it.method.startsWith("duel2") || it.method.startsWith("addl_") }
-            .map { if (it.method.startsWith("addl_")) duelCurveFile(true)
+        val curvesNeeded = plan.filter { it.method.startsWith("duel2") || it.method.startsWith("addl_") || it.method == "sense" }
+            .map { if (it.method == "sense") SENSE_CURVE_FILE else if (it.method.startsWith("addl_")) duelCurveFile(true)
                 else duelCurveFile(it.method.substringBefore('_').trimEnd('m').endsWith("g")) }.distinct()
         val missing = curvesNeeded.filter { f -> runCatching {
                 HowToSense.Curve.parse(assets.open(f).bufferedReader().use { it.readText() })
@@ -2011,6 +2017,7 @@ class MeasurementActivity : AppCompatActivity() {
         }
         // Runs in a lap session end by laps, never by a frame cap left over from a step.
         presetRunCap = null
+        sessionNetProbe = preset?.netProbe == true
         ExperimentSession.lighting = preset?.lighting.orEmpty()
         ExperimentSession.session = if (preset?.lighting != null)
             "${preset.sessionTag}_${preset.lighting}_${System.currentTimeMillis()}" else ""
@@ -2049,6 +2056,7 @@ class MeasurementActivity : AppCompatActivity() {
             }
             override fun sessionEnded(completed: Boolean) {
                 lapSession = null
+                sessionNetProbe = false
                 ExperimentSession.runLap = -1
                 ExperimentSession.lighting = ""; ExperimentSession.session = ""
                 clearLaunchOverrides()
@@ -2635,8 +2643,9 @@ class MeasurementActivity : AppCompatActivity() {
         // on arrival instead of only the reads an output takes (MeasurementController.decodeAll).
         val decodeAllNow = intent?.getBooleanExtra("decode_all", false) == true
         intent?.removeExtra("decode_all")
-        // `--ez net_probe true`: the network record beside every run of this launch (NetProbe).
-        val netProbeNow = intent?.getBooleanExtra("net_probe", false) == true
+        // `--ez net_probe true`: the network record beside every run of this launch (NetProbe);
+        // the main tab's lap sessions turn it on for each of their runs (LapPreset.netProbe).
+        val netProbeNow = intent?.getBooleanExtra("net_probe", false) == true || sessionNetProbe
         val netProbeUrl = intent?.getStringExtra("net_probe_url") ?: "http://147.46.244.63:8000"
         if (runActive) { post("busy — stop first"); return }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
