@@ -48,6 +48,8 @@ private const val QUEUE_DEPTH = 3
 private const val GAPFREE_NS = 1_500_000L
 /** sense: undecoded reads kept for the next outputs (a 1/240-1/60 read every 33 ms: ~0.27 s). */
 private const val SENSE_RING = 8
+/** [MeasurementController.runNewest]: reads kept undecoded; an output takes only the newest. */
+private const val NEWEST_RING = 3
 private val BUDGET_PATTERNS = listOf(listOf(1), listOf(2), listOf(4), listOf(6), listOf(1, 1), listOf(2, 1),
     listOf(2, 2), listOf(3, 3), listOf(1, 1, 1), listOf(2, 2, 2), listOf(1, 1, 1, 1), List(6) { 1 })
 private typealias BudgetRead = Pair<RawFrame, RawSensorCapturer.RawMeta>
@@ -606,6 +608,108 @@ class MeasurementController(
                     "${"%.0f".format(totalMs)}ms")
                 f++
             }
+        }
+        endPass()
+    }
+
+    // ---------- the newest read of a repeating stream (AE-Phone, fixed cells) ----------
+
+    /**
+     * AE-Phone ([fixedIso] null) or one fixed cell, taken from a repeating stream as sense takes
+     * its key (2026-11-03 handover §3): the camera reads back to back at one request (the phone's
+     * AE request, or [fixedIso] x [fixedExpUs] realized as the lattice realizes it), the reads stay
+     * undecoded, and every output decodes only the newest read newer than the last, before its
+     * clock. So these pictures are as old as sense's (0.5 s on the 2026-11-03 walk, against ~1.1 s
+     * from the parallel stream's requests), and what is left between the methods is how the setting
+     * was chosen. Formed and detected as [runAe] does.
+     */
+    fun runNewest(fixedIso: Int?, fixedExpUs: Int, maxFrames: Int,
+                  onStatus: (String) -> Unit,
+                  onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }) {
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+            ?: error("newest requires TfliteYoloDetector")
+        val name = if (fixedIso == null) "newest_ae_phone" else "newest_fixed_${fixedIso}_${Math.round(1e6 / fixedExpUs)}"
+        val phys = if (fixedIso == null) 0 else minOf(fixedIso, v2AnalogCeil())
+        val ratio = if (fixedIso == null) 1.0 else fixedIso.toDouble() / phys
+        ownCaptureThread = true
+        startPass(name, isGtReference = false, methodParams = JSONObject()
+            .put("mode", name)
+            .put("setting", if (fixedIso == null) "the phone's AE (AE and AWB on, fixed focus), as AE-Phone"
+                else "fixed ISO $fixedIso x $fixedExpUs us (analog $phys, digital ${"%.2f".format(ratio)})")
+            .put("capture", "repeating request, reads kept undecoded (newest $NEWEST_RING); an output decodes the " +
+                "newest read newer than the last, before its clock, as sense takes its key")
+            .put("why", "2026-11-03 handover §3: the same picture age as sense")
+            .put("output_period_ms", outputPeriodMs))
+        val src = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        raw.configureDecodeThreads(4)
+        onStatus("warming FP16 GPU batches…")
+        tfl.warmUpAllBatches()
+        val ring = ArrayList<RawSensorCapturer.StreamRead>()
+        val lock = java.lang.Object()
+        var decodeLeadNs = 120_000_000L
+        try {
+            raw.startStream { sr ->
+                synchronized(lock) {
+                    var at = ring.size
+                    while (at > 0 && ring[at - 1].timestamp > sr.timestamp) at--
+                    ring.add(at, sr)
+                    while (ring.size > NEWEST_RING) ring.removeAt(0).pending.close()
+                    lock.notifyAll()
+                }
+            }
+            if (fixedIso == null) raw.streamSetAe(0) else raw.streamSet(fixedExpUs, phys, 0)
+            var f = 0
+            var tick = now()
+            var lastTs = 0L
+            while (running && f < maxFrames) {
+                // The output clock, woken early by the decoding time so the read is decoded by it.
+                val lead = tick - decodeLeadNs - now()
+                if (lead > 0) Thread.sleep(lead / 1_000_000, (lead % 1_000_000).toInt())
+                val t0 = now()
+                tick = maxOf(tick, t0) + outputPeriodMs * 1_000_000L
+                stepClock.begin()
+                // The newest read; the older ones no output will take are released.
+                val picked = synchronized(lock) {
+                    val giveUp = now() + 3_000_000_000L
+                    while (running && (ring.lastOrNull()?.timestamp ?: 0L) <= lastTs && now() < giveUp) lock.wait(10)
+                    ring.lastOrNull()?.takeIf { it.timestamp > lastTs }?.also { newest ->
+                        ring.remove(newest)
+                        ring.forEach { it.pending.close() }; ring.clear()
+                    }
+                }
+                if (picked == null) {
+                    if (!running) break
+                    onStatus("$name: no new read in 3 s, stopping")
+                    break
+                }
+                lastTs = picked.timestamp
+                val (frame, meta) = picked.pending.decode()
+                decodeLeadNs = (0.7 * decodeLeadNs + 0.3 * (ms(t0) + 10.0) * 1e6).toLong()
+                stepClock.captured(listOf(meta))
+                val tF = now()
+                val tensor = src.formExplicitGainsTensor(frame, doubleArrayOf(ratio))
+                val formMs = ms(tF)
+                stepClock.formed()
+                val dets = tfl.detectTensorBatchOptimized(tensor.batch)[0]
+                stepClock.detected()
+                val inferMs = tfl.lastRunMs + tfl.lastDecodeMs
+                stepClock.decided()
+                val totalMs = ms(t0)
+                val iso = fixedIso ?: meta.appliedIso
+                val expUs = if (fixedIso == null) meta.appliedExpUs.toInt() else fixedExpUs
+                val bmp = src.selectedTensorBitmap(tensor, 0)
+                val path = saveImage("${frameName(f)}_${isoExpTag(iso, expUs)}", bmp)
+                logFrame(f, name, -1, iso, expUs, 1, false, formMs, inferMs, totalMs, dets, path,
+                    applyBoost = false, captureMs = msBetween(t0, tF), metaOverride = meta)
+                runCatching { onFrame(bmp, src.detectionsForTensorPreview(dets, tensor, 0), iso, expUs) }
+                onStatus("$name f=$f ISO$iso 1/${Math.round(1e6 / expUs)} ndet=${dets.size} ${"%.0f".format(totalMs)}ms")
+                f++
+            }
+        } finally {
+            runCatching { raw.stopStream() }
+            synchronized(lock) { ring.forEach { it.pending.close() }; ring.clear() }
+            runCatching { src.shutdown() }
         }
         endPass()
     }

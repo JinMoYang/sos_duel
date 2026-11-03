@@ -956,7 +956,8 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
      *  close it), read at the setting labelled [label]. */
     class StreamRead(val pending: PendingRead, val label: Int, val timestamp: Long, val exposureUs: Long)
 
-    private class StreamSetting(val expected: SensorState, val tag: Long, val label: Int)
+    /** [expected] null: the phone's AE picks the setting ([streamSetAe]), every read is kept. */
+    private class StreamSetting(val expected: SensorState?, val tag: Long, val label: Int)
     private class StreamHalf {
         var result: TotalCaptureResult? = null
         var image: Image? = null
@@ -988,7 +989,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         val s = (r.request.tag as? Long)?.let { streamSettings[it] }
         val sink = streamSink
         val actual = r.sensorState()
-        if (s == null || sink == null || !scheduler.matches(s.expected, actual)) {
+        if (s == null || sink == null || (s.expected != null && !scheduler.matches(s.expected, actual))) {
             if (s != null && sink != null) streamMismatched.incrementAndGet()
             image.close(); return
         }
@@ -1031,6 +1032,14 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         streamSettings[tag] = StreamSetting(expected, tag, label)
         (session ?: error("camera session is closed"))
             .setRepeatingRequest(manualRequest(expected, tag), streamCallback, cameraHandler)
+    }
+
+    /** Makes the phone's AE request ([captureFastAe]'s: AE and AWB on, fixed focus) the repeating
+     *  request; the HAL changes the setting as it meters, and every read comes out labelled [label]. */
+    fun streamSetAe(label: Int) {
+        val tag = aeCommandIds.decrementAndGet()
+        streamSettings[tag] = StreamSetting(null, tag, label)
+        (session ?: error("camera session is closed")).setRepeatingRequest(aeRequest(tag), streamCallback, cameraHandler)
     }
 
     @Synchronized

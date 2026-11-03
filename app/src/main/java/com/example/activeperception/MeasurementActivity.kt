@@ -673,6 +673,9 @@ class MeasurementActivity : AppCompatActivity() {
             "addl_3_sep_every" -> "proposed (10-31): key + up to 3 more every frame, separate"
             "sense" -> "proposed: Key Exposure + new samples (spec 2026-11-03)"
             "fixed_1600_240" -> "reference: fixed 1600 · 1/240"
+            "newest_ae_phone" -> "baseline: AE-Phone (newest read)"
+            "newest_fixed_1600_240" -> "reference: fixed 1600 · 1/240 (newest read)"
+            "newest_fixed_1600_30" -> "reference: fixed 1600 · 1/30 (newest read)"
             "nae" -> "baseline: Neural-AE"
             "prop_c" -> "baseline: Sense-well"
             "ae_phone" -> "baseline: AE-Phone"
@@ -987,6 +990,18 @@ class MeasurementActivity : AppCompatActivity() {
                 everyFrameAdditional = every, startCellOverride = forced) }
             return
         }
+        // AE-Phone and fixed cells from the repeating stream's newest read, as sense takes its key
+        // (MeasurementController.runNewest; 2026-11-03 handover §3, the same picture age):
+        // newest_ae_phone, newest_fixed_<iso>_<shutter denominator>, e.g. newest_fixed_1600_30 (the
+        // 2026-09-01 walk's custom AE, which sat at 1600 x 1/30 for 98-99% of its frames).
+        Regex("""newest_(ae_phone|fixed_(\d+)_(\d+))""").matchEntire(cmd)?.let { m ->
+            val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
+            val iso = m.groupValues[2].toIntOrNull()
+            val expUs = m.groupValues[3].toIntOrNull()?.let { Math.round(1e6 / it).toInt() } ?: 0
+            if (iso != null && expUs !in com.example.activeperception.acquire.Duel.SHUTTERS_US) { post("newest: 1/${m.groupValues[3]} is not a lattice shutter"); return }
+            start(cmd) { mc!!.runNewest(iso, expUs, cap, ::post, ::showFrame) }
+            return
+        }
         // The Duel experiments' fixed reference cell: ISO 1600 x 1/240 s on the v2 lattice.
         if (cmd == "fixed_1600_240") {
             val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
@@ -1059,6 +1074,9 @@ class MeasurementActivity : AppCompatActivity() {
         "par_shin_nm" -> "ShinNM"
         "par_nae" -> "Neural-AE"
         "par_fixed_1600_240" -> "fixed"
+        "newest_ae_phone" -> "AE-Phone"
+        "newest_fixed_1600_240" -> "fixed 1/240"
+        "newest_fixed_1600_30" -> "fixed 1/30"
         else -> method
     }
 
