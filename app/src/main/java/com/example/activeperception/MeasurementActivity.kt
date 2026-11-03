@@ -82,7 +82,7 @@ class MeasurementActivity : AppCompatActivity() {
         val detail: TextView = root.findViewById(R.id.eyeDetail)
         val sub: TextView = root.findViewById(R.id.eyeSub)
         val choiceBox: View = root.findViewById(R.id.eyeChoices)
-        val choices: List<TextView> = listOf(R.id.eyeChoice0, R.id.eyeChoice1, R.id.eyeChoice2).map { root.findViewById(it) }
+        val choices: List<TextView> = listOf(R.id.eyeChoice0, R.id.eyeChoice1, R.id.eyeChoice2, R.id.eyeChoice3).map { root.findViewById(it) }
     }
     /** The glass's screen (the manual panel and the preview are hidden), both eyes alike. */
     private lateinit var eyes: List<Eye>
@@ -1088,11 +1088,12 @@ class MeasurementActivity : AppCompatActivity() {
     /** One run the glass's idle screen offers. */
     private class GlassRun(val label: String, val detail: String)
     /** The glass's runs, in the order they are done: the curve record (once), a test walk, the
-     *  experiment walk. */
+     *  experiment walk, and an extra walk of one method ([EXTRA_METHODS]). */
     private val GLASS_RUNS = listOf(
         GlassRun("보정 기록", "곡선용 · 한 번만 · 약 6분"),
         GlassRun("시험 걷기", "8개 방법 편도 1번씩 · 약 3분"),
-        GlassRun("본 걷기", "8개 방법 × 2번 · 약 11분"))
+        GlassRun("본 걷기", "8개 방법 × 2번 · 약 11분"),
+        GlassRun("추가 걷기: 고정 1/60", "2왕복 · 약 1.5분"))
     private var glassChoiceSet = false
 
     /** The idle screen: the chosen run large, the list under it. Before the glass has its own
@@ -1153,7 +1154,8 @@ class MeasurementActivity : AppCompatActivity() {
         when (glassChoice) {
             0 -> launchRunnerCommand("curve_record")
             1 -> { walkKind = "check"; toggleWalkSession() }
-            else -> { walkKind = "main"; toggleWalkSession() }
+            2 -> { walkKind = "main"; toggleWalkSession() }
+            else -> { walkKind = "extra"; toggleWalkSession() }
         }
     }
 
@@ -1191,6 +1193,11 @@ class MeasurementActivity : AppCompatActivity() {
      *  on every method alike), each block one round trip; ~11 min (3 passes were ~16). "check": a test walk before it,
      *  every method once for one leg (~3 min), to see each runs while walking. */
     private fun walkCheck() = (walkKind ?: intent.getStringExtra("walk_kind")) == "check"
+    /** "extra": [EXTRA_METHODS] alone, in its own session after the experiment walk. */
+    private fun walkExtra() = (walkKind ?: intent.getStringExtra("walk_kind")) == "extra"
+    /** The extra walk's method (2026-11-03): the fixed cell the curve record found strongest in the
+     *  garage, ISO 1600 x 1/60 (3.21 cars an image; 1/120 3.16, 1/30 3.07). */
+    private val EXTRA_METHODS = listOf("newest_fixed_1600_60")
     /** The walk kind chosen on the glass's screen; null: `--es walk_kind`. */
     private var walkKind: String? = null
 
@@ -1199,7 +1206,7 @@ class MeasurementActivity : AppCompatActivity() {
     private fun walkPlan(): List<String> {
         val passes = intent.getIntExtra("walk_rounds", if (walkCheck()) 1 else 2).coerceAtLeast(1)
         val methods = intent.getStringExtra("walk_plan")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
-            ?.takeIf { it.isNotEmpty() } ?: WALK_METHODS
+            ?.takeIf { it.isNotEmpty() } ?: if (walkExtra()) EXTRA_METHODS else WALK_METHODS
         return (0 until passes).flatMap { r -> if (r % 2 == 0) methods else methods.reversed() }
     }
 
@@ -1220,6 +1227,7 @@ class MeasurementActivity : AppCompatActivity() {
         "newest_ae_phone" -> "AE-Phone"
         "newest_fixed_1600_240" -> "fixed 1/240"
         "newest_fixed_1600_30" -> "fixed 1/30"
+        "newest_fixed_1600_60" -> "fixed 1/60"
         else -> method
     }
 
@@ -1239,7 +1247,7 @@ class MeasurementActivity : AppCompatActivity() {
         presetRunCap = null
         ExperimentSession.lighting = intent.getStringExtra("lighting").orEmpty()
         // A check walk's runs carry walk_check_<ms>, so they never mix into the experiment's.
-        ExperimentSession.session = "${if (walkCheck()) "walk_check" else "walk"}_${System.currentTimeMillis()}"
+        ExperimentSession.session = "${if (walkCheck()) "walk_check" else if (walkExtra()) "walk_extra" else "walk"}_${System.currentTimeMillis()}"
         val session = WalkSession(this, sensors, object : LapSession.Host {
             override fun startBlock(method: String) {
                 ExperimentSession.runLap = 0
