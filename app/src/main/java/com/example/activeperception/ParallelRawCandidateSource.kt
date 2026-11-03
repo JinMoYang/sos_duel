@@ -260,16 +260,18 @@ class ParallelRawCandidateSource(
      * Lanes from their own frames (Duel2's single-read and tracking-sum bases, 2026-10-28):
      * lane i is the sum of all of [laneFrames]\[i] (one frame, or frames already moved onto
      * the first by a tracking update) at digital ratio [gainRatios]\[i], by the same fused
-     * native fill as [formExplicitBurstTensor].
+     * native fill as [formExplicitBurstTensor]. The tensor lives in the buffer shared by every
+     * [count]-lane formation; [second] = true takes another one, for a tensor formed while the
+     * first is still being detected (sense: the sums while the key is detected).
      */
     fun formLanesTensor(
-        laneFrames: List<List<RawFrame>>, gainRatios: DoubleArray, imgsz: Int = 640
+        laneFrames: List<List<RawFrame>>, gainRatios: DoubleArray, imgsz: Int = 640, second: Boolean = false
     ): Exp21TensorResult {
         require(laneFrames.isNotEmpty() && laneFrames.size == gainRatios.size && laneFrames.all { it.isNotEmpty() })
         val started = System.nanoTime()
         val count = laneFrames.size
         val floatsPerFrame = imgsz * imgsz * 3
-        val input = exp21TensorBuffers.computeIfAbsent(count) {
+        val input = exp21TensorBuffers.computeIfAbsent(if (second) -count else count) {
             ByteBuffer.allocateDirect(count * floatsPerFrame * 4).order(ByteOrder.nativeOrder())
         }
         val f0 = laneFrames[0][0]

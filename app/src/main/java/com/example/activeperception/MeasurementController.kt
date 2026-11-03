@@ -1573,7 +1573,8 @@ class MeasurementController(
                 ", earlier reads at the key setting summed onto the key: moved onto it first (BurstAlign, every " +
                 "tile) when the reads have gaps between them (1/240-1/60), as they are when gap-free (1/30, 1/15: " +
                 "a real longer exposure, sos_cf_v1 question 1); " +
-                "otherwise the key alone; one detector call")
+                "otherwise the key alone; the key is detected first and the sums are made while it is, then " +
+                "detected (infer_ms adds both calls)")
             .put("union", "car boxes >= 0.25 of every image, score order, IoU 0.3 NMS, own scores")
             .put("key_exposure", "How-to-Sense on the key picture, tolerance curve, car prior weights, " +
                 "move when the gain beats the curve's standard error")
@@ -1608,6 +1609,7 @@ class MeasurementController(
         tfl.warmUpAllBatches()
         val alignPool = Executors.newFixedThreadPool(4)
         val chooseLead = Executors.newSingleThreadExecutor()
+        val detectLead = Executors.newSingleThreadExecutor()
 
         /** A read in the ring: the camera's buffer until an output takes it; then decoded once and
          *  kept (a later output's sum may use it again), never closed by the ring. */
@@ -1708,13 +1710,32 @@ class MeasurementController(
                 val gIdx = c / 5; val sIdx = c % 5
                 val iso = Duel.ISOS[gIdx]; val phys = minOf(iso, ceil); val ratio = iso.toDouble() / phys
 
-                // ---- 2. images: the key, and the sums of the key and the reads before it moved onto it.
-                // Gap-free reads (each exposure ends ~1 ms before the next starts) sum to a real longer
-                // exposure and are added as they are; reads with gaps are moved onto the key first.
+                // ---- 2. images and 3. detection: the key, and the sums of the key and the reads before
+                // it moved onto it. The key is formed and detected first; while the GPU detects it, the
+                // sums are made and formed, then detected after it (two calls of one image cost one call
+                // of two, RAYNEO_COSTS_2026-11-03; in sequence the walk's key+sum2 outputs took p90
+                // 479 ms). Gap-free reads (each exposure ends ~1 ms before the next starts) sum to a real
+                // longer exposure and are added as they are; reads with gaps are moved onto the key first.
                 val gapped = metas.zipWithNext { a, b -> b.timestamp - (a.timestamp + a.appliedExpUs * 1_000L) }
                     .any { it > GAPFREE_NS }
-                val tA = now()
                 val rs = picked.reversed().map { it.frame }
+                val laneSizes = when (rs.size) { 1 -> listOf(1); 2, 3 -> listOf(1, 2); else -> listOf(1, 2, 4) }
+                val n = laneSizes.size
+                val tF = now()
+                val keyTensor = src.formLanesTensor(listOf(listOf(rs[0])), doubleArrayOf(ratio))
+                var formMs = ms(tF)
+                val keyDet = detectLead.submit(java.util.concurrent.Callable {
+                    Pair(tfl.detectTensorBatchOptimized(keyTensor.batch), tfl.lastRunMs + tfl.lastDecodeMs)
+                })
+                val mp0 = keyTensor.batch.transforms[0]
+                val top = mp0.padY.toInt()
+                val rgb = tensorRgbRows(keyTensor, 0, top)
+                val pre = chooseLead.submit(java.util.concurrent.Callable {
+                    val pic = DoubleArray(HowToSense.W * HowToSense.H)
+                    HowToSense.pictureRows(rgb, pic, 0 until HowToSense.H)
+                    HowToSense.stats(pic, c)
+                })
+                val tA = now()
                 var steps: List<Array<DoubleArray>> = emptyList()
                 val moved: List<RawFrame> = if (rs.size == 1 || !gapped) rs else {
                     val pyr = rs.map { fr -> BurstAlign.pyramid(fr.bayer, fr.width, fr.height, alignPool) }
@@ -1727,27 +1748,25 @@ class MeasurementController(
                     }
                 }
                 val residuals = (1 until moved.size).map { rawResidual(moved[0], moved[it]) }
-                val laneSizes = when (moved.size) { 1 -> listOf(1); 2, 3 -> listOf(1, 2); else -> listOf(1, 2, 4) }
-                val lanes = laneSizes.map { k -> moved.take(k) }
                 val alignMs = ms(tA)
-                val n = lanes.size
-                val tF = now()
-                val tensor = src.formLanesTensor(lanes, DoubleArray(n) { ratio })
-                val formMs = ms(tF)
+                val sumTensor = if (n == 1) null else {
+                    val tS = now()
+                    src.formLanesTensor(laneSizes.drop(1).map { k -> moved.take(k) }, DoubleArray(n - 1) { ratio },
+                        second = true).also { formMs += ms(tS) }
+                }
                 stepClock.formed()
-                val mp0 = tensor.batch.transforms[0]
-                val top = mp0.padY.toInt()
-                val rgb = tensorRgbRows(tensor, 0, top)
-                val pre = chooseLead.submit(java.util.concurrent.Callable {
-                    val pic = DoubleArray(HowToSense.W * HowToSense.H)
-                    HowToSense.pictureRows(rgb, pic, 0 until HowToSense.H)
-                    HowToSense.stats(pic, c)
-                })
-
-                // ---- 3. detect, every image in one call; 4. the union and the next output's hesitations.
-                val dets = tfl.detectTensorBatchOptimized(tensor.batch)
+                val sumDet = sumTensor?.let { t ->
+                    detectLead.submit(java.util.concurrent.Callable {
+                        Pair(tfl.detectTensorBatchOptimized(t.batch), tfl.lastRunMs + tfl.lastDecodeMs)
+                    })
+                }
+                val (keyDets, keyInferMs) = keyDet.get()
+                val (sumDets, sumInferMs) = sumDet?.get() ?: Pair(emptyList<List<Detection>>(), 0.0)
+                val dets = keyDets + sumDets
                 stepClock.detected()
-                val inferMs = tfl.lastRunMs + tfl.lastDecodeMs
+                val inferMs = keyInferMs + sumInferMs
+
+                // ---- 4. the union and the next output's hesitations.
                 val tU = now()
                 val laneD = (0 until n).map { a ->
                     dets[a].map { d -> V.D(d.confidence.toDouble(), DoubleArray(4) { d.xyxy[it].toDouble() }, d.classId) }
@@ -1820,13 +1839,13 @@ class MeasurementController(
                     .put("key", JSONObject().put("iso", iso).put("shutter_us", Duel.SHUTTERS_US[sIdx])
                         .put("s_applied", key.meta.appliedExpUs).put("g_applied", key.meta.appliedIso))
                     .put("choice", choice).put("f_px", fPx).put("prior_frames", prior.frames))
-                val keyBmp = src.selectedTensorBitmap(tensor, 0)
+                val keyBmp = src.selectedTensorBitmap(keyTensor, 0)
                 val path = saveImage("${frameName(f)}_key", keyBmp)
-                for (a in 1 until n) saveImage("${frameName(f)}_${roles[a]}", src.selectedTensorBitmap(tensor, a))
+                for (a in 1 until n) saveImage("${frameName(f)}_${roles[a]}", src.selectedTensorBitmap(sumTensor!!, a - 1))
                 logFrame(f, name, lattice.cell(gIdx, sIdx), iso, Duel.SHUTTERS_US[sIdx], n, n > 1,
                     formMs, inferMs, totalMs, outDets, path, tieBreak = kind, applyBoost = false,
                     captureMs = waitMs, writeDetsLine = true, metaOverride = key.meta)
-                runCatching { onFrame(keyBmp, src.detectionsForTensorPreview(outDets, tensor, 0), iso, Duel.SHUTTERS_US[sIdx]) }
+                runCatching { onFrame(keyBmp, src.detectionsForTensorPreview(outDets, keyTensor, 0), iso, Duel.SHUTTERS_US[sIdx]) }
                 onStatus("$name f=$f $kind ISO$iso 1/${HowToSense.DENS[sIdx]} out=${outDets.size} hes=${hes.size} " +
                     "${"%.0f".format(totalMs)}ms")
                 f++
@@ -1834,7 +1853,7 @@ class MeasurementController(
         } finally {
             runCatching { raw.stopStream() }
             synchronized(lock) { ring.forEach { it.release() }; ring.clear() }
-            runCatching { chooseLead.shutdownNow(); alignPool.shutdownNow() }
+            runCatching { chooseLead.shutdownNow(); detectLead.shutdownNow(); alignPool.shutdownNow() }
             runCatching { src.shutdown() }
         }
         endPass()
