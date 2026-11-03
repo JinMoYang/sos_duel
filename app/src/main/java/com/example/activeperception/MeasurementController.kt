@@ -61,6 +61,44 @@ private val BUDGET_PATTERNS = listOf(listOf(1), listOf(2), listOf(4), listOf(6),
     listOf(2, 2), listOf(3, 3), listOf(1, 1, 1), listOf(2, 2, 2), listOf(1, 1, 1, 1), List(6) { 1 })
 private typealias BudgetRead = Pair<RawFrame, RawSensorCapturer.RawMeta>
 
+/** Switch probe ([MeasurementController.runSwitchProbe]): a request queue, [b] reads a request and
+ *  [q] requests queued; q = 0: one request at a time, sent 20-60 ms after the previous read is in
+ *  hand (the camera's own latency, nothing ahead). Still-capture template (runAddl's) unless
+ *  [preview] (the parallel stream's). */
+private data class SwitchMode(val b: Int, val q: Int, val preview: Boolean = false, val repeat: Boolean = false,
+                               val suffix: String = "",
+                               /** The two exposures alternated, and the time between switches. */
+                               val exposures: List<Int> = listOf(4167, 8333), val switchMs: Int = 400,
+                               /** > 0: the parallel stream the baselines use ([RawSensorCapturer.startParallel])
+                                *  at this depth, instead of a queue of ours. */
+                               val parallel: Int = 0,
+                               /** With [parallel]: the stream on the repeating request instead of the legacy queue. */
+                               val parallelRepeating: Boolean = false,
+                               /** Repeating at exposures[0]; instead of switching, one request at
+                                *  exposures[1] is sent alongside every switchMs (a probe read). */
+                               val insert: Boolean = false) {
+    val name: String get() = when {
+        parallel > 0 -> if (parallelRepeating) "parallel_rep" else "parallel$parallel"
+        insert -> "repeat_insert"
+        repeat -> "repeat"
+        q == 0 -> "alone"
+        else -> "b${b}_q$q"
+    } + (if (preview) "_preview" else "") + suffix
+}
+/** Repeating request ([repeat]): no queue of ours; the camera reads at the last setting until a
+ *  new one replaces it ([RawSensorCapturer.setRepeating]). (3, 3) is runAddl's queue. Runs on
+ *  2026-10-31: switch_probe1 tried alone, (1, 1-4, 6), (3, 1-3); switch_probe2/3 compared the
+ *  repeating request with (1, 4) and (3, 3); switch_probe4 the repeating request at long
+ *  exposures, the baselines' legacy stream (depth 3, and 5) and a probe read sent into a
+ *  repeating stream; this one the baselines' stream on the repeating request (parallel_rep).
+ *  Each mode runs SWITCH_MODE_MS. */
+private val SWITCH_MODES = listOf(
+    SwitchMode(1, 0, parallel = 1, parallelRepeating = true),
+    SwitchMode(1, 0, parallel = 1, parallelRepeating = true, exposures = listOf(16667, 33333), switchMs = 500,
+        suffix = "_60_30"),
+    SwitchMode(1, 0, repeat = true))
+private const val SWITCH_MODE_MS = 10_000L
+
 /** Additional-exposure check ([MeasurementController.runAddl]): reads per queued burst, bursts
  *  queued (a new key setting reaches the sensor within about ADDL_BURST x ADDL_QUEUED reads),
  *  newest reads kept, and the output period. */
@@ -231,6 +269,19 @@ class MeasurementController(
     /** A method with its own capture thread (runAddl, runBudgetProbe): parallel whatever
      *  [parallelCapture] says; only the manifest reads it. */
     private var ownCaptureThread = false
+    /** The parallel structure's capture layer: false (from 2026-10-31) = the camera's repeating
+     *  request, one-shot requests for other settings; true = the queues of the 2026-10-29
+     *  comparison (runAddl's 3-read bursts x 3 queued, the baselines' stream of 3 requests kept
+     *  until decoded). Switch probe 2026-10-31: those took ~150 ms to bring a new setting to
+     *  the sensor (runAddl) and left the sensor ~40% idle (the baselines'). Set by the activity. */
+    @Volatile var legacyCapture: Boolean = false
+        set(v) { field = v; raw.parallelRepeating = !v }
+    /** Repeating capture layer: decode every read on arrival (true) instead of only the reads an
+     *  output takes (false, from 2026-10-31: decoding is part of a method's own cost, and reads
+     *  nobody uses would load the CPU and memory its analysis runs on). Kept for the A/B check
+     *  of that load. Set by the activity. */
+    @Volatile var decodeAll: Boolean = false
+        set(v) { field = v; raw.parallelLazyDecode = !v }
 
     private fun saveImage(name: String, bmp: Bitmap): String =
         if (saveImages) logger.saveJpegAsync(name, bmp) else ""
@@ -253,6 +304,10 @@ class MeasurementController(
         if (ExperimentSession.limoSpeed.isNotEmpty()) m.put("limo_speed_setting", ExperimentSession.limoSpeed)
         m.put("capture_structure", if (parallelCapture || ownCaptureThread) "parallel: capture thread streams, one output every 100 ms " +
             "from the newest fresh reads" else "serial: capture, then analysis, then the next capture")
+        if (parallelCapture || ownCaptureThread) m.put("capture_layer", if (legacyCapture)
+            "legacy: queued requests (runAddl 3-read bursts x 3; baselines 3 requests kept until decoded)"
+            else "repeating request at the method's setting; other settings as one-shot requests; " +
+                if (decodeAll) "every read decoded on arrival" else "only the reads an output takes are decoded")
         m.put("grid", JSONObject().apply {
             put("gains", JSONArray(grid.gains.toTypedArray()))
             put("exposures_us", JSONArray(grid.exposuresUs.toTypedArray()))
@@ -791,6 +846,230 @@ class MeasurementController(
     }
 
     /**
+     * Switch probe (2026-10-31, desk test, phone still): how long a new setting takes to reach the
+     * sensor for each way of queueing the capture requests, and whether the sensor still reads
+     * back to back. For each mode (b, q) of [SWITCH_MODES] a capture thread runs runAddl's loop:
+     * q requests of b reads queued; take the oldest, queue one more at the requested setting, hand
+     * its reads over as they are decoded. The requested setting alternates between ISO 1600 x
+     * 1/240 and x 1/120 every 400-500 ms; the analysis thread detects the newest 4 reads every
+     * 100 ms (the proposed method's load).
+     *
+     * Logs switch_reads.csv (every read: requested and applied exposure, submit / exposure start /
+     * in-hand times on elapsedRealtimeNanos, reads requested and not yet in hand) and
+     * switch_changes.csv (every switch: the new exposure and when it was requested).
+     */
+    fun runSwitchProbe(onStatus: (String) -> Unit) {
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+            ?: error("the switch probe requires TfliteYoloDetector")
+        val iso = 1600
+        val phys = minOf(iso, v2AnalogCeil())
+        val ratio = iso.toDouble() / phys
+        ownCaptureThread = true
+        startPass("switch_probe", isGtReference = false, withFrames = false, methodParams = JSONObject()
+            .put("rule", "capture thread: runAddl's loop, q requests of b reads queued at the requested " +
+                "setting, or a repeating request, or the parallel stream; the setting alternates every " +
+                "switch_ms to 1.25 x switch_ms; analysis thread: the newest 4 reads detected every 100 ms")
+            .put("modes", JSONArray(SWITCH_MODES.map { m -> JSONObject().put("name", m.name).put("b", m.b)
+                .put("q", m.q).put("repeat", m.repeat).put("parallel_depth", m.parallel).put("insert", m.insert)
+                .put("exposures_us", JSONArray(m.exposures)).put("switch_ms", m.switchMs)
+                .put("template", if (m.parallel > 0 || m.preview) "preview" else "still capture") }))
+            .put("alone", "q = 0: one request at a time, sent 20-60 ms after the previous read is in hand")
+            .put("insert", "repeating at exposures[0]; every switch_ms one request at exposures[1] alongside " +
+                "(its read: outstanding -2)")
+            .put("mode_ms", SWITCH_MODE_MS).put("iso", iso).put("analog_iso", phys)
+            .put("timestamp_source", raw.timestampSource)
+            .put("detector_slots", tfl.backendSummary))
+        legacyCapture = false
+        logger.csv("switch_reads", listOf("mode", "seq", "req_exp_us", "exp_us", "iso", "submit_ns",
+            "submit_ret_ns", "sensor_ts", "started_cb_ns", "completed_cb_ns", "in_hand_ns", "outstanding", "image_ns"))
+        logger.csv("switch_results", listOf("mode", "sensor_ts", "req_exp_us", "exp_us", "completed_cb_ns"))
+        logger.csv("switch_changes", listOf("mode", "idx", "to_exp_us", "t_ns"))
+        val src = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
+        onStatus("switch: warming FP16 GPU batches…")
+        tfl.warmUpAllBatches()
+        val ring = ArrayDeque<BudgetRead>()
+        val lock = java.lang.Object()
+        val requested = java.util.concurrent.atomic.AtomicInteger(0)
+        try {
+            for (sm in SWITCH_MODES) {
+                if (!running) break
+                val b = sm.b; val q = sm.q
+                val mode = sm.name
+                val exposures = sm.exposures
+                requested.set(exposures[0])
+                val template = if (sm.preview) android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW
+                    else android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE
+                onStatus("switch: $mode")
+                val capturing = java.util.concurrent.atomic.AtomicBoolean(true)
+                val capError = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+                val capThread = Thread({
+                    val queued = ArrayDeque<RawSensorCapturer.BracketHandle>()
+                    var submitted = 0; var inHand = 0; var seq = 0; var failures = 0
+                    val pause = java.util.Random(11L)
+                    fun submit() {
+                        val us = requested.get()
+                        queued.addLast(raw.beginBracketSequence(List(b) { us to phys }, template))
+                        submitted += b
+                    }
+                    if (sm.parallel > 0) {
+                        // The baselines' stream: its own thread keeps `parallel` requests until decoded.
+                        try {
+                            raw.parallelReadHook = { fr, m, req ->
+                                val t = SystemClock.elapsedRealtimeNanos()
+                                logger.row("switch_reads", listOf(mode, seq++, req, m.appliedExpUs, m.appliedIso,
+                                    0, 0, m.timestamp, 0, 0, t, -1, raw.takeImageArrivalNs(m.timestamp)))
+                                synchronized(lock) {
+                                    ring.addLast(fr to m)
+                                    while (ring.size > 6) ring.removeFirst()
+                                }
+                            }
+                            raw.startParallel(depth = sm.parallel, periodMs = ADDL_PERIOD_MS, repeating = sm.parallelRepeating,
+                                lazyDecode = false)
+                            raw.parallelSetPattern(listOf(SensorState(requested.get().toLong(), phys)))
+                            while (capturing.get() && running) Thread.sleep(20)
+                        } catch (t: Throwable) {
+                            android.util.Log.e("SwitchProbe", "parallel stopped", t)
+                            capError.set(t)
+                        } finally {
+                            raw.stopParallel()
+                            raw.parallelReadHook = null
+                        }
+                        return@Thread
+                    }
+                    if (sm.repeat) {
+                        // No queue of ours: the switcher replaces the repeating request.
+                        try {
+                            raw.setRepeating(requested.get(), phys, template)
+                            while (capturing.get() && running) {
+                                val r = raw.pollRepeating(50) ?: continue
+                                val t = SystemClock.elapsedRealtimeNanos()
+                                logger.row("switch_reads", listOf(mode, seq++, r.reqExpUs, r.meta.appliedExpUs,
+                                    r.meta.appliedIso, r.setNs, r.setReturnedNs, r.meta.timestamp,
+                                    r.startedCallbackNs, r.completedCallbackNs, t, -1,
+                                    raw.takeImageArrivalNs(r.meta.timestamp)))
+                                synchronized(lock) {
+                                    ring.addLast(r.frame to r.meta)
+                                    while (ring.size > 6) ring.removeFirst()
+                                }
+                            }
+                        } catch (t: Throwable) {
+                            android.util.Log.e("SwitchProbe", "repeating stopped", t)
+                            capError.set(t)
+                        }
+                        // Stopped by the probe once the switcher is done (it may still replace it).
+                        return@Thread
+                    }
+                    try {
+                        repeat(q) { submit() }
+                        while (capturing.get() && running) {
+                            // Alone: nothing is queued; the next request goes out once this read is in.
+                            if (q == 0) submit()
+                            val h = queued.removeFirst()
+                            if (q > 0) submit()
+                            try {
+                                for (i in 0 until h.count) {
+                                    val outstanding = submitted - inHand
+                                    val (fr, m) = raw.takeBracketFrame(h, i)
+                                    val t = SystemClock.elapsedRealtimeNanos()
+                                    inHand++
+                                    logger.row("switch_reads", listOf(mode, seq++, h.exposureUs[i], m.appliedExpUs,
+                                        m.appliedIso, h.submittedSensorNs, h.submitReturnedNs, m.timestamp,
+                                        h.startedCallbackNs[i], h.completedCallbackNs[i], t, outstanding,
+                                        raw.takeImageArrivalNs(m.timestamp)))
+                                    synchronized(lock) {
+                                        ring.addLast(fr to m)
+                                        while (ring.size > 6) ring.removeFirst()
+                                    }
+                                }
+                                failures = 0
+                                if (q == 0) Thread.sleep(20L + pause.nextInt(40))
+                            } catch (t: Throwable) {
+                                android.util.Log.e("SwitchProbe", "burst failed", t)
+                                raw.abortBracketSequence(h)
+                                inHand = submitted - queued.sumOf { it.count }
+                                if (++failures >= 5) throw t
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        android.util.Log.e("SwitchProbe", "capture stopped", t)
+                        capError.set(t)
+                    } finally {
+                        queued.forEach { raw.abortBracketSequence(it) }
+                    }
+                }, "switch-capture")
+                val switcher = Thread({
+                    val rnd = java.util.Random(7L + b * 10 + q)
+                    var k = 0
+                    try {
+                        Thread.sleep(1500)
+                        while (capturing.get() && running) {
+                            k++
+                            if (sm.insert) {
+                                // A probe read alongside the repeating stream, which stays at exposures[0].
+                                val to = exposures[1]
+                                logger.row("switch_changes", listOf(mode, k, to, SystemClock.elapsedRealtimeNanos()))
+                                val h = raw.beginBracketSequence(listOf(to to phys), template)
+                                val (_, m) = raw.takeBracketFrame(h, 0)
+                                val t = SystemClock.elapsedRealtimeNanos()
+                                logger.row("switch_reads", listOf(mode, 100_000 + k, to, m.appliedExpUs, m.appliedIso,
+                                    h.submittedSensorNs, h.submitReturnedNs, m.timestamp, h.startedCallbackNs[0],
+                                    h.completedCallbackNs[0], t, -2, raw.takeImageArrivalNs(m.timestamp)))
+                            } else {
+                                val to = exposures[k % 2]
+                                logger.row("switch_changes", listOf(mode, k, to, SystemClock.elapsedRealtimeNanos()))
+                                requested.set(to)
+                                if (sm.repeat) raw.setRepeating(to, phys, template)
+                                if (sm.parallel > 0) raw.parallelSetPattern(listOf(SensorState(to.toLong(), phys)))
+                            }
+                            Thread.sleep(sm.switchMs.toLong() + rnd.nextInt(sm.switchMs / 4))
+                        }
+                    } catch (_: InterruptedException) {
+                    } catch (t: Throwable) {
+                        android.util.Log.e("SwitchProbe", "switcher stopped", t)
+                        capError.set(t)
+                    }
+                }, "switch-switcher")
+                capThread.start()
+                switcher.start()
+                val t0Mode = now()
+                var tick = now()
+                while (running && capError.get() == null && now() - t0Mode < SWITCH_MODE_MS * 1_000_000L) {
+                    val lead = tick - now()
+                    if (lead > 0) Thread.sleep(lead / 1_000_000, (lead % 1_000_000).toInt())
+                    tick = maxOf(tick, now()) + ADDL_PERIOD_MS * 1_000_000L
+                    val reads = synchronized(lock) { ring.toList().takeLast(4) }
+                    if (reads.size < 4) continue
+                    val tensor = src.formLanesTensor(reads.map { listOf(it.first) }, DoubleArray(4) { ratio })
+                    tfl.detectTensorBatchOptimized(tensor.batch)
+                }
+                capturing.set(false)
+                switcher.interrupt()
+                switcher.join(1000)
+                capThread.join(5000)
+                if (sm.repeat) {
+                    // A row with idx -1 marks the stop: no result should arrive after it.
+                    logger.row("switch_changes", listOf(mode, -1, 0, SystemClock.elapsedRealtimeNanos()))
+                    for (a in raw.stopRepeating()) logger.row("switch_results", listOf(mode, a[0], a[1], a[2], a[3]))
+                }
+                synchronized(lock) { ring.clear() }
+                capError.get()?.let { logger.jsonl("switch_errors", JSONObject().put("mode", mode)
+                    .put("error", android.util.Log.getStackTraceString(it))) }
+                // The aborted requests are still in the camera, and an aborted shot's image holds a
+                // decode thread until its 2 s result wait ends; let both pass before the next mode.
+                Thread.sleep(2500)
+            }
+        } finally {
+            runCatching { raw.stopFastCapture() }
+            runCatching { src.shutdown() }
+        }
+        endPass()
+        onStatus("switch probe done")
+    }
+
+    /**
      * Budget probe (2026-10-29, desk test, phone still): what one output can spend when capture
      * and analysis run on separate threads. A capture thread keeps the sensor reading back to back
      * (two bursts of [BUDGET_BURST] reads always queued, ISO 1600 x 1/240); the analysis thread
@@ -1056,14 +1335,17 @@ class MeasurementController(
         val ae = if (startCellOverride != null) null else meterAeStart(onStatus)
         val (g0, s0) = lattice.indices(startCellOverride
             ?: if (ae != null) nearestCell(lattice, ae.iso, ae.expUs) else lattice.cell(2, 2))
-        // The requested key setting; the capture thread reads it at every burst.
+        // The requested key setting: the repeating request's (set at once when it changes), or,
+        // legacy, read by the capture thread at every burst.
         val cell = java.util.concurrent.atomic.AtomicInteger(HowToSense.cell(g0, s0))
         ownCaptureThread = true
         startPass(name, isGtReference = false, methodParams = JSONObject()
             .put("mode", name).put("extra_reads", extra).put("merge", merge)
             .put("every_frame_additional", everyFrameAdditional)
-            .put("structure", "capture thread: reads back to back at the key setting (bursts of $ADDL_BURST, " +
-                "$ADDL_QUEUED queued); analysis thread: one output every $ADDL_PERIOD_MS ms from the newest reads")
+            .put("structure", (if (legacyCapture) "capture thread: reads back to back at the key setting " +
+                "(bursts of $ADDL_BURST, $ADDL_QUEUED queued)" else "the camera reads the key setting as a " +
+                "repeating request, replaced as soon as the key setting changes; a capture thread keeps the " +
+                "decoded reads") + "; analysis thread: one output every $ADDL_PERIOD_MS ms from the newest reads")
             .put("single_frame", "the newest read alone (key exposure)")
             .put("additional_frame", "after a frame whose image 0 had a weak trace: the newest ${extra + 1} " +
                 "consecutive reads at the key setting, the first the key exposure")
@@ -1073,9 +1355,11 @@ class MeasurementController(
             .put("trace", if (merge) "weak detections in image 0 (in an additional frame the key merged with its " +
                 "additional exposures)" else "weak detections in the key image")
             .put("extra_cap", "additional exposures: at most extra_reads, and only as many as fit 100 ms of " +
-                "sensor time with the key (1/240-1/60: 3+, 1/30: 1, 1/15: 0)")
+                "sensor time with the key (1/240-1/60: 3+, 1/30: 1, 1/15: 0; read holds " +
+                (if (legacyCapture) "16.7 / 50 / 170 ms" else "16.7 / 33.4 / 66.8 ms") + ")")
             .put("key_rule", "How-to-Sense on the key read alone, gyro curve, one read's blur (Duel2 sg); " +
-                "applied at the capture thread's next burst")
+                if (legacyCapture) "applied at the capture thread's next burst" else "applied at once (the " +
+                    "repeating request is replaced)")
             .put("curve", curve.note)
             .put("start", JSONObject().put("ae", ae?.json() ?: JSONObject.NULL)
                 .put("iso", Duel.ISOS[g0]).put("shutter_us", Duel.SHUTTERS_US[s0]))
@@ -1085,7 +1369,7 @@ class MeasurementController(
         logger.csv("addl_frames", listOf("idx", "kind", "n_reads", "n_images", "iso", "shutter_us",
             "key_ts", "last_end_ts", "t_output", "wait_ms", "align_ms", "form_ms", "infer_ms", "shift_ms",
             "fusion_ms", "choose_ms", "total_ms", "clock_late_ms", "latency_ms", "max_gap_ms", "skipped_reads",
-            "n_out", "n_weak", "moved_to_iso", "moved_to_shutter_us"))
+            "n_out", "n_weak", "moved_to_iso", "moved_to_shutter_us", "rawdec_ms"))
         val src = ParallelRawCandidateSource(grid, raw,
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
@@ -1096,12 +1380,52 @@ class MeasurementController(
         val alignPool = Executors.newFixedThreadPool(4)
         val chooseLead = Executors.newSingleThreadExecutor()
 
-        class Read(val frame: RawFrame, val meta: RawSensorCapturer.RawMeta, val cell: Int)
+        /** A read in the ring: decoded on arrival, or (repeating, not [decodeAll]) still the
+         *  camera's buffer, decoded when an output takes it and released unread when it falls
+         *  out of the ring. */
+        class Read(val ts: Long, val cell: Int, decoded: Pair<RawFrame, RawSensorCapturer.RawMeta>?,
+                   val pending: RawSensorCapturer.PendingRead?) {
+            @Volatile private var d = decoded
+            @Volatile var taken = false
+            val frame: RawFrame get() = d!!.first
+            val meta: RawSensorCapturer.RawMeta get() = d!!.second
+            fun take() { if (d == null) d = pending!!.decode() }
+            fun release() { if (!taken && d == null) pending?.close() }
+        }
+        val lazyDecode = !legacyCapture && !decodeAll
         val ring = ArrayDeque<Read>()
         val lock = java.lang.Object()
         val capturing = java.util.concurrent.atomic.AtomicBoolean(true)
         val capError = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
-        val capThread = Thread({
+        /** Makes [c] the key setting; with the repeating request the camera switches at once. */
+        fun requestCell(c: Int) {
+            cell.set(c)
+            if (!legacyCapture) raw.setRepeating(Duel.SHUTTERS_US[c % 5], minOf(Duel.ISOS[c / 5], ceil),
+                android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE, label = c, deferDecode = lazyDecode)
+        }
+        val capThread = if (!legacyCapture) Thread({
+            // The repeating request reads the key setting; reads come out labelled with their cell.
+            try {
+                while (capturing.get() && running) {
+                    val read = if (lazyDecode) raw.pollRepeatingPending(50)?.let { Read(it.pending.timestamp, it.label, null, it.pending) }
+                        else raw.pollRepeating(50)?.let { Read(it.meta.timestamp, it.label, it.frame to it.meta, null) }
+                    if (read == null) continue
+                    synchronized(lock) {
+                        // Arrivals come from several threads: keep the ring in sensor-time order.
+                        var at = ring.size
+                        while (at > 0 && ring[at - 1].ts > read.ts) at--
+                        ring.add(at, read)
+                        while (ring.size > ADDL_RING) ring.removeFirst().release()
+                        lock.notifyAll()
+                    }
+                }
+            } catch (t: Throwable) {
+                android.util.Log.e("Addl", "capture stopped", t)
+                capError.set(t)
+            } finally {
+                synchronized(lock) { capturing.set(false); lock.notifyAll() }
+            }
+        }, "addl-capture") else Thread({
             val queued = ArrayDeque<Pair<RawSensorCapturer.BracketHandle, Int>>()
             fun submit() {
                 val c = cell.get()
@@ -1119,7 +1443,7 @@ class MeasurementController(
                         for (i in 0 until h.count) {
                             val (fr, m) = raw.takeBracketFrame(h, i)
                             synchronized(lock) {
-                                ring.addLast(Read(fr, m, c))
+                                ring.addLast(Read(m.timestamp, c, fr to m, null))
                                 while (ring.size > ADDL_RING) ring.removeFirst()
                                 lock.notifyAll()
                             }
@@ -1150,6 +1474,7 @@ class MeasurementController(
             return if (m % 2 == 1) s[m / 2] else 0.5 * (s[m / 2 - 1] + s[m / 2])
         }
         try {
+            if (!legacyCapture) requestCell(cell.get())
             capThread.start()
             var f = 0
             var tick = now()
@@ -1174,15 +1499,22 @@ class MeasurementController(
                 val reads: List<Read> = synchronized(lock) {
                     fun fresh(): List<Read> {
                         val newest = ring.lastOrNull() ?: return emptyList()
-                        return ring.filter { it.meta.timestamp > lastUsed && it.cell == newest.cell }
+                        return ring.filter { it.ts > lastUsed && it.cell == newest.cell }
                     }
                     while (capturing.get() && fresh().size < need) lock.wait(20)
                     val fr = fresh()
-                    if (fr.size < need) emptyList() else { skipped = fr.size - need; fr.takeLast(need) }
+                    if (fr.size < need) emptyList() else {
+                        skipped = fr.size - need
+                        fr.takeLast(need).also { picked -> picked.forEach { it.taken = true } }
+                    }
                 }
                 if (reads.isEmpty()) break
+                // Undecoded picks: decode them now, together.
+                val tDec = now()
+                if (lazyDecode) reads.map { r -> alignPool.submit { r.take() } }.forEach { it.get() }
+                val rawDecMs = ms(tDec)
                 val waitMs = ms(t0)
-                lastUsed = reads.last().meta.timestamp
+                lastUsed = reads.last().ts
                 val key = reads[0]
                 val metas = reads.map { it.meta }
                 stepClock.captured(metas)
@@ -1320,7 +1652,7 @@ class MeasurementController(
                 else {
                     val ch = HowToSense.choose(curve, st, speed, map.weights(), map.sizes(), c, HowToSense.DENS)
                     moved = ch.next != c
-                    if (moved) cell.set(ch.next)
+                    if (moved) requestCell(ch.next)
                     choiceNote.put("rule", "argmax E, move if the gain exceeds the threshold")
                         .put("e", JSONArray(ch.e.toList()))
                         .put("best", JSONObject().put("iso", Duel.ISOS[ch.best / 5]).put("shutter_us", Duel.SHUTTERS_US[ch.best % 5]))
@@ -1387,7 +1719,8 @@ class MeasurementController(
                     "%.1f".format(chooseMs), "%.1f".format(totalMs), "%.1f".format(lateMs),
                     "%.1f".format((tOutputNs - lastEnd) / 1e6), "%.1f".format(gaps.maxOrNull() ?: 0.0), skipped,
                     outDets.size, per[0].weak.size,
-                    if (moved) Duel.ISOS[cell.get() / 5] else "", if (moved) Duel.SHUTTERS_US[cell.get() % 5] else ""))
+                    if (moved) Duel.ISOS[cell.get() / 5] else "", if (moved) Duel.SHUTTERS_US[cell.get() % 5] else "",
+                    "%.1f".format(rawDecMs)))
                 val bmp = src.selectedTensorBitmap(tensor, 0)
                 val path = saveImage("${frameName(f)}_base", bmp)
                 logFrame(f, name, lattice.cell(gIdx, sIdx), iso, Duel.SHUTTERS_US[sIdx], n, reads.size > 1,
@@ -1401,6 +1734,8 @@ class MeasurementController(
         } finally {
             capturing.set(false)
             runCatching { capThread.join(3000) }
+            synchronized(lock) { ring.forEach { it.release() }; ring.clear() }
+            if (!legacyCapture) runCatching { raw.stopRepeating() }
             runCatching { chooseLead.shutdownNow(); alignPool.shutdownNow() }
             runCatching { raw.stopFastCapture() }
             runCatching { src.shutdown() }
@@ -1499,14 +1834,15 @@ class MeasurementController(
         endPass()
     }
 
-    /** Sensor time one read holds in the parallel stream (ms), measured on the S26 (2026-10-29):
-     *  up to 1/60 one 16.7 ms slot; a 1/30 read ~46 ms before the next read starts; a 1/15 read
-     *  ~146 ms, with or without an explicit frame duration. Budgeted a little above (50, 170): at
-     *  46 / 146 fast PhysSweep's windows after a long read still ran ~6% over 100 ms on average. */
+    /** Sensor time one read holds (ms). Repeating request (switch probe 2026-10-31, S26): frame
+     *  interval = the exposure, 16.7 up to 1/60, 33.4 at 1/30, 66.7 at 1/15. Legacy queues
+     *  (2026-10-29): a 1/30 read ~46 ms before the next read starts, a 1/15 read ~146 ms,
+     *  budgeted a little above (50, 170): at 46 / 146 fast PhysSweep's windows after a long read
+     *  still ran ~6% over 100 ms on average. */
     private fun sensorHoldMs(exposureUs: Int) = when (exposureUs) {
         in 0..16_667 -> 16.7
-        in 16_668..33_334 -> 50.0
-        else -> 170.0
+        in 16_668..33_334 -> if (legacyCapture) 50.0 else 33.4
+        else -> if (legacyCapture) 170.0 else 66.8
     }
 
     /**

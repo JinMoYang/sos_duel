@@ -2152,6 +2152,12 @@ class MeasurementActivity : AppCompatActivity() {
             start(cmd) { mc!!.runBudgetProbe(::post) }
             return
         }
+        // Desk test, phone still: how long a new setting takes to reach the sensor per request
+        // queue (MeasurementController.runSwitchProbe).
+        if (cmd == "switch_probe") {
+            start(cmd) { mc!!.runSwitchProbe(::post) }
+            return
+        }
         v3Command(cmd)?.let { (theta, pilot) ->
             val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
             start(cmd) { mc!!.runV3Cause(theta, pilot, cap, ::post, ::showFrame) }
@@ -2597,6 +2603,14 @@ class MeasurementActivity : AppCompatActivity() {
     private fun start(modeTag: String, block: () -> Unit) {
         val par = parallelNext
         parallelNext = false
+        // `--ez legacy_capture true` (once, then forgotten): the 2026-10-29 comparison's capture
+        // queues instead of the repeating request (MeasurementController.legacyCapture).
+        val legacy = intent?.getBooleanExtra("legacy_capture", false) == true
+        intent?.removeExtra("legacy_capture")
+        // `--ez decode_all true` (once, then forgotten): the repeating layer decodes every read
+        // on arrival instead of only the reads an output takes (MeasurementController.decodeAll).
+        val decodeAllNow = intent?.getBooleanExtra("decode_all", false) == true
+        intent?.removeExtra("decode_all")
         if (runActive) { post("busy — stop first"); return }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED) { post("no camera permission"); return }
@@ -2642,6 +2656,8 @@ class MeasurementActivity : AppCompatActivity() {
                 mcLocal.applyPairing(pairSnap)
                 mcLocal.saveImages = saveImagesNow
                 mcLocal.parallelCapture = par
+                mcLocal.legacyCapture = legacy
+                mcLocal.decodeAll = decodeAllNow
                 mcLocal.appFilesDir = getExternalFilesDir(null)
                 raw.fixedFocusDiopters = focusNow
                 mc = mcLocal
