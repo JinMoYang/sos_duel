@@ -2140,6 +2140,158 @@ class MeasurementController(
         endPass()
     }
 
+    // ---------- curve_record: the record the glass's own tolerance curve is built from ----------
+
+    /**
+     * The glass's tolerance-curve record (2026-11-03 handover §1, plan of that evening): [countdownS]
+     * after the run starts, then [moments] moments while walking (one direction through several
+     * parts of the garage), one every ~1.5 s. A moment is one burst of one-shot reads, ~0.45 s of
+     * sensor time, every image a real analog setting (the glass's ISO 100-1600 are all analog; no
+     * digital ISO anywhere):
+     * - ISO 1600 at the five shutters, short to long, and a second 1/240 read right after the
+     *   first: the pair sense would align, so [stepMotion] of it is the runtime's align_motion;
+     * - one other ISO, 800 / 400 / 200 / 100 in turn by moment, at the five shutters.
+     * The ten images are decoded, formed (detector input, digital 1), detected (boxes >= 0.01) and
+     * saved. Two synthetic images per moment check the synthetic ones against the real ones of the
+     * same setting in the same burst (use check_sum2, check_digital; the curve builder takes neither):
+     * the motion pair summed after the move (sense's 2-sum) against the real 1/120, and the ISO 1600 x
+     * 1/120 read at digital other/1600 against the real other ISO x 1/120. Written in the curve builder's form
+     * (ToleranceCurveSosCf: images.csv, detections.jsonl with boxes in detector-input px, moments.csv;
+     * imu.csv as every run). "curve: ..." status lines drive the beeps.
+     */
+    fun runCurveRecord(onStatus: (String) -> Unit, countdownS: Int = 15, moments: Int = 200) {
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+            ?: error("curve_record requires TfliteYoloDetector")
+        val runStartMs = SystemClock.elapsedRealtime()
+        val ceil = v2AnalogCeil()
+        val others = intArrayOf(800, 400, 200, 100)
+        startPass("curve_record", isGtReference = false, withFrames = false, methodParams = JSONObject()
+            .put("purpose", "the glass's own tolerance curve (2026-11-03 handover §1)")
+            .put("moments", moments).put("countdown_s", countdownS)
+            .put("moment", "one burst: ISO 1600 x 1/240, 1/240 again (motion pair), 1/120, 1/60, 1/30, 1/15; then one " +
+                "other ISO (${others.joinToString("/")} in turn) x the five shutters; all analog, no digital ISO")
+            .put("checks", "per moment, not the curve's: check_sum2 (the 1/240 pair moved and summed, as sense's " +
+                "2-sum) vs the real 1600 x 1/120; check_digital (1600 x 1/120 at digital other/1600) vs the real other x 1/120")
+            .put("analog_ceiling", ceil).put("f_px_640", raw.focalPx640)
+            .put("files", "images.csv (curve builder's columns), detections.jsonl (boxes [x1,y1,x2,y2,conf,cls] in " +
+                "detector-input px, 640 x 640 letterboxed), moments.csv (motion pair, gyro, yaw, timing), img/<image_id>.jpg")
+            .put("align_motion", "moments.csv align_motion: the 1/240 pair (~33 ms), median over tiles of (dx, dy) in " +
+                "BurstAlign's half-quad px, as sense_frames align_motion"))
+        logger.csv("images", listOf("moment", "image_id", "cell", "iso", "shutter_us", "sensor_ts_ns", "file", "use",
+            "n_frames", "digital_ratio", "source_iso_captured", "source_shutter_us", "base_iso", "made_by"))
+        logger.csv("moments", listOf("moment", "first_ts", "last_end_ts", "span_ms", "other_iso", "yaw_rate_rad_s",
+            "gyro_x", "gyro_y", "gyro_z", "align_motion", "align_residual", "pair_dt_ms", "capture_ms", "process_ms"))
+        val src = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
+        onStatus("warming FP16 GPU batches…")
+        tfl.warmUpAllBatches()
+        val alignPool = Executors.newFixedThreadPool(4)
+        class Shot(val us: Int, val iso: Int, val pair: Boolean = false)
+        class Burst(val m: Int, val other: Int, val shots: List<Shot>, val h: RawSensorCapturer.BracketHandle, val sentNs: Long)
+        fun submit(m: Int): Burst {
+            val other = others[m % others.size]
+            val shots = listOf(Shot(4167, 1600), Shot(4167, 1600, pair = true)) +
+                Duel.SHUTTERS_US.drop(1).map { Shot(it, 1600) } + Duel.SHUTTERS_US.map { Shot(it, other) }
+            val sent = now()
+            return Burst(m, other, shots, raw.beginBracketSequence(shots.map { it.us to minOf(it.iso, ceil) },
+                android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE), sent)
+        }
+        var pending: Burst? = null
+        var wroteLetterbox = false
+        try {
+            while (running) {
+                val left = countdownS * 1000L - (SystemClock.elapsedRealtime() - runStartMs)
+                if (left <= 0) break
+                onStatus("curve: countdown ${(left + 999) / 1000}")
+                Thread.sleep(minOf(left, 1000L))
+            }
+            if (running) { onStatus("curve: start"); pending = submit(0) }
+            while (running) {
+                val cur = pending ?: break
+                pending = null
+                val got = cur.shots.indices.map { raw.takeBracketFrame(cur.h, it) }
+                val captureMs = ms(cur.sentNs)
+                // The next moment is read while this one is processed.
+                if (cur.m + 1 < moments) pending = submit(cur.m + 1)
+                val tP = now()
+                // ---- the motion pair: the first 1/240 read moved onto the second, as sense moves an
+                // earlier read onto its key.
+                val iPair = cur.shots.indexOfFirst { it.pair }
+                val newer = got[iPair].first; val older = got[0].first
+                val pyr = listOf(newer, older).map { BurstAlign.pyramid(it.bayer, it.width, it.height, alignPool) }
+                val step = BurstAlign.step(pyr[0], pyr[1], alignPool)
+                val motion = stepMotion(step)
+                val movedOlder = RawFrame(BurstAlign.moveBack(older.bayer, older.width, older.height,
+                    BurstAlign.accumulate(listOf(step))[0], alignPool), older.width, older.height,
+                    older.cfaPattern, older.maxDn, older.sensorOrientation, older.whiteBalance, older.cameraToSrgb)
+                val residual = rawResidual(newer, movedOlder)
+                // ---- the images: the ten real ones (the curve's), and two synthetic ones against the
+                // real image of the same setting in the same burst (checks, never the curve's):
+                // check_sum2 = the motion pair summed after the move, as sense makes its 2-sum (a
+                // synthetic 1/120, against the real ISO 1600 x 1/120); check_digital = the ISO 1600 x
+                // 1/120 read at digital (other / 1600) (a synthetic ISO other, against the real one).
+                class RecImg(val id: String, val lane: List<RawFrame>, val ratio: Double, val iso: Int, val us: Int,
+                             val ts: Long, val srcIso: Int, val srcUs: Long, val use: String, val madeBy: String)
+                val imgs = cur.shots.indices.filter { !cur.shots[it].pair }.map { i ->
+                    val sh = cur.shots[i]; val meta = got[i].second
+                    RecImg("m%04d_%d_%d".format(cur.m, sh.iso, sh.us), listOf(got[i].first), 1.0, sh.iso, sh.us,
+                        meta.timestamp, meta.appliedIso, meta.appliedExpUs, "counterfactual", "physical")
+                }.toMutableList()
+                val m120 = got[cur.shots.indexOfFirst { it.iso == 1600 && it.us == 8333 }].second
+                imgs += RecImg("m%04d_sum2_1600_8333".format(cur.m), listOf(newer, movedOlder), 1.0, 1600, 8333,
+                    got[0].second.timestamp, got[0].second.appliedIso, got[0].second.appliedExpUs, "check_sum2", "aligned_sum")
+                imgs += RecImg("m%04d_digital_%d_8333".format(cur.m, cur.other),
+                    listOf(got[cur.shots.indexOfFirst { it.iso == 1600 && it.us == 8333 }].first),
+                    cur.other / 1600.0, cur.other, 8333, m120.timestamp, m120.appliedIso, m120.appliedExpUs,
+                    "check_digital", "digital")
+                // ---- detect (3 a call, the glass's largest batch), save, record.
+                for (chunk in imgs.chunked(3)) {
+                    val tensor = src.formLanesTensor(chunk.map { it.lane }, DoubleArray(chunk.size) { chunk[it].ratio })
+                    val d = tfl.detectTensorBatchOptimized(tensor.batch)
+                    val mp = tensor.batch.transforms[0]
+                    if (!wroteLetterbox) {
+                        wroteLetterbox = true
+                        logger.jsonl("record_info", JSONObject().put("letterbox_scale", mp.scale)
+                            .put("pad_x", mp.padX).put("pad_y", mp.padY).put("input_size", 640))
+                    }
+                    chunk.forEachIndexed { a, im ->
+                        val id = im.id
+                        saveImage(id, src.selectedTensorBitmap(tensor, a))
+                        val gi = Duel.ISOS.indexOf(im.iso); val sj = Duel.SHUTTERS_US.indexOf(im.us)
+                        logger.row("images", listOf(cur.m, id, HowToSense.cell(gi, sj), im.iso, im.us, im.ts,
+                            "img/$id.jpg", im.use, im.lane.size, im.ratio, im.srcIso, im.srcUs, 1600, im.madeBy))
+                        val boxes = JSONArray()
+                        for (det in d[a]) if (det.confidence >= 0.01f) boxes.put(JSONArray(listOf(
+                            det.xyxy[0] * mp.scale + mp.padX, det.xyxy[1] * mp.scale + mp.padY,
+                            det.xyxy[2] * mp.scale + mp.padX, det.xyxy[3] * mp.scale + mp.padY,
+                            det.confidence.toDouble(), det.classId)))
+                        logger.jsonl("detections", JSONObject().put("image_id", id).put("moment", cur.m).put("boxes", boxes))
+                    }
+                }
+                val processMs = ms(tP)
+                val firstTs = got.minOf { it.second.timestamp }
+                val lastEnd = got.maxOf { it.second.timestamp + it.second.appliedExpUs * 1_000L }
+                val gyro = gyroWindow.mean(firstTs, lastEnd).first
+                logger.row("moments", listOf(cur.m, firstTs, lastEnd, "%.1f".format((lastEnd - firstTs) / 1e6), cur.other,
+                    sensors.currentYawRate, gyro[0], gyro[1], gyro[2], "%.2f/%.2f".format(motion[0], motion[1]),
+                    "%.4f".format(residual), "%.1f".format((got[iPair].second.timestamp - got[0].second.timestamp) / 1e6),
+                    "%.1f".format(captureMs), "%.1f".format(processMs)))
+                onStatus("curve: moment ${cur.m + 1}/$moments span ${"%.0f".format((lastEnd - firstTs) / 1e6)}ms " +
+                    "process ${"%.0f".format(processMs)}ms")
+                if (cur.m + 1 >= moments) break
+            }
+        } finally {
+            pending?.let { p -> runCatching { raw.abortBracketSequence(p.h) } }
+            runCatching { raw.stopFastCapture() }
+            runCatching { alignPool.shutdownNow() }
+            runCatching { src.shutdown() }
+        }
+        onStatus("curve: done")
+        endPass()
+    }
+
     // ---------- PhysSweep (Lens/ATI-style physical-sweep baseline, sense/baselines.py) ----------
 
     /** Lens-style physical sweep (Baek et al., ICLR 2025; `sense.baselines.PhysSweep`):

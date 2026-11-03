@@ -45,48 +45,28 @@
             android:fontFamily="monospace"
             android:layout_gravity="top|end" />
 
-        <!-- The glass's walk session (WalkSession): the method in large type, the lap and the
-             leg under it, then the place in the plan; the start button while idle. -->
+        <!-- The glass's screen (walk sessions and the curve record): the same panel in each eye's
+             half (walk_eye), since the glass shows each 640 px half to one eye. -->
         <LinearLayout
             android:id="@+id/walkPanel"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:gravity="center_horizontal"
-            android:orientation="vertical"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
             android:visibility="gone">
 
-            <TextView
-                android:id="@+id/walkTitle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textSize="48sp"
-                android:textStyle="bold"
-                android:textColor="@color/text_primary" />
+            <include
+                android:id="@+id/eyeLeft"
+                layout="@layout/walk_eye"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1" />
 
-            <TextView
-                android:id="@+id/walkDetail"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:textSize="30sp"
-                android:textColor="@color/text_readout" />
-
-            <TextView
-                android:id="@+id/walkSub"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:textSize="18sp"
-                android:textColor="@color/text_label" />
-
-            <Button
-                android:id="@+id/walkButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:minWidth="200dp"
-                android:textSize="26sp" />
+            <include
+                android:id="@+id/eyeRight"
+                layout="@layout/walk_eye"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1" />
         </LinearLayout>
 
         <!-- auto_collect: what is running now, in letters readable from across the room,

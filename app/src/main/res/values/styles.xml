@@ -44,4 +44,16 @@
         <item name="android:layout_margin">8dp</item>
     </style>
 
+    <!-- One run to choose on the glass's idle screen (walk_eye); the chosen one is filled in code. -->
+    <style name="WalkChoice">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">4dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:paddingTop">5dp</item>
+        <item name="android:paddingBottom">5dp</item>
+        <item name="android:textSize">22sp</item>
+    </style>
+
 </resources>

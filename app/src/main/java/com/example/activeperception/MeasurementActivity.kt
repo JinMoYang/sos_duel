@@ -74,12 +74,20 @@ class MeasurementActivity : AppCompatActivity() {
     private lateinit var preview: ImageView
     private lateinit var overlay: OverlayView
     private lateinit var cellText: TextView
-    /** The glass's walk screen (the manual panel and the preview are hidden): the method,
-     *  the lap and leg, the place in the plan, and the start button. */
-    private lateinit var walkTitle: TextView
-    private lateinit var walkDetail: TextView
-    private lateinit var walkSub: TextView
-    private lateinit var walkButton: Button
+    /** One eye's half of the glass's screen (walk_eye): the curve's state, the title, two lines,
+     *  and the runs to choose while idle. */
+    private class Eye(root: View) {
+        val state: TextView = root.findViewById(R.id.eyeState)
+        val title: TextView = root.findViewById(R.id.eyeTitle)
+        val detail: TextView = root.findViewById(R.id.eyeDetail)
+        val sub: TextView = root.findViewById(R.id.eyeSub)
+        val choiceBox: View = root.findViewById(R.id.eyeChoices)
+        val choices: List<TextView> = listOf(R.id.eyeChoice0, R.id.eyeChoice1, R.id.eyeChoice2).map { root.findViewById(it) }
+    }
+    /** The glass's screen (the manual panel and the preview are hidden), both eyes alike. */
+    private lateinit var eyes: List<Eye>
+    /** The run a tap starts on the glass's idle screen, an index into [GLASS_RUNS]; a swipe moves it. */
+    private var glassChoice = 2
     /** Draw each output and its boxes; off on the glass (`--ez preview true` turns it on). */
     private var previewOn = true
     private lateinit var methodGroup: RadioGroup
@@ -139,10 +147,7 @@ class MeasurementActivity : AppCompatActivity() {
         preview = findViewById(R.id.previewImage)
         overlay = findViewById(R.id.overlayView)
         cellText = findViewById(R.id.cellText)
-        walkTitle = findViewById(R.id.walkTitle)
-        walkDetail = findViewById(R.id.walkDetail)
-        walkSub = findViewById(R.id.walkSub)
-        walkButton = findViewById(R.id.walkButton)
+        eyes = listOf(Eye(findViewById(R.id.eyeLeft)), Eye(findViewById(R.id.eyeRight)))
         previewOn = intent.getBooleanExtra("preview", !rayNeoTouchpad)
         methodGroup = findViewById(R.id.methodGroup)
         periodGroup = findViewById(R.id.periodGroup)
@@ -261,16 +266,13 @@ class MeasurementActivity : AppCompatActivity() {
         // every control need TWO taps (focusableInTouchMode: first tap focuses, second
         // clicks), so the phone profile keeps plain touch and hides the glass-only chrome.
         if (rayNeoTouchpad) configureStaticTouchpadControls()
-        // The glass shows only the walk screen: no manual panel (its hidden buttons still work
+        // The glass shows only its own screen: no manual panel (its hidden buttons still work
         // for runs started from adb, since performClick works on GONE views), and no preview
-        // unless asked for. A tap on the temple presses the start button.
+        // unless asked for. Swipes on the temple choose a run, a tap starts it.
         if (rayNeoTouchpad) {
             controlsScroll.visibility = View.GONE
             findViewById<View>(R.id.walkPanel).visibility = View.VISIBLE
-            walkButton.text = "시작"
-            walkButton.setOnClickListener { if (lapSession == null) toggleWalkSession() }
-            showWalk(if (walkCheck()) "검증 걷기" else "본 걷기", "",
-                "블록 ${walkPlan().size}개 · 블록마다 편도 ${walkLegs()}번", idle = true)
+            showGlassIdle()
             if (!previewOn) {
                 preview.visibility = View.GONE
                 overlay.visibility = View.GONE
@@ -600,6 +602,8 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** The proposed method's tolerance curve (gyro + translation speeds), in assets. */
     private val CURVE_FILE = "tolerance_curve_gyro.txt"
+    /** The glass's own curve in the app's files dir, preferred over [CURVE_FILE] when present. */
+    private val RAYNEO_CURVE_FILE = "tolerance_curve_rayneo.txt"
 
     private val EXP_PRESETS = linkedMapOf(
         // Main tab: the Duel experiment, one press per lighting (5 s countdown, a lead-in
@@ -752,7 +756,7 @@ class MeasurementActivity : AppCompatActivity() {
         // The proposed method cannot start without its tolerance curve; refuse the whole session
         // up front rather than let its blocks silently not start while the laps are counted.
         if (plan.any { it.method.startsWith("addl_") } && runCatching {
-                HowToSense.Curve.parse(assets.open(CURVE_FILE).bufferedReader().use { it.readText() })
+                HowToSense.Curve.parse(curveText())
             }.isFailure) {
             restoreStepButton(false); showNow("no tolerance curve")
             post("the proposed method needs assets/$CURVE_FILE — session not started")
@@ -910,7 +914,7 @@ class MeasurementActivity : AppCompatActivity() {
             val nested = intent.getBooleanExtra("budget_nested", false)
             val alignFrac = intent.getStringExtra("budget_align_frac")?.toDoubleOrNull() ?: 1.0
             val curve = runCatching {
-                HowToSense.Curve.parse(assets.open(CURVE_FILE).bufferedReader().use { it.readText() })
+                HowToSense.Curve.parse(curveText())
             }.getOrNull()
             // Beeps, for a run the operator unplugs: 1 when the first pattern starts, 2 at each
             // next pattern, 3 when done.
@@ -959,12 +963,34 @@ class MeasurementActivity : AppCompatActivity() {
             start(cmd) { mc!!.runGlassCollect(status, countdown, stand, walk) }
             return
         }
+        // The glass's tolerance-curve record (MeasurementController.runCurveRecord): 15 s, then one
+        // beep: walk, one direction through several parts of the garage; three beeps: done.
+        // `--ei curve_moments` (default 200), `--ei curve_countdown_s` (default 15).
+        if (cmd == "curve_record") {
+            val countdown = intent.getIntExtra("curve_countdown_s", 15)
+            val moments = intent.getIntExtra("curve_moments", 200)
+            val status: (String) -> Unit = { s ->
+                post(s)
+                when {
+                    s.startsWith("curve: countdown ") -> runOnUiThread {
+                        showWalk("시작까지 ${s.removePrefix("curve: countdown ")}초", "보정 기록", "삑: 걷기 시작") }
+                    s == "curve: start" -> { playLapBeeps(1); runOnUiThread {
+                        showWalk("걷기", "보정 기록 0/$moments", "한 방향으로 여러 구역을 지나가기") } }
+                    s.startsWith("curve: moment ") -> runOnUiThread {
+                        showWalk("걷기", "보정 기록 ${s.removePrefix("curve: moment ").substringBefore(' ')}",
+                            "삑삑삑: 끝 · 정지: 두 번 누르기") }
+                    s == "curve: done" -> { playLapBeeps(3); runOnUiThread { showWalk("끝", "보정 기록 완료", "") } }
+                }
+            }
+            start(cmd) { mc!!.runCurveRecord(status, countdown, moments) }
+            return
+        }
         // The proposed method of the 2026-11-03 app spec (MeasurementController.runSense):
         // `--ei sense_images` = B, the images one output may detect (default 2: the glass's
         // 2026-11-03 costs at 2 fps, docs/RAYNEO_COSTS_2026-11-03.md).
         if (cmd == "sense") {
             val curve = runCatching {
-                HowToSense.Curve.parse(assets.open(CURVE_FILE).bufferedReader().use { it.readText() })
+                HowToSense.Curve.parse(curveText())
             }.getOrElse { post("sense needs assets/$CURVE_FILE: ${it.message}"); return }
             val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
             val images = intent.getIntExtra("sense_images", 2).coerceIn(1, 3)
@@ -978,7 +1004,7 @@ class MeasurementActivity : AppCompatActivity() {
             val extra = m.groupValues[1].toInt(); val use = m.groupValues[2]
             if ((extra == 0) != use.isEmpty()) { post("addl: $cmd takes _merge or _sep exactly when extra > 0"); return }
             val curve = runCatching {
-                HowToSense.Curve.parse(assets.open(CURVE_FILE).bufferedReader().use { it.readText() })
+                HowToSense.Curve.parse(curveText())
             }.getOrElse { post("addl needs assets/$CURVE_FILE: ${it.message}"); return }
             val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
             // _every, or for desk tests --ez addl_every true (once, then forgotten): every frame additional.
@@ -1040,15 +1066,81 @@ class MeasurementActivity : AppCompatActivity() {
     /** Until when a second tap on the glass stops the walk (0 = not asked). */
     private var walkStopArmedUntil = 0L
 
-    /** The glass's walk screen: [title] large, [detail] and [sub] under it (an empty one is
-     *  hidden); the start button only while [idle]. */
+    /** The glass's screen, in both eyes: the curve's state on top, [title] large, [detail] and
+     *  [sub] under it (an empty one is hidden); the runs to choose only while [idle]. */
     private fun showWalk(title: String, detail: String, sub: String, idle: Boolean = false) {
-        walkTitle.text = title
-        walkDetail.text = detail
-        walkDetail.visibility = if (detail.isEmpty()) View.GONE else View.VISIBLE
-        walkSub.text = sub
-        walkSub.visibility = if (sub.isEmpty()) View.GONE else View.VISIBLE
-        walkButton.visibility = if (idle) View.VISIBLE else View.GONE
+        val (stateText, stateColor) = curveState()
+        for (e in eyes) {
+            e.state.text = stateText; e.state.setTextColor(stateColor)
+            e.title.text = title
+            e.detail.text = detail
+            e.detail.visibility = if (detail.isEmpty()) View.GONE else View.VISIBLE
+            e.sub.text = sub
+            e.sub.visibility = if (sub.isEmpty()) View.GONE else View.VISIBLE
+        }
+        showGlassChoices(idle)
+    }
+
+    /** One run the glass's idle screen offers. */
+    private class GlassRun(val label: String, val detail: String)
+    /** The glass's runs, in the order they are done: the curve record (once), a test walk, the
+     *  experiment walk. */
+    private val GLASS_RUNS = listOf(
+        GlassRun("보정 기록", "곡선용 · 한 번만 · 약 6분"),
+        GlassRun("시험 걷기", "8개 방법 편도 1번씩 · 약 3분"),
+        GlassRun("본 걷기", "8개 방법 × 3번 · 약 16분"))
+    private var glassChoiceSet = false
+
+    /** The idle screen: the chosen run large, the list under it. Before the glass has its own
+     *  curve the curve record is chosen first. */
+    private fun showGlassIdle() {
+        if (!glassChoiceSet) { glassChoiceSet = true; glassChoice = if (rayneoCurve().isFile) 2 else 0 }
+        val r = GLASS_RUNS[glassChoice]
+        showWalk(r.label, r.detail, "밀어서 고르기 · 눌러서 시작", idle = true)
+    }
+
+    private fun showGlassChoices(visible: Boolean) {
+        val curveOk = rayneoCurve().isFile
+        for (e in eyes) {
+            e.choiceBox.visibility = if (visible) View.VISIBLE else View.GONE
+            e.choices.forEachIndexed { i, t ->
+                t.text = GLASS_RUNS[i].label + if (i == 0 && curveOk) "  ✓" else ""
+                val on = i == glassChoice
+                t.setTextColor(if (on) android.graphics.Color.WHITE else 0xFF9E9E9E.toInt())
+                t.setBackgroundColor(if (on) 0xFF1E63B5.toInt() else android.graphics.Color.TRANSPARENT)
+            }
+        }
+    }
+
+    /** A tap on the idle glass: starts the chosen run. */
+    private fun startGlassChoice() {
+        when (glassChoice) {
+            0 -> launchRunnerCommand("curve_record")
+            1 -> { walkKind = "check"; toggleWalkSession() }
+            else -> { walkKind = "main"; toggleWalkSession() }
+        }
+    }
+
+    /** The glass's own tolerance curve: built on the computer from its curve record and pushed to
+     *  the app's files dir. sense and the walk use it when present, else the S26 curve in assets
+     *  ([CURVE_FILE]). */
+    private fun rayneoCurve(): java.io.File = java.io.File(getExternalFilesDir(null), RAYNEO_CURVE_FILE)
+    private fun curveText(): String = rayneoCurve().takeIf { it.isFile }?.readText()
+        ?: assets.open(CURVE_FILE).bufferedReader().use { it.readText() }
+
+    /** A curve record that ended (summary.json) with at least 100 moments, on the glass. */
+    private fun curveRecordDone(): Boolean = listOf(java.io.File(getExternalFilesDir(null), "sos"),
+        java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS), "sos"))
+        .flatMap { it.listFiles()?.toList().orEmpty() }
+        .any { d -> d.name.contains("_curve_record_") && java.io.File(d, "summary.json").isFile &&
+            runCatching { java.io.File(d, "moments.csv").useLines { it.count() } - 1 }.getOrDefault(0) >= 100 }
+
+    /** The line on top of the glass's screen: green once its own curve is in place (initialized),
+     *  yellow when the record exists but its curve is not built and pushed yet, grey before. */
+    private fun curveState(): Pair<String, Int> = when {
+        rayneoCurve().isFile -> "initialized · RayNeo 곡선" to 0xFF4CAF50.toInt()
+        curveRecordDone() -> "보정 기록 있음 · 곡선 설치 전" to 0xFFFFC107.toInt()
+        else -> "보정 전 · S26 곡선 사용 중" to 0xFF9E9E9E.toInt()
     }
 
     /** The walk comparison's methods (2026-11-03 handover §4): sense, AE-Phone and the fixed cells
@@ -1062,7 +1154,9 @@ class MeasurementActivity : AppCompatActivity() {
      *  forward (every method 3 blocks; the drift over the session - light, battery, the walker - falls
      *  on every method alike), each block one round trip; ~16 min. "check": a test walk before it,
      *  every method once for one leg (~3 min), to see each runs while walking. */
-    private fun walkCheck() = intent.getStringExtra("walk_kind") == "check"
+    private fun walkCheck() = (walkKind ?: intent.getStringExtra("walk_kind")) == "check"
+    /** The walk kind chosen on the glass's screen; null: `--es walk_kind`. */
+    private var walkKind: String? = null
 
     /** The walk's methods in order: [WALK_METHODS] (or `--es walk_plan a,b,...`, a rerun of some)
      *  in `--ei walk_rounds` passes (main 3, check 1), every other pass in reverse. */
@@ -1101,7 +1195,7 @@ class MeasurementActivity : AppCompatActivity() {
         if (lapSession != null) { stopMeasurement(); return }
         if (runActive) { post("busy — stop first"); return }
         if (runCatching {
-                HowToSense.Curve.parse(assets.open(CURVE_FILE).bufferedReader().use { it.readText() })
+                HowToSense.Curve.parse(curveText())
             }.isFailure) {
             post("the proposed method needs assets/$CURVE_FILE — walk not started"); return
         }
@@ -1124,8 +1218,8 @@ class MeasurementActivity : AppCompatActivity() {
                 lapSession = null
                 ExperimentSession.runLap = -1
                 ExperimentSession.lighting = ""; ExperimentSession.session = ""
-                // The session's last screen (done or stopped) stays; the start button returns.
-                walkButton.visibility = View.VISIBLE
+                // The session's last screen (done or stopped) stays; the runs to choose return.
+                showGlassChoices(true)
             }
         }, plan, legsPerBlock = walkLegs(),
             // 15 s (2026-11-03): time to unplug the cable and put the glasses on; the block-start
@@ -1244,6 +1338,15 @@ class MeasurementActivity : AppCompatActivity() {
         currentFocus?.takeIf { it in touchpadControls() && it.isShown && it.isEnabled }
 
     private fun moveTouchpadFocus(delta: Int) {
+        // The glass while idle: a swipe moves the run a tap will start.
+        if (rayNeoTouchpad) {
+            if (lapSession == null && !runActive) {
+                glassChoiceSet = true
+                glassChoice = (glassChoice + delta).floorMod(GLASS_RUNS.size)
+                showGlassIdle()
+            }
+            return
+        }
         val available = availableTouchpadControls()
         if (available.isEmpty()) return
         val current = available.indexOf(currentTouchpadControl())
@@ -1253,20 +1356,25 @@ class MeasurementActivity : AppCompatActivity() {
     }
 
     private fun activateFocusedControl() {
-        // The glass: a tap presses the walk's start button. During the walk a tap only asks,
+        // The glass: idle, a tap starts the chosen run. During a walk or a run a tap only asks,
         // and a second tap within 3 s stops it, so touching the temple while walking cannot
-        // end the session.
+        // end it.
         if (rayNeoTouchpad) {
             val now = SystemClock.elapsedRealtime()
             when {
-                lapSession == null -> walkButton.performClick()
-                now < walkStopArmedUntil -> { walkStopArmedUntil = 0L; toggleWalkSession() }
+                lapSession == null && !runActive -> startGlassChoice()
+                now < walkStopArmedUntil -> {
+                    walkStopArmedUntil = 0L
+                    if (lapSession != null) toggleWalkSession() else stopMeasurement()
+                }
                 else -> {
                     walkStopArmedUntil = now + 3_000L
-                    val shown = walkSub.text
+                    val shown = eyes[0].sub.text
                     val ask = "한 번 더 누르면 정지"
-                    walkSub.text = ask
-                    walkSub.postDelayed({ if (walkSub.text == ask) walkSub.text = shown }, 3_000L)
+                    for (e in eyes) { e.sub.text = ask; e.sub.visibility = View.VISIBLE }
+                    eyes[0].sub.postDelayed({
+                        if (eyes[0].sub.text == ask) for (e in eyes) e.sub.text = shown
+                    }, 3_000L)
                 }
             }
             return
@@ -1495,6 +1603,11 @@ class MeasurementActivity : AppCompatActivity() {
                         restoreBoostAfterLapSession()
                         // A single adb-started run consumes its overrides too.
                         clearLaunchOverrides()
+                        // The glass: after a run of its own (the curve record), its last screen
+                        // stays a few seconds, then the runs to choose return.
+                        if (rayNeoTouchpad) eyes[0].title.postDelayed({
+                            if (lapSession == null && !runActive) showGlassIdle()
+                        }, 4_000L)
                     }
                 }
             }

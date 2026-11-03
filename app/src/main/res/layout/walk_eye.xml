@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One eye's half of the glass's screen. The glass shows its 1280 x 480 surface as two
+     640 x 480 halves, one per eye, so anything drawn across the middle is cut (2026-11-03: the
+     countdown read "시작까"). MeasurementActivity fills both halves alike: the tolerance curve's
+     state on top, the title and two lines under it, and the runs to choose from while idle. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="0dp"
+    android:layout_height="match_parent"
+    android:layout_weight="1"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:paddingStart="24dp"
+    android:paddingEnd="24dp">
+
+    <TextView
+        android:id="@+id/eyeState"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:maxLines="1"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/eyeTitle"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_marginTop="6dp"
+        android:gravity="center"
+        android:maxLines="1"
+        android:autoSizeTextType="uniform"
+        android:autoSizeMinTextSize="20sp"
+        android:autoSizeMaxTextSize="44sp"
+        android:textStyle="bold"
+        android:textColor="@color/text_primary" />
+
+    <TextView
+        android:id="@+id/eyeDetail"
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:gravity="center"
+        android:maxLines="1"
+        android:autoSizeTextType="uniform"
+        android:autoSizeMinTextSize="14sp"
+        android:autoSizeMaxTextSize="28sp"
+        android:textColor="@color/text_readout" />
+
+    <TextView
+        android:id="@+id/eyeSub"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:gravity="center"
+        android:maxLines="2"
+        android:textSize="17sp"
+        android:textColor="@color/text_label" />
+
+    <LinearLayout
+        android:id="@+id/eyeChoices"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/eyeChoice0"
+            style="@style/WalkChoice" />
+
+        <TextView
+            android:id="@+id/eyeChoice1"
+            style="@style/WalkChoice" />
+
+        <TextView
+            android:id="@+id/eyeChoice2"
+            style="@style/WalkChoice" />
+    </LinearLayout>
+</LinearLayout>
