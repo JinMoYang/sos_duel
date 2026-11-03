@@ -1815,11 +1815,11 @@ class MeasurementActivity : AppCompatActivity() {
         // Main tab: the Duel experiment, one press per lighting (5 s countdown, a lead-in
         // lap, then 24 runs; one beep at the start, three at the end).
         R.id.expMainBright to LapPreset("main (parallel), bright", PAR_MAIN_PLAN, 1, lighting = "bright",
-            sessionTag = "par_main_sense", netProbe = true),
+            sessionTag = "par_main_sense"),
         R.id.expMainDim to LapPreset("main (parallel), dim", PAR_MAIN_PLAN, 1, lighting = "dim",
-            sessionTag = "par_main_sense", netProbe = true),
+            sessionTag = "par_main_sense"),
         R.id.expMainDark to LapPreset("main (parallel), dark", PAR_MAIN_PLAN, 1, lighting = "dark",
-            sessionTag = "par_main_sense", netProbe = true),
+            sessionTag = "par_main_sense"),
         // Check tab: Duel's two modes, one 3-lap run each (spec 7, track part).
         R.id.expTrackTest to LapPreset("track test", "duel2_trace:3,duel2_every:3", 1),
         // Check tab: when to spend the additional exposures, dim and dark (see VERIFY_E_PLAN).
