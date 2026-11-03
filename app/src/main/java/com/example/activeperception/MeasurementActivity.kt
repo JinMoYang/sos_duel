@@ -1108,12 +1108,39 @@ class MeasurementActivity : AppCompatActivity() {
         for (e in eyes) {
             e.choiceBox.visibility = if (visible) View.VISIBLE else View.GONE
             e.choices.forEachIndexed { i, t ->
+                t.visibility = View.VISIBLE
                 t.text = GLASS_RUNS[i].label + if (i == 0 && curveOk) "  ✓" else ""
                 val on = i == glassChoice
                 t.setTextColor(if (on) android.graphics.Color.WHITE else 0xFF9E9E9E.toInt())
                 t.setBackgroundColor(if (on) 0xFF1E63B5.toInt() else android.graphics.Color.TRANSPARENT)
             }
         }
+    }
+
+    /** The walk's block-end choices on the glass ([WalkSession.confirmChoice]); empty hides them. */
+    private fun showChoiceList(labels: List<String>, selected: Int) {
+        for (e in eyes) {
+            e.choiceBox.visibility = if (labels.isEmpty()) View.GONE else View.VISIBLE
+            e.choices.forEachIndexed { i, t ->
+                t.visibility = if (i < labels.size) View.VISIBLE else View.GONE
+                if (i >= labels.size) return@forEachIndexed
+                t.text = labels[i]
+                val on = i == selected
+                t.setTextColor(if (on) android.graphics.Color.WHITE else 0xFF9E9E9E.toInt())
+                t.setBackgroundColor(if (on) 0xFF1E63B5.toInt() else android.graphics.Color.TRANSPARENT)
+            }
+        }
+    }
+
+    /** The folder of the last run started (its logger's). */
+    @Volatile private var lastRunDir: java.io.File? = null
+
+    /** Moves the last run's folder into discarded/ beside it (the wearer chose to collect its
+     *  block again): out of the runs the analysis reads, never deleted. Returns its name. */
+    private fun discardLastRun(): String {
+        val d = lastRunDir ?: return "none"
+        val to = java.io.File(java.io.File(d.parentFile, "discarded").apply { mkdirs() }, d.name)
+        return if (d.renameTo(to)) "discarded/${d.name}" else "${d.name} (move failed)"
     }
 
     /** A tap on the idle glass: starts the chosen run, always with its defaults. Overrides an adb
@@ -1237,7 +1264,8 @@ class MeasurementActivity : AppCompatActivity() {
             // beeps mark the end. `--ei walk_start_delay_s` overrides.
             startDelayS = intent.getIntExtra("walk_start_delay_s", 15).coerceAtLeast(0),
             displayName = ::walkName,
-            screen = { title, detail, sub -> showWalk(title, detail, sub) })
+            screen = { title, detail, sub -> showWalk(title, detail, sub) },
+            choices = ::showChoiceList, discardLastRun = ::discardLastRun)
         lapSession = session
         session.start()
     }
@@ -1349,8 +1377,10 @@ class MeasurementActivity : AppCompatActivity() {
         currentFocus?.takeIf { it in touchpadControls() && it.isShown && it.isEnabled }
 
     private fun moveTouchpadFocus(delta: Int) {
-        // The glass while idle: a swipe moves the run a tap will start.
+        // The glass while idle: a swipe moves the run a tap will start; at a walk block's end,
+        // the choice between the next block and this one again.
         if (rayNeoTouchpad) {
+            (lapSession as? WalkSession)?.takeIf { it.choosing }?.let { it.moveChoice(delta); return }
             if (lapSession == null && !runActive) {
                 glassChoiceSet = true
                 glassChoice = (glassChoice + delta).floorMod(GLASS_RUNS.size)
@@ -1371,6 +1401,7 @@ class MeasurementActivity : AppCompatActivity() {
         // and a second tap within 3 s stops it, so touching the temple while walking cannot
         // end it.
         if (rayNeoTouchpad) {
+            (lapSession as? WalkSession)?.takeIf { it.choosing }?.let { it.confirmChoice(); return }
             val now = SystemClock.elapsedRealtime()
             when {
                 lapSession == null && !runActive -> startGlassChoice()
@@ -1554,6 +1585,7 @@ class MeasurementActivity : AppCompatActivity() {
                 // epoch stays last for the parsers that split on it.
                 val runName = "run_${plat}_${if (par) "par_" else ""}${modeTag}_${System.currentTimeMillis()}"
                 val logger = MeasurementLogger(this, runName)
+                lastRunDir = logger.dir
                 val mcLocal = MeasurementController(raw, detector, grid, sensors, logger, health, selectConf)
                 mcLocal.setV2Session(sess)
                 mcLocal.platformTag = plat

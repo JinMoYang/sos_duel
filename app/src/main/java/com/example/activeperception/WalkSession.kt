@@ -47,7 +47,12 @@ class WalkSession(
     private val displayName: (String) -> String = { it },
     private val screen: Screen = Screen { title, detail, sub ->
         host.status(listOf(title, detail, sub).filter { it.isNotEmpty() }.joinToString(" · "))
-    }
+    },
+    /** Shows the block-end choices ([labels], [selected] highlighted); an empty list hides them. */
+    private val choices: (labels: List<String>, selected: Int) -> Unit = { _, _ -> },
+    /** Sets the run that just ended aside (the wearer chose to collect its block again) and
+     *  names it for the log; never deletes it. */
+    private val discardLastRun: () -> String = { "" }
 ) : PlanSession {
     /** The wearer's screen: [title] in large type, [detail] and [sub] under it. */
     fun interface Screen { fun show(title: String, detail: String, sub: String) }
@@ -67,7 +72,7 @@ class WalkSession(
     /** READYING (2026-11-03): a block's run has been started but has no output yet; the wearer
      *  stands until its two beeps, so no method's start-up (0.9-5 s on that day's walk) falls in
      *  the corridor. */
-    private enum class State { IDLE, COUNTDOWN, READYING, RUNNING, SWITCHING }
+    private enum class State { IDLE, COUNTDOWN, READYING, RUNNING, SWITCHING, CHOOSING }
     private enum class Sound { TURN, BLOCK, DONE, ALARM }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -179,7 +184,43 @@ class WalkSession(
             }
             else -> return
         }
+        val early = state != State.SWITCHING
         event("block_ended")
+        // The wearer decides (2026-11-03: cars driving through the corridor): the next block, or
+        // this block again with its run set aside. A run that stopped by itself starts on "again".
+        state = State.CHOOSING
+        choice = if (early) 1 else 0
+        play(Sound.TURN); host.buzz(300)
+        showChoice()
+    }
+
+    /** The block-end choice: 0 = go on, 1 = collect this block again. */
+    private var choice = 0
+    val choosing: Boolean get() = state == State.CHOOSING
+
+    private fun showChoice() {
+        val next = if (blockIdx + 1 < plan.size) "다음: ${displayName(plan[blockIdx + 1])}" else "끝내기"
+        screen.show("블록 끝", displayName(plan[blockIdx]), "밀어서 고르기 · 눌러서 정하기")
+        choices(listOf(next, "다시 모으기 (이번 것 버림)"), choice)
+    }
+
+    /** A swipe while choosing. */
+    fun moveChoice(delta: Int) {
+        if (state != State.CHOOSING) return
+        choice = (choice + delta).mod(2)
+        showChoice()
+    }
+
+    /** A tap while choosing: go on, or set the run aside and start the same block again. */
+    fun confirmChoice() {
+        if (state != State.CHOOSING) return
+        choices(emptyList(), 0)
+        if (choice == 1) {
+            event("block_redo", note = "set aside: ${discardLastRun()}")
+            beginBlock()
+            return
+        }
+        event("block_next")
         blockIdx++
         if (blockIdx >= plan.size) {
             event("done")
@@ -236,7 +277,7 @@ class WalkSession(
                 play(Sound.ALARM)
                 onRunEnded()
             }
-            State.IDLE -> {}
+            State.IDLE, State.CHOOSING -> {}
         }
     }
 
@@ -284,6 +325,7 @@ class WalkSession(
 
     private fun finish(completed: Boolean, detail: String) {
         state = State.IDLE
+        choices(emptyList(), 0)
         screen.show(if (completed) "끝" else "멈춤", detail, "시작 버튼: 처음부터 다시")
         handler.removeCallbacks(tick)
         runCatching { log?.flush(); log?.close() }
