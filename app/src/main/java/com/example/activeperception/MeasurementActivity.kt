@@ -1732,7 +1732,7 @@ class MeasurementActivity : AppCompatActivity() {
     /** A lap plan of three rounds, one run of [MAIN_LAPS] laps per method each round, the order
      *  shifted by one each round (no method always follows the same one, slow drift - light,
      *  battery, Limo speed - spreads over all). Each run starts fresh. */
-    private fun rounds(methods: List<String>) = (0 until 3).flatMap { r ->
+    private fun rounds(methods: List<String>, n: Int = 3) = (0 until n).flatMap { r ->
         methods.indices.map { methods[(it + r) % methods.size] }
     }.joinToString(",") { "$it:$MAIN_LAPS" }
 
@@ -1745,13 +1745,16 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** The final comparison, parallel structure for every method (capture and analysis on separate
      *  threads, 10 fps): the proposed method and the baselines moved unchanged onto the parallel
-     *  capture (par_*), PhysSweep as fast PhysSweep. 21 runs, ~12 min per lighting. The proposed
+     *  capture (par_*), PhysSweep as fast PhysSweep. The proposed
      *  method is sense (2026-11-04: app spec 2026-11-03, MeasurementController.runSense); the
      *  2026-10-29 comparison ran addl_3_sep_every, still startable by lap_plan, as is the serial
      *  MAIN_PLAN above. */
     private val PAR_MAIN_METHODS = listOf("sense", "par_ae_phone", "par_prop_c", "par_physsweep_fast",
         "par_shin_nm", "par_nae", "par_fixed_1600_240")
-    private val PAR_MAIN_PLAN = rounds(PAR_MAIN_METHODS)
+    /** Two rounds since 2026-11-04 (14 runs, 4 laps a method, ~6.3 min a lighting at the fast
+     *  Limo): the 10-29 lap-to-lap spread puts the nearest bright and dim differences at ~2.2
+     *  standard errors with 4 laps (2.7-2.8 with 6). */
+    private val PAR_MAIN_PLAN = rounds(PAR_MAIN_METHODS, 2)
 
     /*
      * Earlier checks, startable by lap_plan (same rounds, 2 laps a run):
