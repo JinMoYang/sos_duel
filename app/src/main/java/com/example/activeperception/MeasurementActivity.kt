@@ -1903,6 +1903,7 @@ class MeasurementActivity : AppCompatActivity() {
             "addl_5_sep" -> "check: key + 5 more, separate"
             "addl_3_merge_every" -> "check: key + 3 more every frame, merged"
             "addl_3_sep_every" -> "proposed: key + up to 3 more every frame, separate"
+            "sense" -> "proposed: sense (11-03), key + aligned sum after a trace"
             "fixed_1600_240" -> "reference: fixed 1600 · 1/240"
             "nae" -> "baseline: Neural-AE"
             "prop_c" -> "baseline: Sense-well"
@@ -2194,6 +2195,22 @@ class MeasurementActivity : AppCompatActivity() {
             if (keyUs == null || secondUs == null) { post("pair: unknown shutter in $cmd"); return }
             val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
             start(cmd) { mc!!.runFixedPair(ki.toInt(), keyUs, si.toInt(), secondUs, cap, ::post, ::showFrame) }
+            return
+        }
+        // The proposed method of 2026-11-03 (MeasurementController.runSense): key = the newest read,
+        // key + aligned 2-read sum after a key trace. Desk tests, once then forgotten:
+        // --ez sense_every true (every output detects the sum), --ei addl_start_cell c.
+        if (cmd == "sense") {
+            val curveFile = duelCurveFile(true)
+            val curve = runCatching {
+                HowToSense.Curve.parse(assets.open(curveFile).bufferedReader().use { it.readText() })
+            }.getOrElse { post("sense needs assets/$curveFile: ${it.message}"); return }
+            val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
+            val every = intent?.getBooleanExtra("sense_every", false) == true
+            intent?.removeExtra("sense_every")
+            val forced = intent?.getIntExtra("addl_start_cell", -1)?.takeIf { it in 0 until 25 }
+            intent?.removeExtra("addl_start_cell")
+            start(cmd) { mc!!.runSense(curve, cap, ::post, ::showFrame, everyFrameSum = every, startCellOverride = forced) }
             return
         }
         // The additional-exposure check: addl_0, addl_<extra>_merge | _sep (extra 1-5), the key
@@ -2611,6 +2628,9 @@ class MeasurementActivity : AppCompatActivity() {
         // on arrival instead of only the reads an output takes (MeasurementController.decodeAll).
         val decodeAllNow = intent?.getBooleanExtra("decode_all", false) == true
         intent?.removeExtra("decode_all")
+        // `--ez net_probe true`: the network record beside every run of this launch (NetProbe).
+        val netProbeNow = intent?.getBooleanExtra("net_probe", false) == true
+        val netProbeUrl = intent?.getStringExtra("net_probe_url") ?: "http://147.46.244.63:8000"
         if (runActive) { post("busy — stop first"); return }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED) { post("no camera permission"); return }
@@ -2668,9 +2688,18 @@ class MeasurementActivity : AppCompatActivity() {
                     OffloadClient(it, logger.dir, offRegime) { mcLocal.lastFrameIdx }
                         .apply { warmConnection() }
                 }
+                // `--ez net_probe true` (kept for every run of this launch, any method): the
+                // network record of the app spec 2026-11-03 §2.2 beside the run (NetProbe);
+                // `--es net_probe_url` overrides the server. Not the offload: nothing is detected
+                // from it and the method never sees it.
+                val probe = if (netProbeNow) NetProbe(netProbeUrl, logger.dir,
+                    assets.open("net_probe_q16.jpg").use { it.readBytes() },
+                    assets.open("net_probe_full.jpg").use { it.readBytes() }, onStatus = ::post)
+                    .also { it.start() } else null
                 try {
                     block()
                 } finally {
+                    runCatching { probe?.stop() }
                     logger.close()
                 }
                 // All 80 COCO classes are retained; the UI threshold only controls scoring/drawing.

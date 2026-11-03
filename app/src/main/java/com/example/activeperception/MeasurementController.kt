@@ -17,6 +17,7 @@ import com.example.activeperception.acquire.CrossExposureRouter
 import com.example.activeperception.acquire.RoutingDecision
 import com.example.activeperception.acquire.RawFrame
 import com.example.activeperception.acquire.BurstAlign
+import com.example.activeperception.acquire.CarPrior
 import com.example.activeperception.acquire.NaeFeatures
 import com.example.activeperception.acquire.NaeSnap
 import com.example.activeperception.acquire.NaeTrainer
@@ -106,6 +107,8 @@ private const val ADDL_BURST = 3
 private const val ADDL_QUEUED = 3
 private const val ADDL_RING = 10
 private const val ADDL_PERIOD_MS = 100L
+/** [MeasurementController.runSense]'s version: the app spec it follows (manifest, decisions.jsonl). */
+private const val SENSE_VERSION = "2026-11-03 app spec: key newest, key + aligned 2-read sum after a key trace, NMS union, CarPrior, choice off path"
 
 /** Fast PhysSweep ([MeasurementController.runPhysSweepFast]): sweep cells visited a window, next to
  *  the output's read (the detector fits 4 images in a 100 ms window). */
@@ -1737,6 +1740,416 @@ class MeasurementController(
             synchronized(lock) { ring.forEach { it.release() }; ring.clear() }
             if (!legacyCapture) runCatching { raw.stopRepeating() }
             runCatching { chooseLead.shutdownNow(); alignPool.shutdownNow() }
+            runCatching { raw.stopFastCapture() }
+            runCatching { src.shutdown() }
+        }
+        capError.get()?.let { onStatus("$name: capture stopped (${it.message})") }
+        endPass()
+    }
+
+    /**
+     * The proposed method of 2026-11-03 ("sense", app spec 2026-11-03 §1, B = 2), capture and
+     * analysis on separate threads at a fixed 10 fps over the repeating request. Per output:
+     * - key = the newest read at the requested key setting, never used before (reads of another
+     *   setting, booked before a switch, are passed over);
+     * - when the previous output's key image had a weak trace (a vehicle box .05-.25 at IoU < .3
+     *   with every .25+ box of that key image, [V.perImage]; the phone's own detections only),
+     *   the key and the sum of the key read and the read before it at the same setting, that read
+     *   moved onto the key pixel by pixel ([BurstAlign]; no box moving), go to the detector in one
+     *   batch; otherwise the key alone. The sum needs two reads in the window's sensor time
+     *   ([sensorHoldMs]: none at 1/15);
+     * - output = the .25+ boxes of the detected images, highest first, NMS at IoU .3;
+     * - the next key setting: How-to-Sense on the key picture, gyro curve, [CarPrior] weights,
+     *   chosen on its own thread after the output (off the output path).
+     * [runAddl] and its 10-29 modes are unchanged. Records: sense_frames.csv (read times, stage
+     * times, alignment residual), sense_choices.csv and choices.jsonl (every lattice cell's
+     * expected detections, the best, moved or not), candidate_dets in the RayNeo app's form (per
+     * image, role key / sum2, every class, conf >= .01), dets.jsonl, decisions.jsonl (per-tile
+     * residuals), and every output's key (and sum) as the JPEG an offload sends (the 640
+     * detector input, quality [OffloadClient.JPEG_QUALITY]).
+     */
+    fun runSense(curve: HowToSense.Curve, maxFrames: Int,
+                 onStatus: (String) -> Unit,
+                 onFrame: (Bitmap, List<Detection>, Int, Int) -> Unit = { _, _, _, _ -> },
+                 /** Desk tests only (no traces indoors): every output detects the sum. */
+                 everyFrameSum: Boolean = false,
+                 /** Desk tests only: start at this lattice cell instead of the phone AE's. */
+                 startCellOverride: Int? = null) {
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+            ?: error("sense requires TfliteYoloDetector")
+        require(!legacyCapture) { "sense runs on the repeating capture layer only" }
+        val name = "sense"
+        val lattice = Grid(gains = Duel.ISOS, exposuresUs = Duel.SHUTTERS_US, digitalBoost = 1.0)
+        val ceil = v2AnalogCeil()
+        val ae = if (startCellOverride != null) null else meterAeStart(onStatus)
+        val (g0, s0) = lattice.indices(startCellOverride
+            ?: if (ae != null) nearestCell(lattice, ae.iso, ae.expUs) else lattice.cell(2, 2))
+        val cell = java.util.concurrent.atomic.AtomicInteger(HowToSense.cell(g0, s0))
+        val lazyDecode = !decodeAll
+        ownCaptureThread = true
+        startPass(name, isGtReference = false, methodParams = JSONObject()
+            .put("mode", name).put("version", SENSE_VERSION).put("images_max", 2)
+            .put("every_frame_sum", everyFrameSum)
+            .put("structure", "the camera reads the key setting as a repeating request, replaced as soon as " +
+                "the key setting changes; analysis thread: one output every $ADDL_PERIOD_MS ms from the newest " +
+                "reads; the key setting is chosen on its own thread")
+            .put("key", "the newest read at the requested key setting, never used before; reads of another " +
+                "setting (booked before a switch) are passed over")
+            .put("trace", "the previous output's key image: a vehicle box conf ${V.WEAK_LO}-${V.OUT_THR} at IoU < " +
+                "${V.PLACE_IOU} with every box >= ${V.OUT_THR} of that key image (phone detections only)")
+            .put("sum", "after a trace: the key read + the read before it at the same setting, moved onto the " +
+                "key pixel by pixel (BurstAlign tiles) and summed; key and sum detected in one batch")
+            .put("sum_cap", "only when two reads fit 100 ms of sensor time (1/240-1/30; not 1/15)")
+            .put("union", "boxes >= ${V.OUT_THR} of the detected images, highest first, NMS at IoU ${V.PLACE_IOU}")
+            .put("key_rule", "How-to-Sense on the key picture, gyro curve, one read's blur, car prior " +
+                "(count + 2 x mean) / (outputs + 2) with each output box one car split by overlap / box area; " +
+                "chosen off the output path, applied at once (the repeating request is replaced)")
+            .put("residual", "per alignment tile, mean |key - read| of half-quad luma (each over its own " +
+                "frame mean), before and after the move; and the RayNeo app's sum |key - moved read| / sum key " +
+                "(every 7th site); computed beside the detector, off the output path (resid_ms)")
+            .put("curve", curve.note)
+            .put("start", JSONObject().put("ae", ae?.json() ?: JSONObject.NULL)
+                .put("iso", Duel.ISOS[g0]).put("shutter_us", Duel.SHUTTERS_US[s0]))
+            .put("isos", JSONArray(Duel.ISOS.toList())).put("shutters_us", JSONArray(Duel.SHUTTERS_US.toList()))
+            .put("analog_ceiling", ceil)
+            .put("detector", "yolov8n tflite, every COCO class decoded (per-class NMS); the method uses the " +
+                "vehicle boxes; candidate_dets keep every box of every class with conf >= 0.01")
+            .put("input_size", 640)
+            .put("saved_jpeg", "key (and sum): the 640 detector input, quality ${OffloadClient.JPEG_QUALITY}"))
+        logger.csv("sense_frames", listOf("idx", "kind", "n_reads", "n_images", "iso", "shutter_us",
+            "key_ts", "key_end_ts", "prev_ts", "prev_end_ts", "t_output", "wait_ms", "rawdec_ms", "align_ms",
+            "resid_ms", "form_ms", "infer_ms", "union_ms", "total_ms", "clock_late_ms", "latency_ms",
+            "skipped_reads", "other_setting_reads", "n_out", "n_out_sum_only", "n_weak_key",
+            "resid_before_med", "resid_after_med", "resid_after_p90", "tiles_tracked", "resid_raw"))
+        logger.csv("sense_choices", listOf("idx", "key_ts", "t_start", "stats_wait_ms", "choose_ms", "rule",
+            "moved", "to_iso", "to_shutter_us", "e_gain", "threshold", "speed_median", "prior_outputs"))
+        val src = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
+        raw.armNativeDecodeValidation()
+        onStatus("warming FP16 GPU batches…")
+        tfl.warmUpAllBatches()
+        val alignPool = Executors.newFixedThreadPool(4)
+        val chooseLead = Executors.newSingleThreadExecutor()
+        val chooser = Executors.newSingleThreadExecutor()
+        val residPool = Executors.newSingleThreadExecutor()
+
+        /** A read in the ring: the camera's buffer until an output takes (decodes) it, or decoded
+         *  on arrival under [decodeAll]; released unread when it falls out of the ring. */
+        class Read(val ts: Long, val cell: Int, decoded: Pair<RawFrame, RawSensorCapturer.RawMeta>?,
+                   val pending: RawSensorCapturer.PendingRead?) {
+            @Volatile private var d = decoded
+            @Volatile var taken = false
+            val frame: RawFrame get() = d!!.first
+            val meta: RawSensorCapturer.RawMeta get() = d!!.second
+            fun take() { if (d == null) d = pending!!.decode() }
+            fun release() { if (!taken && d == null) pending?.close() }
+        }
+        val ring = ArrayDeque<Read>()
+        val lock = java.lang.Object()
+        val capturing = java.util.concurrent.atomic.AtomicBoolean(true)
+        val capError = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        /** Makes [c] the key setting; the camera switches at once. */
+        fun requestCell(c: Int) {
+            cell.set(c)
+            raw.setRepeating(Duel.SHUTTERS_US[c % 5], minOf(Duel.ISOS[c / 5], ceil),
+                android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE, label = c, deferDecode = lazyDecode)
+        }
+        val capThread = Thread({
+            try {
+                while (capturing.get() && running) {
+                    val read = if (lazyDecode) raw.pollRepeatingPending(50)?.let { Read(it.pending.timestamp, it.label, null, it.pending) }
+                        else raw.pollRepeating(50)?.let { Read(it.meta.timestamp, it.label, it.frame to it.meta, null) }
+                    if (read == null) continue
+                    synchronized(lock) {
+                        // Arrivals come from several threads: keep the ring in sensor-time order.
+                        var at = ring.size
+                        while (at > 0 && ring[at - 1].ts > read.ts) at--
+                        ring.add(at, read)
+                        while (ring.size > ADDL_RING) ring.removeFirst().release()
+                        lock.notifyAll()
+                    }
+                }
+            } catch (t: Throwable) {
+                android.util.Log.e("Sense", "capture stopped", t)
+                capError.set(t)
+            } finally {
+                synchronized(lock) { capturing.set(false); lock.notifyAll() }
+            }
+        }, "sense-capture")
+
+        /** Per alignment tile, the mean |a - b| of two half-quad luma images of one size. */
+        fun tileResiduals(a: SparseFlow.Img, b: SparseFlow.Img): DoubleArray =
+            DoubleArray(BurstAlign.TX * BurstAlign.TY) { t ->
+                val tb = BurstAlign.tileBounds(t, a.w, a.h)
+                var s = 0.0; var m = 0
+                for (y in tb[1]..tb[3]) for (x in tb[0]..tb[2]) {
+                    s += Math.abs(a.px[y * a.w + x] - b.px[y * a.w + x]); m++
+                }
+                if (m > 0) s / m else 0.0
+            }
+        /** One sum's alignment residual: per tile before and after the move, the RayNeo app's
+         *  whole-frame one, and the time it took (beside the detector, off the output path). */
+        class Resid(val before: DoubleArray, val after: DoubleArray, val raw: Double, val ms: Double)
+        /** The RayNeo app's alignment residual: sum |a - b| over sum a, every 7th Bayer site. */
+        fun rawResidual(a: IntArray, b: IntArray): Double {
+            var dSum = 0.0; var sSum = 0.0; var i = 0
+            val n = minOf(a.size, b.size)
+            while (i < n) { dSum += Math.abs(a[i] - b[i]); sSum += a[i]; i += 7 }
+            return if (sSum > 0) dSum / sSum else Double.NaN
+        }
+        fun q(v: List<Double>, p: Double): Double {
+            val s = v.filter { !it.isNaN() }.sorted()
+            return if (s.isEmpty()) Double.NaN else s[((s.size - 1) * p).toInt()]
+        }
+        fun jsonBox(b: DoubleArray) = JSONArray(b.toList())
+        fun f1(x: Double) = if (x.isNaN()) "" else "%.1f".format(x)
+        fun f4(x: Double) = if (x.isNaN()) "" else "%.4f".format(x)
+
+        val prior = CarPrior()
+        var prevTrace = false
+        var lastUsed = 0L
+        try {
+            requestCell(cell.get())
+            capThread.start()
+            var f = 0
+            var tick = now()
+            while (running && f < maxFrames && capError.get() == null) {
+                // ---- the output clock: ADDL_PERIOD_MS after the previous output started, at once
+                // when that one overran (lateMs: by how much).
+                val lead = tick - now()
+                if (lead > 0) Thread.sleep(lead / 1_000_000, (lead % 1_000_000).toInt())
+                val t0 = now()
+                val lateMs = (t0 - tick) / 1e6
+                tick = t0 + ADDL_PERIOD_MS * 1_000_000L
+                stepClock.begin()
+                // ---- 1. reads: the newest at the requested setting, never used before (reads of
+                // another setting, booked before a switch, are passed over); after a trace, the
+                // newest two when two fit the window's sensor time.
+                val keyUs = Duel.SHUTTERS_US[cell.get() % 5]
+                val twoFit = (ADDL_PERIOD_MS / sensorHoldMs(keyUs)).toInt() >= 2
+                val traceUsed = prevTrace
+                val sum = twoFit && (traceUsed || everyFrameSum)
+                val kind = if (sum) "key+sum2" else "key"
+                val need = if (sum) 2 else 1
+                var skipped = 0
+                var otherSetting = 0
+                val reads: List<Read> = synchronized(lock) {
+                    fun fresh(): List<Read> {
+                        val want = cell.get()
+                        return ring.filter { it.ts > lastUsed && it.cell == want }
+                    }
+                    while (capturing.get() && fresh().size < need) lock.wait(20)
+                    val fr = fresh()
+                    if (fr.size < need) emptyList() else {
+                        skipped = fr.size - need
+                        val want = fr.last().cell
+                        otherSetting = ring.count { it.ts > lastUsed && it.cell != want }
+                        fr.takeLast(need).also { picked -> picked.forEach { it.taken = true } }
+                    }
+                }
+                if (reads.isEmpty()) break
+                // Undecoded picks: decode them now, together.
+                val tDec = now()
+                if (lazyDecode) reads.map { r -> alignPool.submit { r.take() } }.forEach { it.get() }
+                val rawDecMs = ms(tDec)
+                val waitMs = ms(t0)
+                // [reads] is in sensor-time order: the key is the last, the read before it the first.
+                lastUsed = reads.last().ts
+                val key = reads.last()
+                val prev = if (sum) reads.first() else null
+                val metas = reads.map { it.meta }
+                stepClock.captured(metas)
+                val c = key.cell
+                val gIdx = c / 5; val sIdx = c % 5
+                val iso = Duel.ISOS[gIdx]; val phys = minOf(iso, ceil); val ratio = iso.toDouble() / phys
+
+                // ---- 2. the sum: the previous read moved onto the key, tile by tile; its residual.
+                val tA = now()
+                val kf = key.frame
+                var movedPrev: RawFrame? = null
+                var pyrKey: List<SparseFlow.Img>? = null; var pyrPrev: List<SparseFlow.Img>? = null
+                var motion: Array<DoubleArray>? = null
+                if (prev != null) {
+                    val pf = prev.frame
+                    pyrKey = BurstAlign.pyramid(kf.bayer, kf.width, kf.height, alignPool)
+                    pyrPrev = BurstAlign.pyramid(pf.bayer, pf.width, pf.height, alignPool)
+                    motion = BurstAlign.step(pyrKey, pyrPrev, alignPool)
+                    movedPrev = RawFrame(BurstAlign.moveBack(pf.bayer, pf.width, pf.height, motion, alignPool),
+                        pf.width, pf.height, pf.cfaPattern, pf.maxDn, pf.sensorOrientation, pf.whiteBalance, pf.cameraToSrgb)
+                }
+                val alignMs = ms(tA)
+                val tracked = motion?.count { it[2] > 0 } ?: 0
+
+                // ---- 3. images: lane 0 the key alone, lane 1 the sum.
+                val lanes: List<List<RawFrame>> = if (movedPrev == null) listOf(listOf(kf))
+                    else listOf(listOf(kf), listOf(kf, movedPrev))
+                val n = lanes.size
+                val tF = now()
+                val tensor = src.formLanesTensor(lanes, DoubleArray(n) { ratio })
+                val formMs = ms(tF)
+                stepClock.formed()
+                val mp0 = tensor.batch.transforms[0]
+                val top = mp0.padY.toInt()
+                val rgb = tensorRgbRows(tensor, 0, top)
+                // The key picture's statistics for the next setting, beside the detector.
+                val pre = chooseLead.submit(java.util.concurrent.Callable {
+                    val pic = DoubleArray(HowToSense.W * HowToSense.H)
+                    HowToSense.pictureRows(rgb, pic, 0 until HowToSense.H)
+                    HowToSense.stats(pic, c)
+                })
+                // The alignment residual is a record: computed beside the detector, read only after
+                // the output.
+                val mpRead = movedPrev; val pk = pyrKey; val pp = pyrPrev
+                val residF = if (mpRead == null || pk == null || pp == null) null else residPool.submit(java.util.concurrent.Callable {
+                    val tR = now()
+                    val after = BurstAlign.lumaHalf(mpRead.bayer, mpRead.width, mpRead.height, alignPool)
+                    Resid(tileResiduals(pk[0], pp[0]), tileResiduals(pk[0], after), rawResidual(kf.bayer, mpRead.bayer), ms(tR))
+                })
+
+                // ---- 4. detect, key and sum in one call; the output = NMS over their .25+ vehicle
+                // boxes. Every class is decoded for the record ([V.perImage] keeps the vehicles; the
+                // decoder's NMS is per class, so the vehicle boxes are those of the vehicle decode).
+                val dets = tfl.detectTensorBatchAllClasses(tensor.batch)
+                stepClock.detected()
+                val inferMs = tfl.lastRunMs + tfl.lastDecodeMs
+                val per = (0 until n).map { a ->
+                    V.perImage(dets[a].filter { it.confidence >= V.WEAK_LO }.map { d ->
+                        V.D(d.confidence.toDouble(), DoubleArray(4) { d.xyxy[it].toDouble() }, d.classId)
+                    })
+                }
+                val tU = now()
+                val union = V.nms(per.flatMap { it.out }, V.PLACE_IOU)
+                val unionMs = ms(tU)
+                val outDets = union.map { d -> Detection(FloatArray(4) { d.box[it].toFloat() }, d.conf.toFloat(), d.cls) }
+                val tOutputNs = StepClock.nowNs()
+                stepClock.decided()
+                val totalMs = ms(t0)
+                prevTrace = per[0].weak.isNotEmpty()
+                val resid = residF?.get()
+                val residBefore = resid?.before; val residAfter = resid?.after
+                val residRaw = resid?.raw ?: Double.NaN; val residMs = resid?.ms ?: 0.0
+
+                // ---- 5. the next key setting, off the output path: prior with this output's cars.
+                fun toPic(b: DoubleArray) = doubleArrayOf(b[0] * mp0.scale + mp0.padX, b[1] * mp0.scale + mp0.padY - top,
+                    b[2] * mp0.scale + mp0.padX, b[3] * mp0.scale + mp0.padY - top)
+                prior.addOutput(union.map { toPic(it.box) })
+                val wPrior = prior.prior(); val szPrior = prior.sizes(); val nPrior = prior.frames
+                val gyro = gyroWindow.mean(key.meta.timestamp, key.meta.timestamp + key.meta.appliedExpUs * 1_000L)
+                val fIdx = f; val keyTs = key.meta.timestamp
+                chooser.submit {
+                    try {
+                        val tC = now()
+                        val st = pre.get()
+                        val statsWaitMs = ms(tC)
+                        val speed = HowToSense.gyroSpeeds(gyro.first, szPrior)
+                        val speedMed = q(speed.toList(), 0.5)
+                        val choice = JSONObject().put("frame", fIdx).put("key_ts", keyTs)
+                            .put("cell", c).put("iso", Duel.ISOS[c / 5]).put("shutter_us", Duel.SHUTTERS_US[c % 5])
+                            .put("gyro", JSONObject().put("w", JSONArray(gyro.first.toList())).put("samples", gyro.second))
+                            .put("speed_median", if (speedMed.isNaN()) JSONObject.NULL else speedMed)
+                            .put("prior_outputs", nPrior)
+                        if (c != cell.get()) {
+                            logger.row("sense_choices", listOf(fIdx, keyTs, tC, f1(statsWaitMs), f1(ms(tC)),
+                                "the requested setting has not arrived: keep", 0, "", "", "", "", f1(speedMed), nPrior))
+                            logger.jsonl("choices", choice.put("rule", "the requested setting has not arrived: keep")
+                                .put("moved", false))
+                        } else {
+                            val ch = HowToSense.choose(curve, st, speed, wPrior, szPrior, c, HowToSense.DENS)
+                            val mv = ch.next != c && running
+                            if (mv) requestCell(ch.next)
+                            logger.row("sense_choices", listOf(fIdx, keyTs, tC, f1(statsWaitMs), f1(ms(tC)),
+                                "argmax E, move if the gain exceeds the threshold", if (mv) 1 else 0,
+                                if (mv) Duel.ISOS[ch.next / 5] else "", if (mv) Duel.SHUTTERS_US[ch.next % 5] else "",
+                                f4(ch.e[ch.best] - ch.e[c]), f4(ch.threshold), f1(speedMed), nPrior))
+                            // The expected detections of every lattice cell (cell = ISO index x 5 + shutter index).
+                            logger.jsonl("choices", choice.put("rule", "argmax E, move if the gain exceeds the curve's standard error")
+                                .put("e", JSONArray(ch.e.toList()))
+                                .put("best", JSONObject().put("cell", ch.best).put("iso", Duel.ISOS[ch.best / 5])
+                                    .put("shutter_us", Duel.SHUTTERS_US[ch.best % 5]))
+                                .put("e_gain", ch.e[ch.best] - ch.e[c]).put("threshold", ch.threshold).put("moved", mv)
+                                .put("next", JSONObject().put("cell", if (mv) ch.next else c)
+                                    .put("iso", Duel.ISOS[(if (mv) ch.next else c) / 5])
+                                    .put("shutter_us", Duel.SHUTTERS_US[(if (mv) ch.next else c) % 5])))
+                        }
+                    } catch (t: Throwable) {
+                        android.util.Log.e("Sense", "key choice failed", t)
+                    }
+                }
+
+                // ---- records.
+                // candidate_dets in the RayNeo app's form: one line per detected image, role key /
+                // sum2, its reads newest first, every box of every class the detector returns
+                // (conf >= .01), the alignment residual of the sum.
+                val roles = lanes.map { k -> if (k.size == 1) "key" else "sum${k.size}" }
+                val newestFirst = metas.reversed()
+                for (a in 0 until n) {
+                    val arr = JSONArray()
+                    for (d in dets[a]) if (d.confidence >= 0.01f) arr.put(JSONObject()
+                        .put("xyxy", jsonBox(DoubleArray(4) { d.xyxy[it].toDouble() }))
+                        .put("conf", d.confidence.toDouble()).put("class", d.classId))
+                    val m = key.meta
+                    logger.jsonl("candidate_dets", JSONObject().put("frame", f).put("role", roles[a])
+                        .put("made_by", if (a == 0) "frame" else "aligned_sum")
+                        .put("n_reads", lanes[a].size)
+                        .put("reads_ts", JSONArray(newestFirst.take(lanes[a].size).map { it.timestamp }))
+                        .put("reads_end_ts", JSONArray(newestFirst.take(lanes[a].size).map { it.timestamp + it.appliedExpUs * 1_000L }))
+                        .put("iso", iso).put("analog_gain", m.appliedIso).put("analog_gain_req", m.requestedIso)
+                        .put("digital_gain", ratio).put("frame_exposure_us", m.appliedExpUs)
+                        .put("frame_exposure_us_req", m.requestedExpUs).put("sensor_ts", m.timestamp)
+                        .put("align_residual", if (a == 0 || residRaw.isNaN()) JSONObject.NULL else JSONArray(listOf(residRaw)))
+                        .put("dets", arr))
+                }
+                val keyOut = per[0].out
+                val outArr = JSONArray()
+                for (d in union) outArr.put(JSONObject().put("xyxy", jsonBox(d.box)).put("evidence", d.conf)
+                    .put("class", d.cls).put("from", if (keyOut.any { it === d }) "key" else roles.last()).put("out", true))
+                logger.jsonl("dets", JSONObject().put("frame", f).put("method", name)
+                    .put("roles", JSONArray(roles)).put("dets", outArr))
+                logger.jsonl("decisions", JSONObject().put("frame", f).put("mode", name).put("version", SENSE_VERSION)
+                    .put("kind", kind).put("n_reads", reads.size).put("n_images", n)
+                    .put("reads_ts", JSONArray(metas.map { it.timestamp }))
+                    .put("reads_end_ts", JSONArray(metas.map { it.timestamp + it.appliedExpUs * 1_000L }))
+                    .put("key_ts", key.meta.timestamp)
+                    .put("base", JSONObject().put("g_req", iso).put("g_analog_req", phys).put("g_applied", key.meta.appliedIso)
+                        .put("digital", ratio).put("s_req", Duel.SHUTTERS_US[sIdx]).put("s_applied", key.meta.appliedExpUs))
+                    .put("trace", traceUsed).put("n_weak_key", per[0].weak.size).put("n_out", union.size)
+                    .put("residual", if (residAfter == null) JSONObject.NULL else JSONObject()
+                        .put("before", JSONArray(residBefore!!.map { Math.round(it * 1e4) / 1e4 }))
+                        .put("after", JSONArray(residAfter.map { Math.round(it * 1e4) / 1e4 }))
+                        .put("tracked_points", JSONArray(motion!!.map { it[2] }))))
+                val keyEnd = key.meta.timestamp + key.meta.appliedExpUs * 1_000L
+                val prevMeta = prev?.meta
+                logger.row("sense_frames", listOf(f, kind, reads.size, n, iso, Duel.SHUTTERS_US[sIdx],
+                    key.meta.timestamp, keyEnd, prevMeta?.timestamp ?: "",
+                    prevMeta?.let { it.timestamp + it.appliedExpUs * 1_000L } ?: "", tOutputNs,
+                    f1(waitMs), f1(rawDecMs), f1(alignMs), f1(residMs), f1(formMs), f1(inferMs), "%.2f".format(unionMs),
+                    f1(totalMs), f1(lateMs), f1((tOutputNs - keyEnd) / 1e6), skipped, otherSetting,
+                    union.size, union.count { d -> keyOut.none { it === d } }, per[0].weak.size,
+                    residBefore?.let { f4(q(it.toList(), 0.5)) } ?: "", residAfter?.let { f4(q(it.toList(), 0.5)) } ?: "",
+                    residAfter?.let { f4(q(it.toList(), 0.9)) } ?: "", if (motion != null) tracked else "", f4(residRaw)))
+                val bmp = src.selectedTensorBitmap(tensor, 0)
+                val path = logger.saveJpegAsync("${frameName(f)}_key", bmp, OffloadClient.JPEG_QUALITY)
+                if (n > 1) logger.saveJpegAsync("${frameName(f)}_sum", src.selectedTensorBitmap(tensor, 1),
+                    OffloadClient.JPEG_QUALITY)
+                logFrame(f, name, lattice.cell(gIdx, sIdx), iso, Duel.SHUTTERS_US[sIdx], n, n > 1,
+                    formMs, inferMs, totalMs, outDets, path, tieBreak = kind, applyBoost = false,
+                    captureMs = waitMs, writeDetsLine = false, metaOverride = key.meta)
+                runCatching { onFrame(bmp, src.detectionsForTensorPreview(outDets, tensor, 0), iso, Duel.SHUTTERS_US[sIdx]) }
+                onStatus("$name f=$f $kind ISO$iso 1/${HowToSense.DENS[sIdx]} out=${outDets.size} " +
+                    "${"%.0f".format(totalMs)}ms")
+                f++
+            }
+        } finally {
+            capturing.set(false)
+            // The chooser may still replace the repeating request: let it finish first.
+            chooser.shutdown()
+            runCatching { chooser.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS) }
+            runCatching { capThread.join(3000) }
+            synchronized(lock) { ring.forEach { it.release() }; ring.clear() }
+            runCatching { raw.stopRepeating() }
+            runCatching { chooseLead.shutdownNow(); residPool.shutdownNow(); alignPool.shutdownNow() }
             runCatching { raw.stopFastCapture() }
             runCatching { src.shutdown() }
         }
