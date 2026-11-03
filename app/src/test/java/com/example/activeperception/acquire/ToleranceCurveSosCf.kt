@@ -36,7 +36,12 @@ object ToleranceCurveSosCf {
     private val imageIoRead = Class.forName("javax.imageio.ImageIO").getMethod("read", File::class.java)
     private val VEH = setOf(1, 2, 3, 5, 7)
     private const val TOP = 80                         // letterbox rows above the picture
-    private val CLIP_LO = doubleArrayOf(0.0, 0.05, 0.2, 0.5, 0.8)
+    /** Clip-share bin lower edges; p and var come from the first bin. -Dsos.clip_edges=0,0.2,... sets
+     *  them (the research side's 2026-11-03 Galaxy curve: 0, .2, .4, .6, .8). */
+    private val CLIP_LO = edgesProperty("sos.clip_edges") ?: doubleArrayOf(0.0, 0.05, 0.2, 0.5, 0.8)
+    /** Comma-separated bin lower edges from system property [key], or null. */
+    private fun edgesProperty(key: String): DoubleArray? =
+        System.getProperty(key)?.split(",")?.map { it.trim().toDouble() }?.toDoubleArray()
     /** Pyramid levels for the record's speed pairs (1/240 -> 1/120 first frames, ~67 ms apart,
      *  different exposures). Checked against the gyro 2026-10-26, cars in turns (~470-530 px/s
      *  of rotation): 3 levels read ~520-530 px/s, 5 levels ~600-790 (too high). The app's own
@@ -333,10 +338,12 @@ object ToleranceCurveSosCf {
         return intArrayOf(moments, cars, used)
     }
 
-    private fun sextiles(v: List<Double>): DoubleArray {
+    /** Bin lower edges at the axis's [k]-quantiles (sextiles by default; the 2026-11-03 app spec's
+     *  7 blur x 8 brightness bins with -Dsos.nb=7 -Dsos.nd=8). */
+    private fun quantileEdges(v: List<Double>, k: Int): DoubleArray {
         val s = v.sorted()
-        val e = (0 until 6).map { s[(it * s.size / 6).coerceAtMost(s.size - 1)] }.toMutableList()
-        e[0] = 0.0                                     // values below the first sextile join bin 0
+        val e = (0 until k).map { s[(it * s.size / k).coerceAtMost(s.size - 1)] }.toMutableList()
+        e[0] = 0.0                                     // values below the first quantile join bin 0
         return e.distinct().toDoubleArray()
     }
 
@@ -707,7 +714,9 @@ object ToleranceCurveSosCf {
         val samples = ArrayList<Sample>()
         val counts = listOf("bright", "dim", "dark").mapIndexed { i, s -> s to sequence(root, s, i * 10_000, samples) }
         val low = samples.filter { it.clip < CLIP_LO[1] }
-        val blurLo = sextiles(low.map { it.blur }); val brightLo = sextiles(low.map { it.bright })
+        // Fixed edges (-Dsos.blur_edges / -Dsos.bright_edges, e.g. the research side's curve) or quantiles.
+        val blurLo = edgesProperty("sos.blur_edges") ?: quantileEdges(low.map { it.blur }, Integer.getInteger("sos.nb", 6))
+        val brightLo = edgesProperty("sos.bright_edges") ?: quantileEdges(low.map { it.bright }, Integer.getInteger("sos.nd", 6))
         val nb = blurLo.size; val nd = brightLo.size
         fun bin(s: Sample) = HowToSense.Curve.binOf(blurLo, s.blur) * nd + HowToSense.Curve.binOf(brightLo, s.bright)
         fun pOf(ss: List<Sample>): Pair<DoubleArray, IntArray> {
@@ -745,12 +754,12 @@ object ToleranceCurveSosCf {
         val text = buildString {
             appendLine("# How-to-Sense tolerance curve measured on sos_cf_v1 (Galaxy S26 Ultra, Limo track, 2026-10-16 record)")
             appendLine("# by ToleranceCurveSosCf (2026-10-26): leave-one-group-out certain cars, detection = conf >= 0.25,")
-            appendLine("# HowToSense features (box brightness, clip share, blur = speed x shutter / long side); p, var from clip < 0.05;")
+            appendLine("# HowToSense features (box brightness, clip share, blur = speed x shutter / long side); p, var from clip < ${CLIP_LO[1]};")
             appendLine("# var by bootstrap over moments ($nBoot); empty bins take the nearest bin's p with var 0.25.")
             appendLine("# ${speedNote()}")
             appendLine("# certain cars: " + if (CERTAIN == "images") "strong in >= 2 images of other groups (sos.certain=images)"
                 else "strong in >= 2 other shutter groups")
-            appendLine("# samples ${samples.size} (clip < 0.05: ${low.size}); " + counts.joinToString("; ") { (s, c) -> "$s ${c[0]} moments ${c[1]} cars ${c[2]} samples" })
+            appendLine("# samples ${samples.size} (clip < ${CLIP_LO[1]}: ${low.size}); " + counts.joinToString("; ") { (s, c) -> "$s ${c[0]} moments ${c[1]} cars ${c[2]} samples" })
             appendLine("# n per bin (blur-major): ${n0.joinToString(" ")}")
             appendLine("# n per clip bin: ${nClip.joinToString(" ")}")
             appendLine("blur_lo ${row(blurLo)}")

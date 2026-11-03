@@ -1774,7 +1774,9 @@ class MeasurementController(
                  /** Desk tests only (no traces indoors): every output detects the sum. */
                  everyFrameSum: Boolean = false,
                  /** Desk tests only: start at this lattice cell instead of the phone AE's. */
-                 startCellOverride: Int? = null) {
+                 startCellOverride: Int? = null,
+                 /** The asset [curve] came from, for the manifest. */
+                 curveFile: String = "") {
         val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
             ?: error("sense requires TfliteYoloDetector")
         require(!legacyCapture) { "sense runs on the repeating capture layer only" }
@@ -1807,6 +1809,8 @@ class MeasurementController(
             .put("residual", "per alignment tile, mean |key - read| of half-quad luma (each over its own " +
                 "frame mean), before and after the move; and the RayNeo app's sum |key - moved read| / sum key " +
                 "(every 7th site); computed beside the detector, off the output path (resid_ms)")
+            .put("curve_file", curveFile)
+            .put("curve_bins", JSONObject().put("blur", curve.blurLo.size).put("brightness", curve.brightLo.size))
             .put("curve", curve.note)
             .put("start", JSONObject().put("ae", ae?.json() ?: JSONObject.NULL)
                 .put("iso", Duel.ISOS[g0]).put("shutter_us", Duel.SHUTTERS_US[s0]))

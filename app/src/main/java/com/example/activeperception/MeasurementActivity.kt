@@ -1783,6 +1783,12 @@ class MeasurementActivity : AppCompatActivity() {
     /** Duel2's curve: built with LK speeds, or (a g variant) with gyro + translation speeds. */
     private fun duelCurveFile(gyro: Boolean) = if (gyro) "tolerance_curve_gyro.txt" else "tolerance_curve.txt"
 
+    /** sense's curve (2026-11-04): 7 blur x 8 brightness bins, the app's own motion (gyro rotation +
+     *  2.6 car lengths/s), from sos_cf_v1's three records by ToleranceCurveSosCf. The research side's
+     *  curve_galaxy_7x8.json measures blur with the rotation alone, so the app's blur would read the
+     *  wrong rows of it. */
+    private val SENSE_CURVE_FILE = "tolerance_curve_gyro_7x8.txt"
+
     /** One round of the Limo step, one lap each, the method changing every lap so slow drift
      *  (light, battery, speed) falls on every method alike: five collection laps (one per
      *  base ISO, never two in a row, also across rounds) and one of each compared method:
@@ -2201,7 +2207,7 @@ class MeasurementActivity : AppCompatActivity() {
         // key + aligned 2-read sum after a key trace. Desk tests, once then forgotten:
         // --ez sense_every true (every output detects the sum), --ei addl_start_cell c.
         if (cmd == "sense") {
-            val curveFile = duelCurveFile(true)
+            val curveFile = SENSE_CURVE_FILE
             val curve = runCatching {
                 HowToSense.Curve.parse(assets.open(curveFile).bufferedReader().use { it.readText() })
             }.getOrElse { post("sense needs assets/$curveFile: ${it.message}"); return }
@@ -2210,7 +2216,8 @@ class MeasurementActivity : AppCompatActivity() {
             intent?.removeExtra("sense_every")
             val forced = intent?.getIntExtra("addl_start_cell", -1)?.takeIf { it in 0 until 25 }
             intent?.removeExtra("addl_start_cell")
-            start(cmd) { mc!!.runSense(curve, cap, ::post, ::showFrame, everyFrameSum = every, startCellOverride = forced) }
+            start(cmd) { mc!!.runSense(curve, cap, ::post, ::showFrame, everyFrameSum = every,
+                startCellOverride = forced, curveFile = curveFile) }
             return
         }
         // The additional-exposure check: addl_0, addl_<extra>_merge | _sep (extra 1-5), the key
