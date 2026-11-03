@@ -108,11 +108,18 @@ private const val ADDL_QUEUED = 3
 private const val ADDL_RING = 10
 private const val ADDL_PERIOD_MS = 100L
 /** [MeasurementController.runSense]'s version: the app spec it follows (manifest, decisions.jsonl). */
-private const val SENSE_VERSION = "2026-11-03 app spec: key newest, key + aligned 2-read sum after a key trace, NMS union, CarPrior, choice off path"
+private const val SENSE_VERSION = "2026-11-04: key newest, key + 2-read sum after a key trace (aligned only across a gap), NMS union, CarPrior, choice off path"
+/** [MeasurementController.runSense]: reads at most this far apart (previous end to next start) are
+ *  gap-free and summed as they are; the S26's 1/60 and 1/30 reads are ~0.08 ms apart, its 1/120 ~8 ms
+ *  (the RayNeo app's threshold, 1.5 ms). */
+private const val SENSE_GAPFREE_NS = 1_500_000L
 
 /** Fast PhysSweep ([MeasurementController.runPhysSweepFast]): sweep cells visited a window, next to
  *  the output's read (the detector fits 4 images in a 100 ms window). */
 private const val PHYS_FAST_CANDIDATES = 3
+/** Fast PhysSweep's queued requests kept outstanding (10-31 switch probe: 3 left the sensor ~40%
+ *  idle, 5 about 2%). */
+private const val PHYS_FAST_DEPTH = 5
 
 /**
  * Who chooses (iso, exposure) in the AE / AE_quant modes.
@@ -279,6 +286,8 @@ class MeasurementController(
      *  the sensor (runAddl) and left the sensor ~40% idle (the baselines'). Set by the activity. */
     @Volatile var legacyCapture: Boolean = false
         set(v) { field = v; raw.parallelRepeating = !v }
+    /** Queued requests the legacy stream keeps outstanding (3 as on 2026-10-29; fast PhysSweep 5). */
+    @Volatile var parallelDepth = 3
     /** Repeating capture layer: decode every read on arrival (true) instead of only the reads an
      *  output takes (false, from 2026-10-31: decoding is part of a method's own cost, and reads
      *  nobody uses would load the CPU and memory its analysis runs on). Kept for the A/B check
@@ -308,7 +317,7 @@ class MeasurementController(
         m.put("capture_structure", if (parallelCapture || ownCaptureThread) "parallel: capture thread streams, one output every 100 ms " +
             "from the newest fresh reads" else "serial: capture, then analysis, then the next capture")
         if (parallelCapture || ownCaptureThread) m.put("capture_layer", if (legacyCapture)
-            "legacy: queued requests (runAddl 3-read bursts x 3; baselines 3 requests kept until decoded)"
+            "legacy: queued requests (runAddl 3-read bursts x 3; baselines $parallelDepth requests kept until decoded)"
             else "repeating request at the method's setting; other settings as one-shot requests; " +
                 if (decodeAll) "every read decoded on arrival" else "only the reads an output takes are decoded")
         m.put("grid", JSONObject().apply {
@@ -441,7 +450,7 @@ class MeasurementController(
         fun open(onStatus: (String) -> Unit) {
             raw.configureDecodeThreads(4)
             raw.startFastCapture()
-            if (parallelCapture) raw.startParallel()
+            if (parallelCapture) raw.startParallel(depth = parallelDepth)
             onStatus("warming FP16 GPU B=1/3/9…")
             tfl.warmUpAllBatches()
         }
@@ -1754,9 +1763,10 @@ class MeasurementController(
      *   setting, booked before a switch, are passed over);
      * - when the previous output's key image had a weak trace (a vehicle box .05-.25 at IoU < .3
      *   with every .25+ box of that key image, [V.perImage]; the phone's own detections only),
-     *   the key and the sum of the key read and the read before it at the same setting, that read
-     *   moved onto the key pixel by pixel ([BurstAlign]; no box moving), go to the detector in one
-     *   batch; otherwise the key alone. The sum needs two reads in the window's sensor time
+     *   the key and the sum of the key read and the read before it at the same setting go to the
+     *   detector in one batch; otherwise the key alone. Gap-free reads ([SENSE_GAPFREE_NS]: 1/60,
+     *   1/30) add as they are, a real exposure twice as long; across a gap (1/240, 1/120) the
+     *   earlier read is first moved onto the key pixel by pixel ([BurstAlign]; no box moving). The sum needs two reads in the window's sensor time
      *   ([sensorHoldMs]: none at 1/15);
      * - output = the .25+ boxes of the detected images, highest first, NMS at IoU .3;
      * - the next key setting: How-to-Sense on the key picture, gyro curve, [CarPrior] weights,
@@ -1799,8 +1809,10 @@ class MeasurementController(
                 "setting (booked before a switch) are passed over")
             .put("trace", "the previous output's key image: a vehicle box conf ${V.WEAK_LO}-${V.OUT_THR} at IoU < " +
                 "${V.PLACE_IOU} with every box >= ${V.OUT_THR} of that key image (phone detections only)")
-            .put("sum", "after a trace: the key read + the read before it at the same setting, moved onto the " +
-                "key pixel by pixel (BurstAlign tiles) and summed; key and sum detected in one batch")
+            .put("sum", "after a trace: the key read + the read before it at the same setting; gap-free reads " +
+                "(previous end to key start <= ${SENSE_GAPFREE_NS / 1e6} ms: 1/60, 1/30) added as they are (a real " +
+                "exposure twice as long), reads with a gap (1/240, 1/120) after moving the previous read onto the " +
+                "key pixel by pixel (BurstAlign tiles); key and sum detected in one batch")
             .put("sum_cap", "only when two reads fit 100 ms of sensor time (1/240-1/30; not 1/15)")
             .put("union", "boxes >= ${V.OUT_THR} of the detected images, highest first, NMS at IoU ${V.PLACE_IOU}")
             .put("key_rule", "How-to-Sense on the key picture, gyro curve, one read's blur, car prior " +
@@ -1824,7 +1836,7 @@ class MeasurementController(
             "key_ts", "key_end_ts", "prev_ts", "prev_end_ts", "t_output", "wait_ms", "rawdec_ms", "align_ms",
             "resid_ms", "form_ms", "infer_ms", "union_ms", "total_ms", "clock_late_ms", "latency_ms",
             "skipped_reads", "other_setting_reads", "n_out", "n_out_sum_only", "n_weak_key",
-            "resid_before_med", "resid_after_med", "resid_after_p90", "tiles_tracked", "resid_raw"))
+            "resid_before_med", "resid_after_med", "resid_after_p90", "tiles_tracked", "resid_raw", "gap_ms", "aligned"))
         logger.csv("sense_choices", listOf("idx", "key_ts", "t_start", "stats_wait_ms", "choose_ms", "rule",
             "moved", "to_iso", "to_shutter_us", "e_gain", "threshold", "speed_median", "prior_outputs"))
         val src = ParallelRawCandidateSource(grid, raw,
@@ -1969,13 +1981,19 @@ class MeasurementController(
                 val gIdx = c / 5; val sIdx = c % 5
                 val iso = Duel.ISOS[gIdx]; val phys = minOf(iso, ceil); val ratio = iso.toDouble() / phys
 
-                // ---- 2. the sum: the previous read moved onto the key, tile by tile; its residual.
+                // ---- 2. the sum. Gap-free reads (the previous read's end to the key's start within
+                // SENSE_GAPFREE_NS: 1/60, 1/30) add as they are, a real exposure of twice the length;
+                // reads with a gap (1/240, 1/120) would double a moving car, so the previous read is
+                // first moved onto the key tile by tile.
                 val tA = now()
                 val kf = key.frame
                 var movedPrev: RawFrame? = null
                 var pyrKey: List<SparseFlow.Img>? = null; var pyrPrev: List<SparseFlow.Img>? = null
                 var motion: Array<DoubleArray>? = null
-                if (prev != null) {
+                val gapNs = prev?.let { key.meta.timestamp - (it.meta.timestamp + it.meta.appliedExpUs * 1_000L) }
+                val gapFree = gapNs != null && gapNs <= SENSE_GAPFREE_NS
+                if (prev != null && gapFree) movedPrev = prev.frame
+                else if (prev != null) {
                     val pf = prev.frame
                     pyrKey = BurstAlign.pyramid(kf.bayer, kf.width, kf.height, alignPool)
                     pyrPrev = BurstAlign.pyramid(pf.bayer, pf.width, pf.height, alignPool)
@@ -2005,11 +2023,14 @@ class MeasurementController(
                 })
                 // The alignment residual is a record: computed beside the detector, read only after
                 // the output.
-                val mpRead = movedPrev; val pk = pyrKey; val pp = pyrPrev
-                val residF = if (mpRead == null || pk == null || pp == null) null else residPool.submit(java.util.concurrent.Callable {
+                // Gap-free sums are not moved: their residual before and after is the same.
+                val mpRead = movedPrev; val pk = pyrKey; val pp = pyrPrev; val prevFrame = prev?.frame
+                val residF = if (mpRead == null || prevFrame == null) null else residPool.submit(java.util.concurrent.Callable {
                     val tR = now()
-                    val after = BurstAlign.lumaHalf(mpRead.bayer, mpRead.width, mpRead.height, alignPool)
-                    Resid(tileResiduals(pk[0], pp[0]), tileResiduals(pk[0], after), rawResidual(kf.bayer, mpRead.bayer), ms(tR))
+                    val keyL = pk?.get(0) ?: BurstAlign.lumaHalf(kf.bayer, kf.width, kf.height, alignPool)
+                    val prevL = pp?.get(0) ?: BurstAlign.lumaHalf(prevFrame.bayer, prevFrame.width, prevFrame.height, alignPool)
+                    val after = if (mpRead === prevFrame) prevL else BurstAlign.lumaHalf(mpRead.bayer, mpRead.width, mpRead.height, alignPool)
+                    Resid(tileResiduals(keyL, prevL), tileResiduals(keyL, after), rawResidual(kf.bayer, mpRead.bayer), ms(tR))
                 })
 
                 // ---- 4. detect, key and sum in one call; the output = NMS over their .25+ vehicle
@@ -2095,7 +2116,8 @@ class MeasurementController(
                         .put("conf", d.confidence.toDouble()).put("class", d.classId))
                     val m = key.meta
                     logger.jsonl("candidate_dets", JSONObject().put("frame", f).put("role", roles[a])
-                        .put("made_by", if (a == 0) "frame" else "aligned_sum")
+                        .put("made_by", if (a == 0) "frame" else if (gapFree) "gapfree_sum" else "aligned_sum")
+                        .put("gap_ms", if (a == 0 || gapNs == null) JSONObject.NULL else Math.round(gapNs / 1e3) / 1e3)
                         .put("n_reads", lanes[a].size)
                         .put("reads_ts", JSONArray(newestFirst.take(lanes[a].size).map { it.timestamp }))
                         .put("reads_end_ts", JSONArray(newestFirst.take(lanes[a].size).map { it.timestamp + it.appliedExpUs * 1_000L }))
@@ -2119,10 +2141,12 @@ class MeasurementController(
                     .put("base", JSONObject().put("g_req", iso).put("g_analog_req", phys).put("g_applied", key.meta.appliedIso)
                         .put("digital", ratio).put("s_req", Duel.SHUTTERS_US[sIdx]).put("s_applied", key.meta.appliedExpUs))
                     .put("trace", traceUsed).put("n_weak_key", per[0].weak.size).put("n_out", union.size)
+                    .put("gap_ms", gapNs?.let { Math.round(it / 1e3) / 1e3 } ?: JSONObject.NULL)
+                    .put("aligned", if (prev == null) JSONObject.NULL else !gapFree)
                     .put("residual", if (residAfter == null) JSONObject.NULL else JSONObject()
                         .put("before", JSONArray(residBefore!!.map { Math.round(it * 1e4) / 1e4 }))
                         .put("after", JSONArray(residAfter.map { Math.round(it * 1e4) / 1e4 }))
-                        .put("tracked_points", JSONArray(motion!!.map { it[2] }))))
+                        .put("tracked_points", motion?.let { m -> JSONArray(m.map { it[2] }) } ?: JSONObject.NULL)))
                 val keyEnd = key.meta.timestamp + key.meta.appliedExpUs * 1_000L
                 val prevMeta = prev?.meta
                 logger.row("sense_frames", listOf(f, kind, reads.size, n, iso, Duel.SHUTTERS_US[sIdx],
@@ -2132,7 +2156,8 @@ class MeasurementController(
                     f1(totalMs), f1(lateMs), f1((tOutputNs - keyEnd) / 1e6), skipped, otherSetting,
                     union.size, union.count { d -> keyOut.none { it === d } }, per[0].weak.size,
                     residBefore?.let { f4(q(it.toList(), 0.5)) } ?: "", residAfter?.let { f4(q(it.toList(), 0.5)) } ?: "",
-                    residAfter?.let { f4(q(it.toList(), 0.9)) } ?: "", if (motion != null) tracked else "", f4(residRaw)))
+                    residAfter?.let { f4(q(it.toList(), 0.9)) } ?: "", if (motion != null) tracked else "", f4(residRaw),
+                    gapNs?.let { "%.3f".format(it / 1e6) } ?: "", if (prev == null) "" else if (gapFree) 0 else 1))
                 val bmp = src.selectedTensorBitmap(tensor, 0)
                 val path = logger.saveJpegAsync("${frameName(f)}_key", bmp, OffloadClient.JPEG_QUALITY)
                 if (n > 1) logger.saveJpegAsync("${frameName(f)}_sum", src.selectedTensorBitmap(tensor, 1),
@@ -2277,6 +2302,13 @@ class MeasurementController(
     fun runPhysSweepFast(maxFrames: Int, onStatus: (String) -> Unit,
                          onFrame: (Bitmap, List<Detection>, Int, Int) -> Unit = { _, _, _, _ -> }) {
         check(parallelCapture) { "fast PhysSweep runs only with parallel capture" }
+        // Fast PhysSweep plans every read of a window two windows ahead and needs each planned
+        // read to come, so it runs on queued requests as on 2026-10-29, PHYS_FAST_DEPTH kept
+        // outstanding so the sensor does not idle. On the repeating request a planned output
+        // setting could be replaced before it was ever read (11-04 bright: two of three runs
+        // stopped after 14 and 43 outputs; desk: 2 of 4).
+        legacyCapture = true
+        parallelDepth = PHYS_FAST_DEPTH
         val g = v2SpaceCur
         val nCells = g.nGain * g.nShutter
         val ceil = v2AnalogCeil()
@@ -2884,7 +2916,7 @@ class MeasurementController(
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
         raw.startFastCapture()
-        if (parallelCapture) raw.startParallel()
+        if (parallelCapture) raw.startParallel(depth = parallelDepth)
         tfl?.warmUpAllBatches()
         var f = 0
         try { while (running && f < maxFrames) {
@@ -6865,7 +6897,7 @@ class MeasurementController(
             colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         raw.configureDecodeThreads(4)
         raw.startFastCapture()
-        if (parallelCapture) raw.startParallel()
+        if (parallelCapture) raw.startParallel(depth = parallelDepth)
         onStatus("warming FP16 GPU batches...")
         tfl.warmUpAllBatches()
         var gi = 2; var sj = 2               // cold start: ISO 400 / rung 2 (1/60 s on the 1/240-1/15 rungs)
