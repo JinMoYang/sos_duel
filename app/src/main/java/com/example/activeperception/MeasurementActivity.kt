@@ -269,7 +269,8 @@ class MeasurementActivity : AppCompatActivity() {
             findViewById<View>(R.id.walkPanel).visibility = View.VISIBLE
             walkButton.text = "시작"
             walkButton.setOnClickListener { if (lapSession == null) toggleWalkSession() }
-            showWalk("걷기 실험", "", "방법 ${walkPlan().size}개 · 방법마다 편도 ${walkLegs()}번", idle = true)
+            showWalk(if (walkCheck()) "검증 걷기" else "본 걷기", "",
+                "블록 ${walkPlan().size}개 · 블록마다 편도 ${walkLegs()}번", idle = true)
             if (!previewOn) {
                 preview.visibility = View.GONE
                 overlay.visibility = View.GONE
@@ -1050,19 +1051,31 @@ class MeasurementActivity : AppCompatActivity() {
         walkButton.visibility = if (idle) View.VISIBLE else View.GONE
     }
 
-    /** The walk's methods in order: PAR_MAIN_METHODS (or `--es walk_plan a,b,...`, a rerun of
-     *  some, a test) in `--ei walk_rounds` rounds (default 1), the order shifted by one each round. */
+    /** The walk comparison's methods (2026-11-03 handover §4): sense, AE-Phone and the fixed cells
+     *  from the stream's newest read (the same picture age as sense), the fixed 1600 x 1/30 (the
+     *  2026-09-01 walk's custom AE sat there), Sense-well, PhysSweep, ShinNM, Neural-AE. sense sits
+     *  mid-list, so the first and last blocks of a pass are not always its. */
+    private val WALK_METHODS = listOf("newest_ae_phone", "par_physsweep_fast", "newest_fixed_1600_30", "sense",
+        "par_shin_nm", "newest_fixed_1600_240", "par_prop_c", "par_nae")
+
+    /** `--es walk_kind`: "main" (default), the experiment: [WALK_METHODS] in 3 passes, forward, back,
+     *  forward (every method 3 blocks; the drift over the session - light, battery, the walker - falls
+     *  on every method alike), each block one round trip; ~16 min. "check": a test walk before it,
+     *  every method once for one leg (~3 min), to see each runs while walking. */
+    private fun walkCheck() = intent.getStringExtra("walk_kind") == "check"
+
+    /** The walk's methods in order: [WALK_METHODS] (or `--es walk_plan a,b,...`, a rerun of some)
+     *  in `--ei walk_rounds` passes (main 3, check 1), every other pass in reverse. */
     private fun walkPlan(): List<String> {
-        val rounds = intent.getIntExtra("walk_rounds", 1).coerceAtLeast(1)
+        val passes = intent.getIntExtra("walk_rounds", if (walkCheck()) 1 else 3).coerceAtLeast(1)
         val methods = intent.getStringExtra("walk_plan")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
-            ?.takeIf { it.isNotEmpty() } ?: PAR_MAIN_METHODS
-        return (0 until rounds).flatMap { r -> methods.indices.map { methods[(it + r) % methods.size] } }
+            ?.takeIf { it.isNotEmpty() } ?: WALK_METHODS
+        return (0 until passes).flatMap { r -> if (r % 2 == 0) methods else methods.reversed() }
     }
 
-    /** Legs (one-way walks) per method: `--ei walk_legs`, default 4 = two laps of the corridor. */
-    /** Legs (one-way walks) per method: 2 = one round trip, both directions (2026-11-03, was 4:
-     *  the session halves to ~5 min). `--ei walk_legs` overrides. */
-    private fun walkLegs() = intent.getIntExtra("walk_legs", 2).coerceAtLeast(1)
+    /** Legs (one-way walks) per method block: main 2 (one round trip, both directions), check 1.
+     *  `--ei walk_legs` overrides. */
+    private fun walkLegs() = intent.getIntExtra("walk_legs", if (walkCheck()) 1 else 2).coerceAtLeast(1)
 
     /** Short names on the glass's walk screen. */
     private fun walkName(method: String) = when (method) {
@@ -1095,7 +1108,8 @@ class MeasurementActivity : AppCompatActivity() {
         val plan = walkPlan()
         presetRunCap = null
         ExperimentSession.lighting = intent.getStringExtra("lighting").orEmpty()
-        ExperimentSession.session = "walk_${System.currentTimeMillis()}"
+        // A check walk's runs carry walk_check_<ms>, so they never mix into the experiment's.
+        ExperimentSession.session = "${if (walkCheck()) "walk_check" else "walk"}_${System.currentTimeMillis()}"
         val session = WalkSession(this, sensors, object : LapSession.Host {
             override fun startBlock(method: String) {
                 ExperimentSession.runLap = 0
