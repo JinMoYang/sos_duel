@@ -1092,8 +1092,8 @@ class MeasurementActivity : AppCompatActivity() {
      *  experiment walk; and the experimenter (2026-11-03: several walk it), which a tap advances. */
     private val GLASS_RUNS = listOf(
         GlassRun("보정 기록", "곡선용 · 한 번만 · 약 6분"),
-        GlassRun("시험 걷기", "9개 방법 편도 1번씩 · 약 3.5분"),
-        GlassRun("본 걷기", "9개 방법 × 2번 · 약 12.5분"),
+        GlassRun("시험 걷기", "8개 방법 편도 1번씩 · 약 3분"),
+        GlassRun("본 걷기", "8개 방법 × 2번 · 약 11분"),
         GlassRun("실험자", "눌러서 바꾸기 (1~9) · 기록마다 남음"))
     private var glassChoiceSet = false
 
@@ -1191,15 +1191,17 @@ class MeasurementActivity : AppCompatActivity() {
     /** The walk comparison's methods (2026-11-03 handover §4): sense, AE-Phone and the fixed cells
      *  from the stream's newest read (the same picture age as sense), the fixed 1600 x 1/30 (the
      *  2026-09-01 walk's custom AE sat there) and 1600 x 1/60 (the garage's strongest fixed cell in the
-     *  2026-11-03 curve record), Sense-well, PhysSweep, ShinNM, Neural-AE. sense sits mid-list, so the
-     *  first and last blocks of a pass are not always its. */
+     *  2026-11-03 curve record), Sense-well, PhysSweep, ShinNM, Neural-AE. The fixed 1/240 left on
+     *  2026-11-03: the weakest cell in the curve record and that night's walk (2.85 cars an output);
+     *  it stays runnable by name. sense sits mid-list, so the first and last blocks of a pass are not
+     *  always its. */
     private val WALK_METHODS = listOf("newest_ae_phone", "par_physsweep_fast", "newest_fixed_1600_30", "sense",
-        "par_shin_nm", "newest_fixed_1600_240", "par_prop_c", "newest_fixed_1600_60", "par_nae")
+        "par_shin_nm", "par_prop_c", "newest_fixed_1600_60", "par_nae")
 
     /** `--es walk_kind`: "main" (default), the experiment: [WALK_METHODS] in 2 passes, forward, back
      *  (every method 2 blocks, 2 legs each way; the drift over the session - light, battery, the walker - falls
-     *  on every method alike), each block one round trip; ~12.5 min with 9 methods. "check": a test walk before it,
-     *  every method once for one leg (~3.5 min), to see each runs while walking. */
+     *  on every method alike), each block one round trip; ~11 min with 8 methods. "check": a test walk before it,
+     *  every method once for one leg (~3 min), to see each runs while walking. */
     private fun walkCheck() = (walkKind ?: intent.getStringExtra("walk_kind")) == "check"
     /** "extra": [EXTRA_METHODS] alone, in its own session after the experiment walk. */
     private fun walkExtra() = (walkKind ?: intent.getStringExtra("walk_kind")) == "extra"
