@@ -35,7 +35,18 @@ import kotlin.math.min
 object ToleranceCurveSosCf {
     private val imageIoRead = Class.forName("javax.imageio.ImageIO").getMethod("read", File::class.java)
     private val VEH = setOf(1, 2, 3, 5, 7)
-    private const val TOP = 80                         // letterbox rows above the picture
+    /** Letterbox rows above the picture: 80 for the S26's 640 x 480 picture; 0 for the glass,
+     *  whose portrait picture fills the 640 rows (its runtime reads rows 0-479 as the picture). */
+    private val TOP = System.getProperty("sos.top", "80").toInt()
+    /** The record's sequences under sequences/ (sos.seqs, comma list; sos_cf_v1: bright,dim,dark). */
+    private val SEQS = System.getProperty("sos.seqs", "bright,dim,dark").split(',').map { it.trim() }
+    /** sos.groups=shutter (the glass's curve record, 2026-11-03): a moment's groups are its
+     *  shutters, each image its own read; default "exposure": sos_cf_v1's g240 / g120 / g60 bursts. */
+    private val BY_SHUTTER = System.getProperty("sos.groups", "exposure") == "shutter"
+    private val G240 = if (BY_SHUTTER) "s4167" else "g240"
+    private val G120 = if (BY_SHUTTER) "s8333" else "g120"
+    /** What the curve file's first line says it was measured on. */
+    private val LABEL = System.getProperty("sos.label", "sos_cf_v1 (Galaxy S26 Ultra, Limo track, 2026-10-16 record)")
     private val CLIP_LO = doubleArrayOf(0.0, 0.05, 0.2, 0.5, 0.8)
     /** Pyramid levels for the record's speed pairs (1/240 -> 1/120 first frames, ~67 ms apart,
      *  different exposures). Checked against the gyro 2026-10-26, cars in turns (~470-530 px/s
@@ -66,7 +77,7 @@ object ToleranceCurveSosCf {
      */
     private val CERTAIN = System.getProperty("sos.certain", "groups")
     /** Focal length in picture px (640 x 480 picture); gyro-checked 2026-10-26 (yaw x f vs LK). */
-    private const val F_PX = 425.0
+    private val F_PX = System.getProperty("sos.fpx", "425").toDouble()     // the glass: 301.6
     /** Gyro samples (~38 Hz) are averaged over the exposure padded by this much. */
     private const val GYRO_PAD_NS = 13_000_000L
     /** Translation term of "hybrid", 1/s; from sos.trans or the record's bright straights. */
@@ -111,7 +122,7 @@ object ToleranceCurveSosCf {
     private fun translationConst(root: File): Double {
         val keep = speedsOnly
         speedsOnly = true; transRef.clear()
-        sequence(root, "bright", 0, ArrayList(), forceLk = true)
+        sequence(root, SEQS[0], 0, ArrayList(), forceLk = true)
         speedsOnly = keep
         val c = HowToSense.median(transRef)
         println("translation constant of ${root.name}: %.3f /s (%d straight cars)".format(c, transRef.size))
@@ -227,8 +238,8 @@ object ToleranceCurveSosCf {
             // collect_cf2's tracking sums and ISO 3200/6400 frames are samples, never evidence.
             if (use != "counterfactual" && use != "real_check" && use != "aligned" && use != "gain_ext") continue
             val m = r["moment"]!!.toInt()
-            val group = if (use == "real_check") "real" else when (r["source_shutter_us"]!!.toInt()) {
-                4167 -> "g240"; 8333 -> "g120"; else -> "g60" }
+            val group = if (use == "real_check") "real" else if (BY_SHUTTER) "s" + r["shutter_us"]!!
+                else when (r["source_shutter_us"]!!.toInt()) { 4167 -> "g240"; 8333 -> "g120"; else -> "g60" }
             byMoment.getOrPut(m) { ArrayList() } += Img(r["image_id"]!!, r["cell"]!!.toInt(), r["iso"]!!.toInt(),
                 r["shutter_us"]!!.toInt(), group, r["sensor_ts_ns"]!!.toLong(), File(dir, r["file"]!!), use,
                 r["n_frames"]!!.toInt(), r["digital_ratio"]!!.toDouble(), r["source_iso_captured"]!!.toInt(),
@@ -247,7 +258,7 @@ object ToleranceCurveSosCf {
             }.toList()
         }
         val yawOf = csv(File(dir, "moments.csv")).associate { it["moment"]!! to abs(it["yaw_rate_rad_s"]!!.toDouble()) }
-        val order = listOf("g240", "g120", "g60", "real")
+        val order = if (BY_SHUTTER) Duel.SHUTTERS_US.map { "s$it" } + "real" else listOf("g240", "g120", "g60", "real")
         var moments = 0; var cars = 0; var used = 0
         for ((m, imgs) in byMoment.toSortedMap()) {
             // Strong boxes per group, then clusters across groups.
@@ -270,22 +281,22 @@ object ToleranceCurveSosCf {
             moments++; cars += certain.size
             // Speed between the base-ISO first frames of the 1/240 and 1/120 bursts.
             val bi = baseIso[m] ?: continue
-            val a = imgs.firstOrNull { it.use == "counterfactual" && it.group == "g240" && it.iso == bi && it.shutterUs == 4167 }
-            val b = imgs.firstOrNull { it.use == "counterfactual" && it.group == "g120" && it.iso == bi && it.shutterUs == 8333 }
+            val a = imgs.firstOrNull { it.use == "counterfactual" && it.group == G240 && it.iso == bi && it.shutterUs == 4167 }
+            val b = imgs.firstOrNull { it.use == "counterfactual" && it.group == G120 && it.iso == bi && it.shutterUs == 8333 }
             if (a == null || b == null || b.ts <= a.ts) continue
             val carSpeed = if (!useLk) List(certain.size) { Double.NaN } else {
                 val need = BooleanArray(HowToSense.N)
-                for (c in certain) for (k in cellsUnder(c["g240"] ?: c["g120"] ?: c.values.first())) need[k] = true
+                for (c in certain) for (k in cellsUnder(c[G240] ?: c[G120] ?: c.values.first())) need[k] = true
                 val (speed, _) = HowToSense.speed(picture(a.file), 2.0, picture(b.file), (b.ts - a.ts) / 1e9, need,
                     levels = RECORD_FLOW_LEVELS)
-                certain.map { c -> HowToSense.median(cellsUnder(c["g240"] ?: c["g120"] ?: c.values.first()).map { speed[it] }) }
+                certain.map { c -> HowToSense.median(cellsUnder(c[G240] ?: c[G120] ?: c.values.first()).map { speed[it] }) }
             }
             speeds += carSpeed
             val yawM = yawOf[m.toString()] ?: Double.NaN
             if (speedsOnly && forceLk && gyro != null && yawM < 0.15) {
                 val w = gyro.mean(a.ts, b.ts + 8_333_000L)
                 for ((ci, c) in certain.withIndex()) {
-                    val box = c["g240"] ?: c["g120"] ?: c.values.first()
+                    val box = c[G240] ?: c[G120] ?: c.values.first()
                     if (!carSpeed[ci].isNaN()) transRef += max(0.0, carSpeed[ci] - rotSpeed(w, box)) / max(side(box), 1.0)
                 }
             }
@@ -354,7 +365,7 @@ object ToleranceCurveSosCf {
     private fun rangeCheck(root: File, levelsList: List<Int>) {
         val ratios = levelsList.associateWith { ArrayList<Double>() }
         val med67 = levelsList.associateWith { ArrayList<Double>() }
-        for (seq in listOf("bright", "dim", "dark")) {
+        for (seq in SEQS) {
             val dir = File(root, "sequences/$seq")
             val rows = csv(File(dir, "images.csv")).filter { it["use"] == "counterfactual" && it["made_by"] == "physical" }
             for ((_, rs) in rows.groupBy { it["moment"] }) {
@@ -450,7 +461,7 @@ object ToleranceCurveSosCf {
         val edges = doubleArrayOf(0.0, 0.3, 0.6, 0.9, 1.2, 1.6)
         val bins = Array(edges.size) { ArrayList<Double>() }; val yaws = Array(edges.size) { ArrayList<Double>() }
         val upper = BooleanArray(HowToSense.N) { it / HowToSense.GX < HowToSense.GY / 2 }
-        for (seq in listOf("bright", "dim", "dark")) {
+        for (seq in SEQS) {
             val dir = File(root, "sequences/$seq")
             val yawOf = csv(File(dir, "moments.csv")).associate { it["moment"]!! to abs(it["yaw_rate_rad_s"]!!.toDouble()) }
             val rows = csv(File(dir, "images.csv")).filter { it["use"] == "counterfactual" && it["made_by"] == "physical" }
@@ -529,7 +540,7 @@ object ToleranceCurveSosCf {
         fun pred(s: Sample) = predWith(s, s.blur)
         fun name(c: Int) = "ISO%d 1/%d".format(Duel.ISOS[c / 5], HowToSense.DENS[c % 5])
         val all = ArrayList<Sample>()
-        for ((i, seq) in listOf("bright", "dim", "dark").withIndex()) {
+        for ((i, seq) in SEQS.withIndex()) {
             if (!File(root, "sequences/$seq").exists()) continue
             val ss = ArrayList<Sample>()
             sequence(root, seq, i * 10_000, ss)
@@ -564,16 +575,16 @@ object ToleranceCurveSosCf {
         calib("brightness", curve.brightLo) { it.bright }
         calib("clip", curve.clipLo) { it.clip }
         // Where the errors come from.
-        val seqOf = mapOf(0 to "bright", 1 to "dim", 2 to "dark")
+        val seqOf = SEQS.withIndex().associate { it.index to it.value }
         fun light(s: Sample) = seqOf[s.unit / 10_000]!!
         fun line(l: List<Sample>) = if (l.isEmpty()) "      -       " else
             "%.3f/%.3f %5d".format(l.count { it.hit }.toDouble() / l.size, l.sumOf { pred(it) } / l.size, l.size)
         println("== per shutter, observed/predicted n: all cars | cars never touching the border | border cars")
-        for (lt in listOf("bright", "dim", "dark")) for (sj in 0 until 5) {
+        for (lt in SEQS) for (sj in 0 until 5) {
             val l = all.filter { light(it) == lt && it.cell % 5 == sj }
             println("  %-6s 1/%-4d %s | %s | %s".format(lt, HowToSense.DENS[sj], line(l), line(l.filter { !it.edge }), line(l.filter { it.edge })))
         }
-        println("== border cars: share of samples per lighting: " + listOf("bright", "dim", "dark").joinToString { lt ->
+        println("== border cars: share of samples per lighting: " + SEQS.joinToString { lt ->
             val l = all.filter { light(it) == lt }; "%s %.1f%%".format(lt, 100.0 * l.count { it.edge } / l.size) })
         println("== inside the lowest brightness bin [0, %.4f): observed/predicted n".format(curve.brightLo.getOrElse(1) { 1.0 }))
         val sub = doubleArrayOf(0.0, 0.0005, 0.001, 0.002, 0.004)
@@ -584,7 +595,7 @@ object ToleranceCurveSosCf {
         println("== car speed (px/s, one per car and moment) by gyro yaw rate, per lighting: median (cars)")
         val edges = doubleArrayOf(0.0, 0.15, 0.3, 0.6, 0.9, 1.2)
         println("  yaw >=   " + edges.joinToString("") { "%-14s".format("%.2f".format(it)) })
-        for (lt in listOf("bright", "dim", "dark")) {
+        for (lt in SEQS) {
             val cars = all.filter { light(it) == lt && !it.speed.isNaN() && !it.yaw.isNaN() }
                 .distinctBy { it.unit to it.speed }
             println("  %-7s ".format(lt) + edges.indices.joinToString("") { b ->
@@ -592,12 +603,12 @@ object ToleranceCurveSosCf {
                 if (v.isEmpty()) "%-14s".format("-") else "%-14s".format("%.0f (%d)".format(HowToSense.median(v), v.size)) })
         }
         println("== by SNR bin, per lighting: observed/predicted n" + (if (noiseFactor != null) " (noise factor applied)" else ""))
-        for (lt in listOf("bright", "dim", "dark")) for (b in SNR_LO.indices) {
+        for (lt in SEQS) for (b in SNR_LO.indices) {
             val l = all.filter { light(it) == lt && HowToSense.Curve.binOf(SNR_LO, it.snr) == b }
             println("  %-6s snr >= %5.0f %s".format(lt, SNR_LO[b], line(l)))
         }
         println("== by image kind (use, frames), per lighting: observed/predicted n")
-        for (lt in listOf("bright", "dim", "dark")) for (k in all.map { it.use to it.nFrames }.distinct().sortedBy { it.toString() }) {
+        for (lt in SEQS) for (k in all.map { it.use to it.nFrames }.distinct().sortedBy { it.toString() }) {
             val l = all.filter { light(it) == lt && it.use == k.first && it.nFrames == k.second }
             if (l.isNotEmpty()) println("  %-6s %-20s %s".format(lt, "${k.first} x${k.second}", line(l)))
         }
@@ -613,7 +624,7 @@ object ToleranceCurveSosCf {
             println("== noise factor written: " + fit.joinToString(" ") { "%.3f".format(it) })
         }
         println("== per lighting by blur bin: observed/predicted n")
-        for (lt in listOf("bright", "dim", "dark")) for (b in curve.blurLo.indices) {
+        for (lt in SEQS) for (b in curve.blurLo.indices) {
             val l = all.filter { light(it) == lt && HowToSense.Curve.binOf(curve.blurLo, it.blur) == b }
             println("  %-6s blur >= %.4f %s".format(lt, curve.blurLo[b], line(l)))
         }
@@ -646,7 +657,7 @@ object ToleranceCurveSosCf {
         // from some images), so the picks differ only by the image. Shares are per car.
         val takesAny = { x: Sample -> rules.any { r -> r.takes(x) } }
         println("== base rules, per lighting: detected share of the common cars in the picked image, oracle, picks")
-        for (lt in listOf("bright", "dim", "dark")) {
+        for (lt in SEQS) {
             val byUnit = all.filter { light(it) == lt && it.cell in 0 until 25 && takesAny(it) }.groupBy { it.unit }
             if (byUnit.isEmpty()) continue
             val keyOf = { x: Sample -> "${x.cell}/${x.use}/${x.srcShutterUs}/${x.nFrames}" }
@@ -687,7 +698,7 @@ object ToleranceCurveSosCf {
         if (args.getOrNull(1) == "--gyrocheck") { gyroCheck(File(args[0]), listOf(3, 5), args.getOrNull(2) == "cars"); return }
         if (args.getOrNull(1) == "--speeds") {
             speedsOnly = true
-            listOf("bright", "dim", "dark").forEachIndexed { i, s -> sequence(File(args[0]), s, i * 10_000, ArrayList()) }
+            SEQS.forEachIndexed { i, s -> sequence(File(args[0]), s, i * 10_000, ArrayList()) }
             val s = speeds.sorted()
             fun q(f: Double) = s[(f * (s.size - 1)).toInt()]
             println("car speeds (px/s, ${s.size} cars): p10 %.0f  p50 %.0f  p90 %.0f  p99 %.0f  max %.0f".format(q(0.1), q(0.5), q(0.9), q(0.99), s.last()))
@@ -705,7 +716,7 @@ object ToleranceCurveSosCf {
         val nBoot = args.getOrNull(2)?.toInt() ?: 300
         if (SPEED == "hybrid") transConst = System.getProperty("sos.trans")?.toDouble() ?: translationConst(root)
         val samples = ArrayList<Sample>()
-        val counts = listOf("bright", "dim", "dark").mapIndexed { i, s -> s to sequence(root, s, i * 10_000, samples) }
+        val counts = SEQS.mapIndexed { i, s -> s to sequence(root, s, i * 10_000, samples) }
         val low = samples.filter { it.clip < CLIP_LO[1] }
         val blurLo = sextiles(low.map { it.blur }); val brightLo = sextiles(low.map { it.bright })
         val nb = blurLo.size; val nd = brightLo.size
@@ -743,7 +754,7 @@ object ToleranceCurveSosCf {
         val nClip = IntArray(CLIP_LO.size) { s -> samples.count { HowToSense.Curve.binOf(CLIP_LO, it.clip) == s } }
         fun row(v: DoubleArray) = v.joinToString(" ") { "%.6g".format(it) }
         val text = buildString {
-            appendLine("# How-to-Sense tolerance curve measured on sos_cf_v1 (Galaxy S26 Ultra, Limo track, 2026-10-16 record)")
+            appendLine("# How-to-Sense tolerance curve measured on $LABEL")
             appendLine("# by ToleranceCurveSosCf (2026-10-26): leave-one-group-out certain cars, detection = conf >= 0.25,")
             appendLine("# HowToSense features (box brightness, clip share, blur = speed x shutter / long side); p, var from clip < 0.05;")
             appendLine("# var by bootstrap over moments ($nBoot); empty bins take the nearest bin's p with var 0.25.")
@@ -759,6 +770,8 @@ object ToleranceCurveSosCf {
             appendLine("p ${row(p)}")
             appendLine("var ${row(varr)}")
             appendLine("clip_factor ${row(cf)}")
+            // The runtime adds the same translation term to the gyro's rotation (HowToSense.gyroSpeeds).
+            if (SPEED == "hybrid") appendLine("trans_per_s %.4f".format(transConst))
         }
         outFile.parentFile?.mkdirs()
         outFile.writeText(text)

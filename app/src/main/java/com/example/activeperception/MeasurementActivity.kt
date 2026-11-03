@@ -1092,7 +1092,7 @@ class MeasurementActivity : AppCompatActivity() {
     private val GLASS_RUNS = listOf(
         GlassRun("보정 기록", "곡선용 · 한 번만 · 약 6분"),
         GlassRun("시험 걷기", "8개 방법 편도 1번씩 · 약 3분"),
-        GlassRun("본 걷기", "8개 방법 × 3번 · 약 16분"))
+        GlassRun("본 걷기", "8개 방법 × 2번 · 약 11분"))
     private var glassChoiceSet = false
 
     /** The idle screen: the chosen run large, the list under it. Before the glass has its own
@@ -1159,18 +1159,18 @@ class MeasurementActivity : AppCompatActivity() {
     private val WALK_METHODS = listOf("newest_ae_phone", "par_physsweep_fast", "newest_fixed_1600_30", "sense",
         "par_shin_nm", "newest_fixed_1600_240", "par_prop_c", "par_nae")
 
-    /** `--es walk_kind`: "main" (default), the experiment: [WALK_METHODS] in 3 passes, forward, back,
-     *  forward (every method 3 blocks; the drift over the session - light, battery, the walker - falls
-     *  on every method alike), each block one round trip; ~16 min. "check": a test walk before it,
+    /** `--es walk_kind`: "main" (default), the experiment: [WALK_METHODS] in 2 passes, forward, back
+     *  (every method 2 blocks, 2 legs each way; the drift over the session - light, battery, the walker - falls
+     *  on every method alike), each block one round trip; ~11 min (3 passes were ~16). "check": a test walk before it,
      *  every method once for one leg (~3 min), to see each runs while walking. */
     private fun walkCheck() = (walkKind ?: intent.getStringExtra("walk_kind")) == "check"
     /** The walk kind chosen on the glass's screen; null: `--es walk_kind`. */
     private var walkKind: String? = null
 
     /** The walk's methods in order: [WALK_METHODS] (or `--es walk_plan a,b,...`, a rerun of some)
-     *  in `--ei walk_rounds` passes (main 3, check 1), every other pass in reverse. */
+     *  in `--ei walk_rounds` passes (main 2, check 1), every other pass in reverse. */
     private fun walkPlan(): List<String> {
-        val passes = intent.getIntExtra("walk_rounds", if (walkCheck()) 1 else 3).coerceAtLeast(1)
+        val passes = intent.getIntExtra("walk_rounds", if (walkCheck()) 1 else 2).coerceAtLeast(1)
         val methods = intent.getStringExtra("walk_plan")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
             ?.takeIf { it.isNotEmpty() } ?: WALK_METHODS
         return (0 until passes).flatMap { r -> if (r % 2 == 0) methods else methods.reversed() }

@@ -1703,7 +1703,7 @@ class MeasurementController(
             .put("every_output_desk_test", everyOutput)
             .put("motion", "gyro over the key exposure (GyroWindow.mean, as the curve's records); f = ${"%.1f".format(fPx)} picture px " +
                 (if (fPx == raw.focalPx640) "(this camera's focal length / sensor width)" else "(the S26's: this camera reports none)") +
-                "; translation ${HowToSense.TRANS_PER_S} car lengths/s (the Limo's)")
+                "; translation ${curve.transPerS} car lengths/s (the curve's)")
             .put("curve", curve.note)
             .put("output_period_ms", outputPeriodMs)
             .put("start", JSONObject().put("ae", ae?.json() ?: JSONObject.NULL)
@@ -1908,7 +1908,7 @@ class MeasurementController(
                 // The motion over the key's exposure as the curve's records took it (GyroWindow.mean:
                 // padded 13 ms each side, else the nearest sample of the ~40 Hz gyro).
                 val gyro = gyroWindow.mean(key.meta.timestamp, key.meta.timestamp + key.meta.appliedExpUs * 1_000L)
-                val speed = HowToSense.gyroSpeeds(gyro.first, sizes.sizes(), fPx)
+                val speed = HowToSense.gyroSpeeds(gyro.first, sizes.sizes(), fPx, curve.transPerS)
                 val choice = JSONObject().put("gyro", JSONObject().put("w", JSONArray(gyro.first.toList())).put("samples", gyro.second))
                 var movedCell = false
                 if (c != cell.get()) choice.put("rule", "the requested setting has not arrived: keep")
