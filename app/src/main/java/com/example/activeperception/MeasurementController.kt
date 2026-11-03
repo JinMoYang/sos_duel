@@ -236,6 +236,7 @@ class MeasurementController(
         m.put("os_sdk", Build.VERSION.SDK_INT)
         if (methodParams != null) m.put("method_params", methodParams)
         if (ExperimentSession.lighting.isNotEmpty()) m.put("lighting", ExperimentSession.lighting)
+        if (ExperimentSession.experimenter > 0) m.put("experimenter", ExperimentSession.experimenter)
         if (ExperimentSession.session.isNotEmpty()) m.put("experiment_session", ExperimentSession.session)
         if (ExperimentSession.limoSpeed.isNotEmpty()) m.put("limo_speed_setting", ExperimentSession.limoSpeed)
         m.put("capture_structure", if (parallelCapture || ownCaptureThread) "parallel: capture thread " +
@@ -3992,6 +3993,9 @@ object ExperimentSession {
     @Volatile var limoSpeed: String = ""
     /** The last run's lap time from the gyro, s; NaN when it turned under half a lap. */
     @Volatile var lastLapS: Double = Double.NaN
+    /** Who walks (2026-11-03: several experimenters; the glass's screen sets it, kept across runs);
+     *  0 = not set. Written into every manifest and the walk log's start. */
+    @Volatile var experimenter: Int = 0
     /** The phone AE start metered in [session] (MeasurementController.meterAeStart). */
     class AeCache(val session: String, val iso: Int, val expUs: Long)
     @Volatile var aeStart: AeCache? = null

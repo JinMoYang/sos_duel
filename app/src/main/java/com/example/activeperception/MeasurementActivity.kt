@@ -152,6 +152,7 @@ class MeasurementActivity : AppCompatActivity() {
         overlay = findViewById(R.id.overlayView)
         cellText = findViewById(R.id.cellText)
         eyes = listOf(Eye(findViewById(R.id.eyeLeft)), Eye(findViewById(R.id.eyeRight)))
+        ExperimentSession.experimenter = prefs.getInt("experimenter", 1)
         previewOn = intent.getBooleanExtra("preview", !rayNeoTouchpad)
         methodGroup = findViewById(R.id.methodGroup)
         periodGroup = findViewById(R.id.periodGroup)
@@ -1088,12 +1089,12 @@ class MeasurementActivity : AppCompatActivity() {
     /** One run the glass's idle screen offers. */
     private class GlassRun(val label: String, val detail: String)
     /** The glass's runs, in the order they are done: the curve record (once), a test walk, the
-     *  experiment walk, and an extra walk of one method ([EXTRA_METHODS]). */
+     *  experiment walk; and the experimenter (2026-11-03: several walk it), which a tap advances. */
     private val GLASS_RUNS = listOf(
         GlassRun("보정 기록", "곡선용 · 한 번만 · 약 6분"),
-        GlassRun("시험 걷기", "8개 방법 편도 1번씩 · 약 3분"),
-        GlassRun("본 걷기", "8개 방법 × 2번 · 약 11분"),
-        GlassRun("추가 걷기: 고정 1/60", "2왕복 · 약 1.5분"))
+        GlassRun("시험 걷기", "9개 방법 편도 1번씩 · 약 3.5분"),
+        GlassRun("본 걷기", "9개 방법 × 2번 · 약 12.5분"),
+        GlassRun("실험자", "눌러서 바꾸기 (1~9) · 기록마다 남음"))
     private var glassChoiceSet = false
 
     /** The idle screen: the chosen run large, the list under it. Before the glass has its own
@@ -1101,7 +1102,8 @@ class MeasurementActivity : AppCompatActivity() {
     private fun showGlassIdle() {
         if (!glassChoiceSet) { glassChoiceSet = true; glassChoice = if (rayneoCurve().isFile) 2 else 0 }
         val r = GLASS_RUNS[glassChoice]
-        showWalk(r.label, r.detail, "밀어서 고르기 · 눌러서 시작", idle = true)
+        if (glassChoice == 3) showWalk("실험자 ${ExperimentSession.experimenter}", r.detail, "밀어서 고르기", idle = true)
+        else showWalk(r.label, r.detail, "밀어서 고르기 · 눌러서 시작", idle = true)
     }
 
     private fun showGlassChoices(visible: Boolean) {
@@ -1110,7 +1112,8 @@ class MeasurementActivity : AppCompatActivity() {
             e.choiceBox.visibility = if (visible) View.VISIBLE else View.GONE
             e.choices.forEachIndexed { i, t ->
                 t.visibility = View.VISIBLE
-                t.text = GLASS_RUNS[i].label + if (i == 0 && curveOk) "  ✓" else ""
+                t.text = GLASS_RUNS[i].label + (if (i == 0 && curveOk) "  ✓" else "") +
+                    (if (i == 3) ": ${ExperimentSession.experimenter}" else "")
                 val on = i == glassChoice
                 t.setTextColor(if (on) android.graphics.Color.WHITE else 0xFF9E9E9E.toInt())
                 t.setBackgroundColor(if (on) 0xFF1E63B5.toInt() else android.graphics.Color.TRANSPARENT)
@@ -1155,7 +1158,11 @@ class MeasurementActivity : AppCompatActivity() {
             0 -> launchRunnerCommand("curve_record")
             1 -> { walkKind = "check"; toggleWalkSession() }
             2 -> { walkKind = "main"; toggleWalkSession() }
-            else -> { walkKind = "extra"; toggleWalkSession() }
+            else -> {
+                ExperimentSession.experimenter = ExperimentSession.experimenter % 9 + 1
+                prefs.edit().putInt("experimenter", ExperimentSession.experimenter).apply()
+                showGlassIdle()
+            }
         }
     }
 
@@ -1176,22 +1183,23 @@ class MeasurementActivity : AppCompatActivity() {
     /** The line on top of the glass's screen: green once its own curve is in place (initialized),
      *  yellow when the record exists but its curve is not built and pushed yet, grey before. */
     private fun curveState(): Pair<String, Int> = when {
-        rayneoCurve().isFile -> "initialized · RayNeo 곡선" to 0xFF4CAF50.toInt()
-        curveRecordDone() -> "보정 기록 있음 · 곡선 설치 전" to 0xFFFFC107.toInt()
-        else -> "보정 전 · S26 곡선 사용 중" to 0xFF9E9E9E.toInt()
+        rayneoCurve().isFile -> "initialized · RayNeo 곡선 · 실험자 ${ExperimentSession.experimenter}" to 0xFF4CAF50.toInt()
+        curveRecordDone() -> "보정 기록 있음 · 곡선 설치 전 · 실험자 ${ExperimentSession.experimenter}" to 0xFFFFC107.toInt()
+        else -> "보정 전 · S26 곡선 사용 중 · 실험자 ${ExperimentSession.experimenter}" to 0xFF9E9E9E.toInt()
     }
 
     /** The walk comparison's methods (2026-11-03 handover §4): sense, AE-Phone and the fixed cells
      *  from the stream's newest read (the same picture age as sense), the fixed 1600 x 1/30 (the
-     *  2026-09-01 walk's custom AE sat there), Sense-well, PhysSweep, ShinNM, Neural-AE. sense sits
-     *  mid-list, so the first and last blocks of a pass are not always its. */
+     *  2026-09-01 walk's custom AE sat there) and 1600 x 1/60 (the garage's strongest fixed cell in the
+     *  2026-11-03 curve record), Sense-well, PhysSweep, ShinNM, Neural-AE. sense sits mid-list, so the
+     *  first and last blocks of a pass are not always its. */
     private val WALK_METHODS = listOf("newest_ae_phone", "par_physsweep_fast", "newest_fixed_1600_30", "sense",
-        "par_shin_nm", "newest_fixed_1600_240", "par_prop_c", "par_nae")
+        "par_shin_nm", "newest_fixed_1600_240", "par_prop_c", "newest_fixed_1600_60", "par_nae")
 
     /** `--es walk_kind`: "main" (default), the experiment: [WALK_METHODS] in 2 passes, forward, back
      *  (every method 2 blocks, 2 legs each way; the drift over the session - light, battery, the walker - falls
-     *  on every method alike), each block one round trip; ~11 min (3 passes were ~16). "check": a test walk before it,
-     *  every method once for one leg (~3 min), to see each runs while walking. */
+     *  on every method alike), each block one round trip; ~12.5 min with 9 methods. "check": a test walk before it,
+     *  every method once for one leg (~3.5 min), to see each runs while walking. */
     private fun walkCheck() = (walkKind ?: intent.getStringExtra("walk_kind")) == "check"
     /** "extra": [EXTRA_METHODS] alone, in its own session after the experiment walk. */
     private fun walkExtra() = (walkKind ?: intent.getStringExtra("walk_kind")) == "extra"

@@ -131,7 +131,7 @@ class WalkSession(
 
     private fun begin() {
         sensors.resetTotalYaw()
-        event("start", note = "plan=" + plan.joinToString("+") + " legs=$legsPerBlock" +
+        event("start", note = "experimenter=${ExperimentSession.experimenter} plan=" + plan.joinToString("+") + " legs=$legsPerBlock" +
             " gravity_locked=${sensors.gravityLocked}")
         beginBlock()
     }
