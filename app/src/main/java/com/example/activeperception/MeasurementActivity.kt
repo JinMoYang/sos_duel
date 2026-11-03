@@ -120,6 +120,10 @@ class MeasurementActivity : AppCompatActivity() {
         Thread(task, "SoS-DisplayIo").apply { priority = Thread.MIN_PRIORITY }
     }
     @Volatile private var runActive = false
+    /** Runs started so far (counted when a run's controller is set), and the count when the walk's
+     *  current block asked for its run: the block's run is the one after that. */
+    @Volatile private var runSerial = 0
+    private var blockRunSerial = 0
     /** The session driving a plan of runs (LapSession: Limo laps; WalkSession: corridor legs on
      *  the glass). Null whenever none is in progress. */
     private var lapSession: PlanSession? = null
@@ -1112,8 +1116,13 @@ class MeasurementActivity : AppCompatActivity() {
         }
     }
 
-    /** A tap on the idle glass: starts the chosen run. */
+    /** A tap on the idle glass: starts the chosen run, always with its defaults. Overrides an adb
+     *  launch left in the intent must not carry over (2026-11-03: a 10-moment desk test's
+     *  curve_moments made the wearer's curve record 10 moments long). */
     private fun startGlassChoice() {
+        for (k in listOf("curve_moments", "curve_countdown_s", "walk_plan", "walk_rounds", "walk_legs",
+                "walk_kind", "walk_start_delay_s", "collect_frames")) intent.removeExtra(k)
+        launchCollectFrames = null
         when (glassChoice) {
             0 -> launchRunnerCommand("curve_record")
             1 -> { walkKind = "check"; toggleWalkSession() }
@@ -1207,8 +1216,10 @@ class MeasurementActivity : AppCompatActivity() {
         val session = WalkSession(this, sensors, object : LapSession.Host {
             override fun startBlock(method: String) {
                 ExperimentSession.runLap = 0
+                blockRunSerial = runSerial
                 launchRunnerCommand(method)
             }
+            override fun runReady() = runSerial > blockRunSerial && (mc?.totalFramesLogged ?: 0) > 0
             override fun stopBlock() = stopMeasurement(userInitiated = false)
             override fun status(text: String) = post(text)
             override fun buzz(ms: Long) = vibrate(ms)
@@ -1561,6 +1572,8 @@ class MeasurementActivity : AppCompatActivity() {
                 mcLocal.appFilesDir = getExternalFilesDir(null)
                 raw.fixedFocusDiopters = focusNow
                 mc = mcLocal
+                // After mc: a walk block that sees the new serial reads the new run's outputs.
+                runSerial++
                 if (stopPending) mcLocal.stop()
                 try {
                     block()

@@ -23,7 +23,8 @@ import kotlin.math.abs
  * (it is logged as turn_rejected). After a turn none is counted for [TURN_GAP_MS].
  *
  * There is no time fallback. The wearer hears every event instead and stops the session when
- * one is missing or wrong: a turn counted, one short beep; a method started, two beeps; the
+ * one is missing or wrong: a turn counted, one short beep; a method ready (its first output: walk
+ * now), two beeps; the
  * plan done, three long beeps; a run that stopped by itself, a switch that did not finish in
  * [SWITCH_TIMEOUT_MS], or the session stopped by the app being paused ([interrupted]), an alarm.
  *
@@ -58,10 +59,15 @@ class WalkSession(
         const val TURN_CONFIRM_MS = 800L
         const val TURN_GAP_MS = 3_000L
         const val SWITCH_TIMEOUT_MS = 20_000L
+        /** Longest wait for a block's first output before walking anyway (with the alarm). */
+        const val READY_TIMEOUT_MS = 20_000L
         private const val TICK_MS = 50L
     }
 
-    private enum class State { IDLE, COUNTDOWN, RUNNING, SWITCHING }
+    /** READYING (2026-11-03): a block's run has been started but has no output yet; the wearer
+     *  stands until its two beeps, so no method's start-up (0.9-5 s on that day's walk) falls in
+     *  the corridor. */
+    private enum class State { IDLE, COUNTDOWN, READYING, RUNNING, SWITCHING }
     private enum class Sound { TURN, BLOCK, DONE, ALARM }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -125,17 +131,28 @@ class WalkSession(
         beginBlock()
     }
 
+    /** Starts the block's run, then waits ([State.READYING]) for its first output before the
+     *  wearer walks: the two beeps sound only then. */
     private fun beginBlock() {
         legsInBlock = 0
+        state = State.READYING
+        readyStartMs = SystemClock.elapsedRealtime()
+        event("block_start")
+        screen.show("준비 중", displayName(plan[blockIdx]), "서서 기다리기 · 삑삑: 출발")
+        host.startBlock(plan[blockIdx])
+    }
+
+    /** The block's run is producing: the wearer walks from here, and turns count from here. */
+    private fun blockReady(note: String = "") {
         history.clear(); candidateMs = 0L
         lastTurnMs = SystemClock.elapsedRealtime()
         state = State.RUNNING
-        event("block_start")
+        event("block_ready", note = note)
         play(Sound.BLOCK)
         host.buzz(120)
         showProgress()
-        host.startBlock(plan[blockIdx])
     }
+    private var readyStartMs = 0L
 
     /** Stops driving the plan. Does not stop the current run; the caller does that. */
     override fun abort() {
@@ -156,7 +173,7 @@ class WalkSession(
     override fun onRunEnded() {
         when (state) {
             State.SWITCHING -> {}
-            State.RUNNING -> {
+            State.RUNNING, State.READYING -> {
                 event("block_ended_early", note = "the run stopped by itself")
                 play(Sound.ALARM)
             }
@@ -186,6 +203,15 @@ class WalkSession(
                         countdownShownS = s
                         screen.show("시작까지 ${s}초", "첫 방법: ${displayName(plan[0])}", "방법 1/${plan.size}")
                     }
+                }
+            }
+            State.READYING -> when {
+                host.runReady() -> blockReady("%.1f s after the block start".format((nowMs - readyStartMs) / 1000.0))
+                nowMs - readyStartMs > READY_TIMEOUT_MS -> {
+                    // A run with no output yet must not hold the wearer forever.
+                    event("ready_timeout")
+                    play(Sound.ALARM)
+                    blockReady("no output in ${READY_TIMEOUT_MS / 1000} s")
                 }
             }
             State.RUNNING -> if (turned(nowMs)) {

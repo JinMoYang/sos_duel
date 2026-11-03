@@ -439,12 +439,28 @@ class MeasurementController(
      *  legacy one-shot path — so it must come before the fast pipeline opens — until two
      *  frames in a row agree within 5% in ISO x exposure (at least 6, at most 20 frames; AE
      *  can arrive far from the scene, e.g. from a previous dark run). */
-    private class AeStart(val iso: Int, val expUs: Long, val frames: Int, val settled: Boolean) {
+    private class AeStart(val iso: Int, val expUs: Long, val frames: Int, val settled: Boolean,
+                          val reused: Boolean = false) {
         fun json(): JSONObject = JSONObject().put("iso", iso).put("exposure_us", expUs)
-            .put("frames", frames).put("settled", settled)
+            .put("frames", frames).put("settled", settled).put("reused", reused)
     }
 
+    /** The phone AE's setting as a start (sense, ShinNM, Neural-AE). Within a session (a walk) it
+     *  is metered once, by the first block that asks, and reused: metering takes ~3 s of one-shot
+     *  AE reads at every block start, and in the 2026-11-03 garage it read the same exposure
+     *  every time (ISO 699 x 20 ms or ISO 1397 x 10 ms, one product). */
     private fun meterAeStart(onStatus: (String) -> Unit): AeStart? {
+        val sess = ExperimentSession.session
+        ExperimentSession.aeStart?.takeIf { sess.isNotEmpty() && it.session == sess }?.let {
+            onStatus("start setting: the phone AE metered at this session's first block")
+            return AeStart(it.iso, it.expUs, 0, true, reused = true)
+        }
+        return meterAeNow(onStatus)?.also {
+            if (sess.isNotEmpty() && it.settled) ExperimentSession.aeStart = ExperimentSession.AeCache(sess, it.iso, it.expUs)
+        }
+    }
+
+    private fun meterAeNow(onStatus: (String) -> Unit): AeStart? {
         onStatus("metering the start setting with phone AE…")
         var iso = -1; var expUs = -1L; var prev = -1.0; var n = 0
         while (n < 20) {
@@ -3976,4 +3992,7 @@ object ExperimentSession {
     @Volatile var limoSpeed: String = ""
     /** The last run's lap time from the gyro, s; NaN when it turned under half a lap. */
     @Volatile var lastLapS: Double = Double.NaN
+    /** The phone AE start metered in [session] (MeasurementController.meterAeStart). */
+    class AeCache(val session: String, val iso: Int, val expUs: Long)
+    @Volatile var aeStart: AeCache? = null
 }

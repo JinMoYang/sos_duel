@@ -72,6 +72,9 @@ class LapSession(
          *  which [startBlock] itself opens. */
         fun lapStarted(method: String, lapsInBlock: Int)
         fun sessionEnded(completed: Boolean)
+        /** Whether the run [startBlock] last started has produced an output ([WalkSession] waits
+         *  for it before the wearer walks). */
+        fun runReady(): Boolean = true
     }
 
     companion object {
