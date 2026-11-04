@@ -57,6 +57,11 @@ class SensorDataManager(
     var currentYawRate: Double = 0.0
         private set
 
+    /** Timestamp of the newest gyroscope event, on Android's sensor/boot-time clock. Rotation
+     *  sessions sample this beside camera timestamps so phase alignment can be audited offline. */
+    @Volatile var lastGyroTimestampNs: Long = 0L
+        private set
+
     /** Integrated heading in degrees, reset each lap. Recorded in frames.csv as the
      *  path-position proxy used to align passes offline. */
     var currentHeadingAngle: Double = 0.0
@@ -240,6 +245,7 @@ class SensorDataManager(
     }
 
     private fun processGyroscope(values: FloatArray, timestamp: Long) {
+        lastGyroTimestampNs = timestamp
         val x = values[0]
         val y = values[1]
         val z = values[2]

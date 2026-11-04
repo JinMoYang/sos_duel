@@ -77,5 +77,9 @@
         <TextView
             android:id="@+id/eyeChoice3"
             style="@style/WalkChoice" />
+
+        <TextView
+            android:id="@+id/eyeChoice4"
+            style="@style/WalkChoice" />
     </LinearLayout>
 </LinearLayout>

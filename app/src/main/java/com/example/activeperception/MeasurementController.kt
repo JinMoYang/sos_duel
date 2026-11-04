@@ -178,7 +178,8 @@ class MeasurementController(
     ) + StepClock.HEADERS + V3_FRAME_HEADERS +
         // Lap of the run this frame belongs to, 0 = the run's first lap, counted by the lap
         // session that switches runs (blank outside a lap session: -1).
-        listOf("run_lap")
+        listOf("run_lap", "rotation_block", "rotation_pass", "rotation_valid",
+            "rotation_phase", "rotation_direction")
 
 
     /** proposed_v3cause's per-frame summary (device spec 6.4); blank for every other method.
@@ -583,7 +584,13 @@ class MeasurementController(
             healthNow.voltageMv, healthNow.batteryPct, healthNow.pluggedState,
             *stepClock.columns(StepClock.nowNs()).toTypedArray(),
             *(v3Extra ?: List(V3_FRAME_HEADERS.size) { "" }).map { it ?: "" }.toTypedArray(),
-            ExperimentSession.runLap
+            ExperimentSession.runLap,
+            if (ExperimentSession.rotationActive) ExperimentSession.rotationBlock else "",
+            if (ExperimentSession.rotationActive) ExperimentSession.rotationPass else "",
+            if (ExperimentSession.rotationActive) if (ExperimentSession.rotationValid) 1 else 0 else "",
+            if (ExperimentSession.rotationActive && !ExperimentSession.rotationPhase.isNaN())
+                "%.5f".format(ExperimentSession.rotationPhase) else "",
+            if (ExperimentSession.rotationActive) ExperimentSession.rotationDirection else ""
         ))
         stepClock.reset()
         if (writeDetsLine) writeDets(idx, method, chosenCell, dets)
@@ -3996,6 +4003,15 @@ object ExperimentSession {
     /** Who walks (2026-11-03: several experimenters; the glass's screen sets it, kept across runs);
      *  0 = not set. Written into every manifest and the walk log's start. */
     @Volatile var experimenter: Int = 0
+    /** Rotation-experiment annotations appended to every frames.csv row. Warm-up/transition frames
+     *  remain saved but have rotation_valid=0; only a reference-to-reference cycle has value 1. */
+    @Volatile var rotationActive: Boolean = false
+    @Volatile var rotationValid: Boolean = false
+    @Volatile var rotationBlock: Int = -1
+    @Volatile var rotationPass: Int = -1
+    @Volatile var rotationPhase: Double = Double.NaN
+    /** +1 / -1 are gyro-axis directions; 0 means stationary, transition, or outside a session. */
+    @Volatile var rotationDirection: Int = 0
     /** The phone AE start metered in [session] (MeasurementController.meterAeStart). */
     class AeCache(val session: String, val iso: Int, val expUs: Long)
     @Volatile var aeStart: AeCache? = null
