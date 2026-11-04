@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -70,6 +71,7 @@ class MeasurementActivity : AppCompatActivity() {
     private lateinit var detector: TfliteYoloDetector
     private lateinit var sensors: SensorDataManager
     private lateinit var health: DeviceHealthMonitor
+    private var rotationWakeLock: PowerManager.WakeLock? = null
     private lateinit var status: TextView
     private lateinit var preview: ImageView
     private lateinit var overlay: OverlayView
@@ -1322,6 +1324,7 @@ class MeasurementActivity : AppCompatActivity() {
         presetRunCap = null
         ExperimentSession.lighting = intent.getStringExtra("lighting").orEmpty()
         ExperimentSession.session = "rotation_${System.currentTimeMillis()}"
+        acquireRotationWakeLock()
         val session = RotationSession(this, sensors, object : LapSession.Host {
             override fun startBlock(method: String) {
                 blockRunSerial = runSerial
@@ -1335,6 +1338,7 @@ class MeasurementActivity : AppCompatActivity() {
             override fun lapStarted(method: String, lapsInBlock: Int) = Unit
             override fun sessionEnded(completed: Boolean) {
                 lapSession = null
+                releaseRotationWakeLock()
                 ExperimentSession.lighting = ""
                 ExperimentSession.session = ""
                 showGlassChoices(true)
@@ -1347,6 +1351,34 @@ class MeasurementActivity : AppCompatActivity() {
             currentRunName = { lastRunDir?.name.orEmpty() })
         lapSession = session
         session.start()
+    }
+
+    /** RayNeo may enforce an off-head sleep independently of Android's normal screen timeout. */
+    @Suppress("DEPRECATION")
+    private fun acquireRotationWakeLock() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
+        if (rotationWakeLock?.isHeld == true) return
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        rotationWakeLock = pm.newWakeLock(
+            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+            "SoS:RotationSession"
+        ).apply {
+            setReferenceCounted(false)
+            // Safety timeout; a normal session releases this explicitly much earlier.
+            acquire(2 * 60 * 60 * 1_000L)
+        }
+    }
+
+    private fun releaseRotationWakeLock() {
+        rotationWakeLock?.let { if (it.isHeld) it.release() }
+        rotationWakeLock = null
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
     }
 
     /** DPAD-style input is emitted by some RayNeo firmware and is also useful for testing. */
@@ -1761,6 +1793,7 @@ class MeasurementActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        releaseRotationWakeLock()
         mc?.stop()
         resourcesMustClose = true
         queueResourceClose()

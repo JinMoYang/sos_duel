@@ -100,6 +100,9 @@ class RotationSession(
     }
 
     private fun begin() {
+        // Unlike a walk, an already-running turntable may never be still enough for the normal
+        // conservative gravity lock. Its accelerometer vector is nevertheless gravity-dominated.
+        sensors.lockProvisionalGravityForRotation()
         sensors.resetTotalYaw()
         tracker.reset()
         referenceDirection = 0
@@ -179,6 +182,9 @@ class RotationSession(
             sample("sample")
             return
         }
+
+        // The first accelerometer sample can arrive just after begin(); retry until available.
+        if (!sensors.gravityLocked) sensors.lockProvisionalGravityForRotation()
 
         val reversal = if (sensors.gravityLocked) tracker.update(
             now, sensors.totalYawDeg, sensors.currentYawRate) else null
