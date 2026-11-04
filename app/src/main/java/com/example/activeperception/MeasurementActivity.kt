@@ -254,6 +254,10 @@ class MeasurementActivity : AppCompatActivity() {
             btnStart.postDelayed({ if (lapSession == null) toggleLapSession() }, 1500)
         }
         if (intent.getBooleanExtra("rotation_session", false)) {
+            // Off-head RayNeo can sleep during the 1.5 s cold-start delay, before the session's
+            // normal acquisition point. Hold it from the moment an automatic rotation launch is
+            // recognized.
+            acquireRotationWakeLock()
             btnStart.postDelayed({ if (lapSession == null) toggleRotationSession() }, 1500)
         }
         // General adb runner — the glass touchpad intercepts injected taps (focus-first
@@ -270,6 +274,7 @@ class MeasurementActivity : AppCompatActivity() {
             findViewById<android.widget.RadioButton>(pid).isChecked = true
         }
         intent.getStringExtra("run")?.let { cmd ->
+            if (cmd == "rotation") acquireRotationWakeLock()
             btnStart.postDelayed({ launchRunnerCommand(cmd) }, 1500)
         }
         btnStop.setOnClickListener { stopMeasurement() }
