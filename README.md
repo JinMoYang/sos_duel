@@ -2,6 +2,30 @@
 
 검출 결과를 보고 카메라 노출(셔터·ISO)을 고르는 Android 앱. Galaxy S26 Ultra를 Limo에 달고, 트랙의 장난감 차 검출로 방법들을 비교한다. 이전 실험 전부는 `topdown-base` 브랜치에 있다.
 
+## 2026-11-04 업데이트 (`topdown-base` `1eb32e6` 까지 합침)
+
+아래 TL;DR 과 결과표는 10-29 판이다. 11-04 부터 바뀐 것:
+
+- **proposed = `sense`** (앱 spec 2026-11-03).
+  - key 는 요청한 설정의 가장 새 read 다.
+  - 직전 출력 key 에 망설임 (.05–.25 차량 box, key 의 .25 이상 box 와 IoU < .3) 이 있을 때만 key + 2 장 합을 한 batch 로 검출한다. 틈 있는 read (1/240, 1/120) 는 화소 정렬해 더하고, 틈 없는 read (1/60, 1/30) 는 그대로 더한다.
+  - 출력은 .25 이상 box 의 NMS 합집합이다.
+  - KE 는 7 × 8 곡선 (`assets/tolerance_curve_gyro_7x8.txt`) 과 차 사전 (`CarPrior`) 으로 고른다. 다음 설정 고르기는 출력 경로 밖에서 돈다.
+  - 기록: 사진마다 모든 class 검출, 25 칸 기대값, 정렬 잔차, key / 합 JPEG (품질 85).
+- **main 버튼**: sense + baseline 6 개, 7 방법 × 2 바퀴 (14 run, 방법당 4 바퀴).
+- **촬영 계층**
+  - sense 와 baseline 은 반복 요청 공용 계층에서 돌고, 출력이 쓰는 read 만 해독한다.
+  - PhysSweep (fast) 만 요청을 하나씩 넣는 방식 (미리 넣는 요청 5 개) 으로 돈다. 반복 요청에서는 계획한 출력 설정이 찍히기 전에 바뀌어 멈췄다. 아래 '알려진 문제' 의 PhysSweep 멈춤은 이것으로 고쳤다.
+- **기타**
+  - `switch_probe` (설정 반영 지연 재기)
+  - `--ez net_probe true` (주행 중 망 왕복 시간 기록)
+  - 곡선 제작 옵션 `-Dsos.nb/nd/blur_edges/bright_edges/clip_edges`
+- **11-04 결과** (빠름 · 느림 × 밝음 · dim · 어두움, 사진당 찾은 차):
+  - dim 에서는 sense 가 모든 baseline 보다 높다.
+  - 밝음 · 어두움에서는 sense 와 Sense-well 이 비긴다.
+  - sense 는 합을 쓴 출력의 정렬 때문에 7.8–9.2 fps 로 돌았다.
+  - 데이터와 자세한 표는 서버용 데이터셋 `S26_main_dataset_2026-11-04` 의 `docs/main_results_1104.md`.
+
 ## TL;DR
 
 - **구조 (프레임 예산 파이프라인)**: 10 fps 마감(100 ms)마다 출력 하나. 촬영 thread는 센서를 쉬지 않고 읽고, 분석 thread는 마감마다 최신 RAW를 쓴다. 출력 하나의 예산 = RAW 6장, 검출 4장.

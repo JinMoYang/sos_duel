@@ -537,8 +537,14 @@ class MeasurementActivity : AppCompatActivity() {
         /** Lighting the operator declared by the button pressed; goes into every manifest. */
         val lighting: String? = null,
         /** Prefix of the experiment_session label every run of a lighting preset carries. */
-        val sessionTag: String = "duel2_main"
+        val sessionTag: String = "duel2_main",
+        /** Every run of the session records the network beside it (NetProbe, app spec
+         *  2026-11-03 §2.2), as `--ez net_probe true` does for an adb launch. */
+        val netProbe: Boolean = false
     )
+
+    /** True while a lap session whose preset asks for the network record runs (start() reads it). */
+    @Volatile private var sessionNetProbe = false
 
     /** Laps per run: 3 until the 2026-10-26 bright session; 2 since the Limo was slowed to
      *  ~20 s a lap (that session took 24 min). */
@@ -547,18 +553,21 @@ class MeasurementActivity : AppCompatActivity() {
     /** A lap plan of three rounds, one run of [MAIN_LAPS] laps per method each round, the order
      *  shifted by one each round (no method always follows the same one, slow drift - light,
      *  battery, Limo speed - spreads over all). Each run starts fresh. */
-    private fun rounds(methods: List<String>) = (0 until 3).flatMap { r ->
+    private fun rounds(methods: List<String>, n: Int = 3) = (0 until n).flatMap { r ->
         methods.indices.map { methods[(it + r) % methods.size] }
     }.joinToString(",") { "$it:$MAIN_LAPS" }
 
-    /** The final comparison (2026-10-29), parallel structure for every method (capture and analysis
-     *  on separate threads, 10 fps): the proposed method (addl_3_sep_every: the key read at the
-     *  curve's setting plus up to 3 more at that setting every frame, each detected on its own, fused)
-     *  and the baselines moved unchanged onto the parallel capture (par_*), PhysSweep as fast
-     *  PhysSweep. 21 runs, ~12 min per lighting. */
-    private val PAR_MAIN_METHODS = listOf("addl_3_sep_every", "par_ae_phone", "par_prop_c", "par_physsweep_fast",
+    /** The final comparison, parallel structure for every method (capture and analysis on separate
+     *  threads, 10 fps): the proposed method and the baselines moved unchanged onto the parallel
+     *  capture (par_*), PhysSweep as fast PhysSweep. The proposed method is sense (2026-11-04: app
+     *  spec 2026-11-03, MeasurementController.runSense); the 2026-10-29 comparison ran
+     *  addl_3_sep_every, still startable by lap_plan. */
+    private val PAR_MAIN_METHODS = listOf("sense", "par_ae_phone", "par_prop_c", "par_physsweep_fast",
         "par_shin_nm", "par_nae", "par_fixed_1600_240")
-    private val PAR_MAIN_PLAN = rounds(PAR_MAIN_METHODS)
+    /** Two rounds since 2026-11-04 (14 runs, 4 laps a method, ~6.3 min a lighting at the fast
+     *  Limo): the 10-29 lap-to-lap spread puts the nearest bright and dim differences at ~2.2
+     *  standard errors with 4 laps (2.7-2.8 with 6). */
+    private val PAR_MAIN_PLAN = rounds(PAR_MAIN_METHODS, 2)
 
     /*
      * Earlier checks, startable by lap_plan (same rounds, 2 laps a run):
@@ -581,15 +590,21 @@ class MeasurementActivity : AppCompatActivity() {
     /** The proposed method's tolerance curve (gyro + translation speeds), in assets. */
     private val CURVE_FILE = "tolerance_curve_gyro.txt"
 
+    /** sense's curve (2026-11-04): 7 blur x 8 brightness bins, the app's own motion (gyro rotation +
+     *  2.6 car lengths/s), from sos_cf_v1's three records by ToleranceCurveSosCf. The research side's
+     *  curve_galaxy_7x8.json measures blur with the rotation alone, so the app's blur would read the
+     *  wrong rows of it. */
+    private val SENSE_CURVE_FILE = "tolerance_curve_gyro_7x8.txt"
+
     private val EXP_PRESETS = linkedMapOf(
         // Main tab: the Duel experiment, one press per lighting (5 s countdown, a lead-in
         // lap, then 24 runs; one beep at the start, three at the end).
         R.id.expMainBright to LapPreset("main (parallel), bright", PAR_MAIN_PLAN, 1, lighting = "bright",
-            sessionTag = "par_main"),
+            sessionTag = "par_main_sense"),
         R.id.expMainDim to LapPreset("main (parallel), dim", PAR_MAIN_PLAN, 1, lighting = "dim",
-            sessionTag = "par_main"),
+            sessionTag = "par_main_sense"),
         R.id.expMainDark to LapPreset("main (parallel), dark", PAR_MAIN_PLAN, 1, lighting = "dark",
-            sessionTag = "par_main"),
+            sessionTag = "par_main_sense"),
         // Check tab: when to spend the additional exposures, dim and dark (see VERIFY_E_PLAN).
         R.id.expVerifyDim to LapPreset("verify trace / every frame, dim", VERIFY_E_PLAN, 1, lighting = "dim",
             sessionTag = "addl_every_verify"),
@@ -652,6 +667,7 @@ class MeasurementActivity : AppCompatActivity() {
             "addl_5_sep" -> "check: key + 5 more, separate"
             "addl_3_merge_every" -> "check: key + 3 more every frame, merged"
             "addl_3_sep_every" -> "proposed: key + up to 3 more every frame, separate"
+            "sense" -> "proposed: sense (11-03), key + aligned sum after a trace"
             "fixed_1600_240" -> "reference: fixed 1600 · 1/240"
             "nae" -> "baseline: Neural-AE"
             "prop_c" -> "baseline: Sense-well"
@@ -725,17 +741,21 @@ class MeasurementActivity : AppCompatActivity() {
         }
         val plan = LapSession.parsePlan(launchLapPlan ?: preset?.plan ?: LapSession.DEFAULT_PLAN)
         if (plan.isEmpty()) { post("lap plan is empty"); return }
-        // The proposed method cannot start without its tolerance curve; refuse the whole session
-        // up front rather than let its blocks silently not start while the laps are counted.
-        if (plan.any { it.method.startsWith("addl_") } && runCatching {
-                HowToSense.Curve.parse(assets.open(CURVE_FILE).bufferedReader().use { it.readText() })
-            }.isFailure) {
+        // The proposed methods cannot start without their tolerance curves; refuse the whole
+        // session up front rather than let its blocks silently not start while the laps are counted.
+        val curvesNeeded = plan.mapNotNull { if (it.method == "sense") SENSE_CURVE_FILE
+            else if (it.method.startsWith("addl_")) CURVE_FILE else null }.distinct()
+        val missing = curvesNeeded.filter { f -> runCatching {
+                HowToSense.Curve.parse(assets.open(f).bufferedReader().use { it.readText() })
+            }.isFailure }
+        if (missing.isNotEmpty()) {
             restoreStepButton(false); showNow("no tolerance curve")
-            post("the proposed method needs assets/$CURVE_FILE — session not started")
+            post("the proposed method needs assets/${missing.joinToString()} — session not started")
             return
         }
         // Runs in a lap session end by laps, never by a frame cap left over from a step.
         presetRunCap = null
+        sessionNetProbe = preset?.netProbe == true
         ExperimentSession.lighting = preset?.lighting.orEmpty()
         ExperimentSession.session = if (preset?.lighting != null)
             "${preset.sessionTag}_${preset.lighting}_${System.currentTimeMillis()}" else ""
@@ -774,6 +794,7 @@ class MeasurementActivity : AppCompatActivity() {
             }
             override fun sessionEnded(completed: Boolean) {
                 lapSession = null
+                sessionNetProbe = false
                 ExperimentSession.runLap = -1
                 ExperimentSession.lighting = ""; ExperimentSession.session = ""
                 clearLaunchOverrides()
@@ -867,6 +888,29 @@ class MeasurementActivity : AppCompatActivity() {
         // separate threads (MeasurementController.runBudgetProbe).
         if (cmd == "budget_probe") {
             start(cmd) { mc!!.runBudgetProbe(::post) }
+            return
+        }
+        // Desk test, phone still: how long a new setting takes to reach the sensor per request
+        // queue (MeasurementController.runSwitchProbe).
+        if (cmd == "switch_probe") {
+            start(cmd) { mc!!.runSwitchProbe(::post) }
+            return
+        }
+        // The proposed method of 2026-11-03 (MeasurementController.runSense): key = the newest read,
+        // key + aligned 2-read sum after a key trace. Desk tests, once then forgotten:
+        // --ez sense_every true (every output detects the sum), --ei addl_start_cell c.
+        if (cmd == "sense") {
+            val curveFile = SENSE_CURVE_FILE
+            val curve = runCatching {
+                HowToSense.Curve.parse(assets.open(curveFile).bufferedReader().use { it.readText() })
+            }.getOrElse { post("sense needs assets/$curveFile: ${it.message}"); return }
+            val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
+            val every = intent?.getBooleanExtra("sense_every", false) == true
+            intent?.removeExtra("sense_every")
+            val forced = intent?.getIntExtra("addl_start_cell", -1)?.takeIf { it in 0 until 25 }
+            intent?.removeExtra("addl_start_cell")
+            start(cmd) { mc!!.runSense(curve, cap, ::post, ::showFrame, everyFrameSum = every,
+                startCellOverride = forced, curveFile = curveFile) }
             return
         }
         // The additional-exposure check: addl_0, addl_<extra>_merge | _sep (extra 1-5), the key
@@ -1151,6 +1195,18 @@ class MeasurementActivity : AppCompatActivity() {
     private fun start(modeTag: String, block: () -> Unit) {
         val par = parallelNext
         parallelNext = false
+        // `--ez legacy_capture true` (once, then forgotten): the 2026-10-29 comparison's capture
+        // queues instead of the repeating request (MeasurementController.legacyCapture).
+        val legacy = intent?.getBooleanExtra("legacy_capture", false) == true
+        intent?.removeExtra("legacy_capture")
+        // `--ez decode_all true` (once, then forgotten): the repeating layer decodes every read
+        // on arrival instead of only the reads an output takes (MeasurementController.decodeAll).
+        val decodeAllNow = intent?.getBooleanExtra("decode_all", false) == true
+        intent?.removeExtra("decode_all")
+        // `--ez net_probe true`: the network record beside every run of this launch (NetProbe);
+        // the main tab's lap sessions turn it on for each of their runs (LapPreset.netProbe).
+        val netProbeNow = intent?.getBooleanExtra("net_probe", false) == true || sessionNetProbe
+        val netProbeUrl = intent?.getStringExtra("net_probe_url") ?: "http://147.46.244.63:8000"
         if (runActive) { post("busy — stop first"); return }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED) { post("no camera permission"); return }
@@ -1193,12 +1249,23 @@ class MeasurementActivity : AppCompatActivity() {
                 mcLocal.deviceId = device
                 mcLocal.saveImages = saveImagesNow
                 mcLocal.parallelCapture = par
+                mcLocal.legacyCapture = legacy
+                mcLocal.decodeAll = decodeAllNow
                 mcLocal.appFilesDir = getExternalFilesDir(null)
                 raw.fixedFocusDiopters = focusNow
                 mc = mcLocal
+                // `--ez net_probe true` (kept for every run of this launch, any method): the
+                // network record of the app spec 2026-11-03 §2.2 beside the run (NetProbe);
+                // `--es net_probe_url` overrides the server. Not the offload: nothing is detected
+                // from it and the method never sees it.
+                val probe = if (netProbeNow) NetProbe(netProbeUrl, logger.dir,
+                    assets.open("net_probe_q16.jpg").use { it.readBytes() },
+                    assets.open("net_probe_full.jpg").use { it.readBytes() }, onStatus = ::post)
+                    .also { it.start() } else null
                 try {
                     block()
                 } finally {
+                    runCatching { probe?.stop() }
                     logger.close()
                 }
                 // All 80 COCO classes are retained; the UI threshold only controls scoring/drawing.
