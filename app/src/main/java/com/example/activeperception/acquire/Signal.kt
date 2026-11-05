@@ -13,6 +13,8 @@ package com.example.activeperception.acquire
 object Signal {
     /** COCO bicycle, car, motorcycle, bus, truck — `sense.proxy.VEH_CLASSES`. */
     val VEH_CLASSES = intArrayOf(1, 2, 3, 5, 7)
+    /** Every class emitted by the standard COCO-80 YOLOv8n head. */
+    val ALL_COCO_CLASSES = IntArray(80) { it }
     const val CONF_THR = 0.25f
     const val IOU_MATCH = 0.3
 
@@ -29,7 +31,24 @@ object Signal {
     /** V3 sumconf — the controller's selection signal. Mirrors `sense.proxy.sumconf`:
      *  vehicle classes at/above [thr], greedy highest-first dedup at [IOU_MATCH]. */
     fun sumConfV3(dets: List<Detection>, thr: Float = CONF_THR): Double {
-        val cand = dets.filter { VEH_CLASSES.contains(it.classId) && it.confidence >= thr }
+        return sumConfDedup(dets, thr) { VEH_CLASSES.contains(it.classId) }
+    }
+
+    /** All-COCO selection signal used by the RayNeo experiment.
+     *
+     * Every COCO-80 class can influence candidate selection. Greedy class-agnostic dedup is
+     * intentionally retained so overlapping duplicate boxes cannot win only by being counted
+     * several times.
+     */
+    fun sumConfAllCoco(dets: List<Detection>, thr: Float = CONF_THR): Double =
+        sumConfDedup(dets, thr) { it.classId in 0 until 80 }
+
+    private inline fun sumConfDedup(
+        dets: List<Detection>,
+        thr: Float,
+        accept: (Detection) -> Boolean
+    ): Double {
+        val cand = dets.filter { accept(it) && it.confidence >= thr }
             .sortedByDescending { it.confidence }
         val kept = ArrayList<Detection>(cand.size)
         var sum = 0.0

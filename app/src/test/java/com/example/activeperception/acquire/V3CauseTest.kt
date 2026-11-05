@@ -37,11 +37,11 @@ class V3CauseTest {
             d(0.10, b(1.0, 1.0, 10.0, 10.0)),      // overlaps the output -> suppressed in low
             d(0.12, b(40.0, 40.0, 50.0, 50.0)),    // weak
             d(0.04, b(80.0, 80.0, 90.0, 90.0)),    // below 0.05
-            d(0.30, b(100.0, 100.0, 110.0, 110.0), cls = 0)  // person: ignored
+            d(0.30, b(100.0, 100.0, 110.0, 110.0), cls = 0)  // person: kept in All-COCO
         )
         val p = V3Cause.perImage(raw)
-        assertEquals(1, p.out.size)
-        assertEquals(2, p.low.size)
+        assertEquals(2, p.out.size)
+        assertEquals(3, p.low.size)
         assertEquals(1, p.weak.size)
         assertEquals(0.12, p.weak[0].conf, 1e-12)
     }

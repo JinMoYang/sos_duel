@@ -9,8 +9,8 @@ package com.example.activeperception.acquire
  * Ties keep the input order, as Python's stable sort does.
  */
 object V3Cause {
-    /** COCO: bicycle, car, motorcycle, bus, truck. */
-    val VEH = setOf(1, 2, 3, 5, 7)
+    /** Standard COCO-80 output domain. */
+    val ALL_COCO = (0 until 80).toSet()
     const val OUT_THR = 0.25
     const val WEAK_LO = 0.05
     const val PLACE_IOU = 0.3
@@ -46,9 +46,9 @@ object V3Cause {
 
     /** Detector output (conf >= 0.05 kept upstream or here) -> (outputs, low incl., weak). */
     fun perImage(raw: List<D>): PerImage {
-        val v = raw.filter { it.cls in VEH }
-        val low = nms(v.filter { it.conf >= WEAK_LO })
-        val out = nms(v.filter { it.conf >= OUT_THR })
+        val coco = raw.filter { it.cls in ALL_COCO }
+        val low = nms(coco.filter { it.conf >= WEAK_LO })
+        val out = nms(coco.filter { it.conf >= OUT_THR })
         val weak = low.filter { d -> d.conf < OUT_THR && out.all { iou(d.box, it.box) < PLACE_IOU } }
         return PerImage(out, low, weak)
     }

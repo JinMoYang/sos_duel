@@ -46,6 +46,16 @@ class SignalTest {
         assertEquals(1.6, Signal.sumConfV3(dets), 1e-4)
     }
 
+    @Test fun `all COCO signal includes non-vehicle classes`() {
+        val dets = listOf(
+            det(0f, 0f, 100f, 100f, 0.9f, 74),       // clock
+            det(200f, 0f, 300f, 100f, 0.8f, 41),     // cup
+            det(0f, 200f, 100f, 300f, 0.7f, 38),     // tennis racket
+            det(200f, 200f, 300f, 300f, 0.10f, 54)   // donut below threshold
+        )
+        assertEquals(2.4, Signal.sumConfAllCoco(dets), 1e-4)
+    }
+
     @Test fun `iou matches hand computation`() {
         val a = floatArrayOf(0f, 0f, 10f, 10f)
         val b = floatArrayOf(5f, 0f, 15f, 10f)
