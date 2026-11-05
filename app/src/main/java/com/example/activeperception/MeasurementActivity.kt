@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -38,6 +39,7 @@ import com.example.activeperception.acquire.Grid
 import com.example.activeperception.acquire.HowToSense
 import com.example.activeperception.acquire.RAYNEO_X3_PRO_3x3
 import com.example.activeperception.acquire.REAL_3x3_INDOOR
+import com.example.activeperception.acquire.NeuralAeNet
 import com.example.activeperception.acquire.TfliteYoloDetector
 import org.json.JSONObject
 import java.io.File
@@ -70,6 +72,7 @@ class MeasurementActivity : AppCompatActivity() {
     private lateinit var detector: TfliteYoloDetector
     private lateinit var sensors: SensorDataManager
     private lateinit var health: DeviceHealthMonitor
+    private var rotationWakeLock: PowerManager.WakeLock? = null
     private lateinit var status: TextView
     private lateinit var preview: ImageView
     private lateinit var overlay: OverlayView
@@ -82,7 +85,8 @@ class MeasurementActivity : AppCompatActivity() {
         val detail: TextView = root.findViewById(R.id.eyeDetail)
         val sub: TextView = root.findViewById(R.id.eyeSub)
         val choiceBox: View = root.findViewById(R.id.eyeChoices)
-        val choices: List<TextView> = listOf(R.id.eyeChoice0, R.id.eyeChoice1, R.id.eyeChoice2, R.id.eyeChoice3).map { root.findViewById(it) }
+        val choices: List<TextView> = listOf(R.id.eyeChoice0, R.id.eyeChoice1, R.id.eyeChoice2,
+            R.id.eyeChoice3, R.id.eyeChoice4).map { root.findViewById(it) }
     }
     /** The glass's screen (the manual panel and the preview are hidden), both eyes alike. */
     private lateinit var eyes: List<Eye>
@@ -246,8 +250,16 @@ class MeasurementActivity : AppCompatActivity() {
         // `--ei lap_fallback_s 15`. A single collection run without laps is
         // `--es run collect`, optionally capped with `--ei collect_frames N`.
         findViewById<Button>(R.id.btnLapSession).setOnClickListener { toggleLapSession() }
+        findViewById<Button>(R.id.btnRotationSession).setOnClickListener { toggleRotationSession() }
         if (intent.getBooleanExtra("lap_session", false)) {
             btnStart.postDelayed({ if (lapSession == null) toggleLapSession() }, 1500)
+        }
+        if (intent.getBooleanExtra("rotation_session", false)) {
+            // Off-head RayNeo can sleep during the 1.5 s cold-start delay, before the session's
+            // normal acquisition point. Hold it from the moment an automatic rotation launch is
+            // recognized.
+            acquireRotationWakeLock()
+            btnStart.postDelayed({ if (lapSession == null) toggleRotationSession() }, 1500)
         }
         // General adb runner — the glass touchpad intercepts injected taps (focus-first
         // model), so radio selection is impossible from the host; this starts any method
@@ -263,6 +275,7 @@ class MeasurementActivity : AppCompatActivity() {
             findViewById<android.widget.RadioButton>(pid).isChecked = true
         }
         intent.getStringExtra("run")?.let { cmd ->
+            if (cmd == "rotation") acquireRotationWakeLock()
             btnStart.postDelayed({ launchRunnerCommand(cmd) }, 1500)
         }
         btnStop.setOnClickListener { stopMeasurement() }
@@ -388,14 +401,39 @@ class MeasurementActivity : AppCompatActivity() {
         else -> 2.0
     }
 
-    /** nae-bin-v1 weights: a file in the app files dir (trained on the PC by
-     *  NaeTrainSosCf and pushed there) wins over the bundled asset. */
-    private fun loadNaeWeights(): ByteArray? =
-        runCatching {
-            java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").readBytes()
-        }.recoverCatching {
-            assets.open("nae_hist_scalar_3x3.bin").use { it.readBytes() }
-        }.getOrNull()
+    /**
+     * Loads the Neural-AE weights and validates the complete nae-bin-v1 structure before a run.
+     * A pushed file remains the override, but a truncated/corrupt override no longer masks the
+     * known-good bundled model. This prevents a multi-method session from hanging while it waits
+     * for a Neural-AE run that could never start.
+     */
+    private fun loadNaeWeights(): ByteArray? {
+        val external = java.io.File(getExternalFilesDir(null), NAE_WEIGHTS_FILE)
+        val candidates = listOf<Pair<String, () -> ByteArray>>(
+            "external" to { external.readBytes() },
+            "asset" to { assets.open(NAE_WEIGHTS_FILE).use { it.readBytes() } }
+        )
+        for ((source, read) in candidates) {
+            val bytes = runCatching { read() }.getOrNull() ?: continue
+            val valid = runCatching { NeuralAeNet(bytes) }.isSuccess
+            if (valid) return bytes
+            android.util.Log.e("MeasurementActivity",
+                "Ignoring invalid Neural-AE $source weights (${bytes.size} bytes)")
+        }
+        return null
+    }
+
+    private fun needsNaeWeights(method: String): Boolean =
+        method.removePrefix("par_") == "nae"
+
+    /** Returns false with an operator-visible reason instead of entering a stuck session. */
+    private fun validateNaePlan(methods: Iterable<String>, sessionName: String): Boolean {
+        if (methods.none(::needsNaeWeights) || loadNaeWeights() != null) return true
+        val why = "Neural-AE 모델이 없거나 손상됨 — $NAE_WEIGHTS_FILE 확인"
+        post("$why; $sessionName not started")
+        showWalk("시작 불가", "Neural-AE 모델 오류", NAE_WEIGHTS_FILE)
+        return false
+    }
 
     private fun sessionTag(): String = when (sessionSpinner.selectedItemPosition) {
         1 -> "outdoor_day"; 2 -> "dim"; 3 -> "outdoor_night"; else -> "indoor"
@@ -423,43 +461,47 @@ class MeasurementActivity : AppCompatActivity() {
         // one of the two groups has a checked id.
         when (findViewById<RadioGroup>(R.id.methodGroup2).checkedRadioButtonId) {
             R.id.methodContinuous -> {
+                val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
                 val period = when (periodGroup.checkedRadioButtonId) {
                     R.id.period10 -> 10
                     R.id.period20 -> 20
                     else -> 5
                 }
                 start("proposed_v2_p$period") {
-                    mc!!.runContinuousProposed(period, NO_FRAME_CAP, ::post, ::showFrame)
+                    mc!!.runContinuousProposed(period, cap, ::post, ::showFrame)
                 }
                 return
             }
             R.id.methodPhysSweep -> {
+                val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
                 // Every device searches the v2 lattice — the same 5x5 space Prop-C and the
                 // proposed method live on — so the comparison isolates the method, not the
                 // search space (the glass too since 2026-10-30).
                 val v2 = true
                 val n = if (v2) 25 else grid.nGain * grid.nShutter
                 start(if (v2) "physsweep_v2_full_h$n" else "physsweep_full_h$n") {
-                    mc!!.runPhysSweep(true, n, NO_FRAME_CAP, ::post, v2 = v2,
+                    mc!!.runPhysSweep(true, n, cap, ::post, v2 = v2,
                         onFrame = ::showFrame)
                 }
                 return
             }
             R.id.methodShinNM -> {
+                val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
                 val v2 = true
                 start(if (v2) "shin_nm_v2" else "shin_nm") {
-                    mc!!.runShinNM("restart_int", NO_FRAME_CAP, ::post, v2 = v2,
+                    mc!!.runShinNM("restart_int", cap, ::post, v2 = v2,
                         onFrame = ::showFrame)
                 }
                 return
             }
             R.id.methodNeuralAe -> {
+                val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
                 val w = loadNaeWeights()
-                if (w == null) post("NAE weights missing — push nae_hist_scalar_3x3.bin to the app files dir")
+                if (w == null) post("Neural-AE unavailable — bundled/external $NAE_WEIGHTS_FILE is missing or invalid")
                 else {
                     val v2 = true
                     start(if (v2) "nae_v2" else "nae") {
-                        mc!!.runNeuralAe(w, NO_FRAME_CAP, ::post, v2 = v2,
+                        mc!!.runNeuralAe(w, cap, ::post, v2 = v2,
                             onFrame = ::showFrame)
                     }
                 }
@@ -607,6 +649,7 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** The proposed method's tolerance curve (gyro + translation speeds), in assets. */
     private val CURVE_FILE = "tolerance_curve_gyro.txt"
+    private val NAE_WEIGHTS_FILE = "nae_hist_scalar_3x3.bin"
     /** The glass's own curve in the app's files dir, preferred over [CURVE_FILE] when present. */
     private val RAYNEO_CURVE_FILE = "tolerance_curve_rayneo.txt"
 
@@ -888,6 +931,7 @@ class MeasurementActivity : AppCompatActivity() {
         parallelNext = command.startsWith("par_")
         val cmd = command.removePrefix("par_")
         if (cmd == "walk") { toggleWalkSession(); return }
+        if (cmd == "rotation") { toggleRotationSession(); return }
         if (isCollect(cmd)) { startCollect(cmd); return }
         if (cmd == "readnoise") {
             start("readnoise") { mc!!.runReadNoise(::post) }
@@ -1088,12 +1132,13 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** One run the glass's idle screen offers. */
     private class GlassRun(val label: String, val detail: String)
-    /** The glass's runs, in the order they are done: the curve record (once), a test walk, the
-     *  experiment walk; and the experimenter (2026-11-03: several walk it), which a tap advances. */
+    /** The glass's runs, preserving the original record/walk choices and adding an independent
+     *  oscillating-turntable experiment; the final choice advances the experimenter. */
     private val GLASS_RUNS = listOf(
         GlassRun("보정 기록", "곡선용 · 한 번만 · 약 6분"),
         GlassRun("시험 걷기", "8개 방법 편도 1번씩 · 약 3분"),
         GlassRun("본 걷기", "8개 방법 × 2번 · 약 11분"),
+        GlassRun("회전 실험", "8개 방법 × 2번 · 동일 phase 왕복"),
         GlassRun("실험자", "눌러서 바꾸기 (1~9) · 기록마다 남음"))
     private var glassChoiceSet = false
 
@@ -1102,7 +1147,7 @@ class MeasurementActivity : AppCompatActivity() {
     private fun showGlassIdle() {
         if (!glassChoiceSet) { glassChoiceSet = true; glassChoice = if (rayneoCurve().isFile) 2 else 0 }
         val r = GLASS_RUNS[glassChoice]
-        if (glassChoice == 3) showWalk("실험자 ${ExperimentSession.experimenter}", r.detail, "밀어서 고르기", idle = true)
+        if (glassChoice == 4) showWalk("실험자 ${ExperimentSession.experimenter}", r.detail, "밀어서 고르기", idle = true)
         else showWalk(r.label, r.detail, "밀어서 고르기 · 눌러서 시작", idle = true)
     }
 
@@ -1113,7 +1158,7 @@ class MeasurementActivity : AppCompatActivity() {
             e.choices.forEachIndexed { i, t ->
                 t.visibility = View.VISIBLE
                 t.text = GLASS_RUNS[i].label + (if (i == 0 && curveOk) "  ✓" else "") +
-                    (if (i == 3) ": ${ExperimentSession.experimenter}" else "")
+                    (if (i == 4) ": ${ExperimentSession.experimenter}" else "")
                 val on = i == glassChoice
                 t.setTextColor(if (on) android.graphics.Color.WHITE else 0xFF9E9E9E.toInt())
                 t.setBackgroundColor(if (on) 0xFF1E63B5.toInt() else android.graphics.Color.TRANSPARENT)
@@ -1152,12 +1197,14 @@ class MeasurementActivity : AppCompatActivity() {
      *  curve_moments made the wearer's curve record 10 moments long). */
     private fun startGlassChoice() {
         for (k in listOf("curve_moments", "curve_countdown_s", "walk_plan", "walk_rounds", "walk_legs",
-                "walk_kind", "walk_start_delay_s", "collect_frames")) intent.removeExtra(k)
+                "walk_kind", "walk_start_delay_s", "rotation_plan", "rotation_rounds",
+                "rotation_start_delay_s", "rotation_calibration_cycles", "collect_frames")) intent.removeExtra(k)
         launchCollectFrames = null
         when (glassChoice) {
             0 -> launchRunnerCommand("curve_record")
             1 -> { walkKind = "check"; toggleWalkSession() }
             2 -> { walkKind = "main"; toggleWalkSession() }
+            3 -> toggleRotationSession()
             else -> {
                 ExperimentSession.experimenter = ExperimentSession.experimenter % 9 + 1
                 prefs.edit().putInt("experimenter", ExperimentSession.experimenter).apply()
@@ -1248,12 +1295,13 @@ class MeasurementActivity : AppCompatActivity() {
     private fun toggleWalkSession() {
         if (lapSession != null) { stopMeasurement(); return }
         if (runActive) { post("busy — stop first"); return }
+        val plan = walkPlan()
+        if (!validateNaePlan(plan, "walk")) return
         if (runCatching {
                 HowToSense.Curve.parse(curveText())
             }.isFailure) {
             post("the proposed method needs assets/$CURVE_FILE — walk not started"); return
         }
-        val plan = walkPlan()
         presetRunCap = null
         ExperimentSession.lighting = intent.getStringExtra("lighting").orEmpty()
         // A check walk's runs carry walk_check_<ms>, so they never mix into the experiment's.
@@ -1286,6 +1334,93 @@ class MeasurementActivity : AppCompatActivity() {
             choices = ::showChoiceList, discardLastRun = ::discardLastRun)
         lapSession = session
         session.start()
+    }
+
+    /** The turntable plan uses exactly the current comparison methods. As in the main walk, pass
+     *  two is reversed so slow light/temperature/battery drift does not always favour one end. */
+    private fun rotationPlan(): List<RotationSession.Block> {
+        val methods = intent.getStringExtra("rotation_plan")?.split(',')?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }?.takeIf { it.isNotEmpty() } ?: WALK_METHODS
+        val passes = intent.getIntExtra("rotation_rounds", 2).coerceAtLeast(1)
+        return (0 until passes).flatMap { pass0 ->
+            val ordered = if (pass0 % 2 == 0) methods else methods.reversed()
+            ordered.mapIndexed { position0, method ->
+                RotationSession.Block(method, pass0 + 1, position0 + 1, methods.size)
+            }
+        }
+    }
+
+    /** Starts the oscillating-turntable experiment without changing any existing walk/lap path. */
+    private fun toggleRotationSession() {
+        if (lapSession != null) { stopMeasurement(); return }
+        if (runActive) { releaseRotationWakeLock(); post("busy — stop first"); return }
+        val plan = rotationPlan()
+        if (!validateNaePlan(plan.map { it.method }, "rotation")) {
+            releaseRotationWakeLock()
+            return
+        }
+        if (runCatching { HowToSense.Curve.parse(curveText()) }.isFailure) {
+            releaseRotationWakeLock()
+            post("the proposed method needs assets/$CURVE_FILE — rotation not started"); return
+        }
+        presetRunCap = null
+        ExperimentSession.lighting = intent.getStringExtra("lighting").orEmpty()
+        ExperimentSession.session = "rotation_${System.currentTimeMillis()}"
+        acquireRotationWakeLock()
+        val session = RotationSession(this, sensors, object : LapSession.Host {
+            override fun startBlock(method: String) {
+                blockRunSerial = runSerial
+                launchRunnerCommand(method)
+            }
+            override fun runReady() = runSerial > blockRunSerial && (mc?.totalFramesLogged ?: 0) > 0
+            override fun stopBlock() = stopMeasurement(userInitiated = false)
+            override fun status(text: String) = post(text)
+            override fun buzz(ms: Long) = vibrate(ms)
+            override fun beep(times: Int) = playLapBeeps(times)
+            override fun lapStarted(method: String, lapsInBlock: Int) = Unit
+            override fun sessionEnded(completed: Boolean) {
+                lapSession = null
+                releaseRotationWakeLock()
+                ExperimentSession.lighting = ""
+                ExperimentSession.session = ""
+                showGlassChoices(true)
+            }
+        }, plan,
+            startDelayS = intent.getIntExtra("rotation_start_delay_s", 5).coerceAtLeast(0),
+            calibrationCycles = intent.getIntExtra("rotation_calibration_cycles", 3).coerceIn(2, 6),
+            displayName = ::walkName,
+            screen = { title, detail, sub -> showWalk(title, detail, sub) },
+            currentRunName = { lastRunDir?.name.orEmpty() })
+        lapSession = session
+        session.start()
+    }
+
+    /** RayNeo may enforce an off-head sleep independently of Android's normal screen timeout. */
+    @Suppress("DEPRECATION")
+    private fun acquireRotationWakeLock() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
+        if (rotationWakeLock?.isHeld == true) return
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        rotationWakeLock = pm.newWakeLock(
+            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+            "SoS:RotationSession"
+        ).apply {
+            setReferenceCounted(false)
+            // Safety timeout; a normal session releases this explicitly much earlier.
+            acquire(2 * 60 * 60 * 1_000L)
+        }
+    }
+
+    private fun releaseRotationWakeLock() {
+        rotationWakeLock?.let { if (it.isHeld) it.release() }
+        rotationWakeLock = null
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
     }
 
     /** DPAD-style input is emitted by some RayNeo firmware and is also useful for testing. */
@@ -1681,8 +1816,11 @@ class MeasurementActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         // A walk session is told why, so the wearer hears an alarm instead of a silent stop.
-        (lapSession as? WalkSession)?.interrupted("the app was paused (display off or covered)")
-            ?: lapSession?.abort()
+        when (val session = lapSession) {
+            is WalkSession -> session.interrupted("the app was paused (display off or covered)")
+            is RotationSession -> session.interrupted("the app was paused (display off or covered)")
+            else -> session?.abort()
+        }
         sensors.unregisterListeners()
         // Backgrounding revokes camera ownership, but Interpreter.close() must not race an
         // in-flight native run. Request stop and defer teardown until the worker has returned.
@@ -1697,6 +1835,7 @@ class MeasurementActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        releaseRotationWakeLock()
         mc?.stop()
         resourcesMustClose = true
         queueResourceClose()

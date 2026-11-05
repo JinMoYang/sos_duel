@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
     <!-- Drive mode reports scheme changes by vibration so the driver never looks down. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Keep an unattended off-head RayNeo awake only while a turntable session is active. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Optional: with All files access granted (phone workflow), runs land in
          Documents/sos where a file manager can see them. Without it the app still
          records into its private directory — RayNeo never grants this. -->

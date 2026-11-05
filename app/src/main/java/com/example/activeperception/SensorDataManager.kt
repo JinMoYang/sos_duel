@@ -57,6 +57,11 @@ class SensorDataManager(
     var currentYawRate: Double = 0.0
         private set
 
+    /** Timestamp of the newest gyroscope event, on Android's sensor/boot-time clock. Rotation
+     *  sessions sample this beside camera timestamps so phase alignment can be audited offline. */
+    @Volatile var lastGyroTimestampNs: Long = 0L
+        private set
+
     /** Integrated heading in degrees, reset each lap. Recorded in frames.csv as the
      *  path-position proxy used to align passes offline. */
     var currentHeadingAngle: Double = 0.0
@@ -73,6 +78,26 @@ class SensorDataManager(
     /** False until the device has been still long enough to learn which way is down;
      *  no yaw is integrated before that. */
     val gravityLocked: Boolean get() = isReferenceGravitySet
+
+    /**
+     * Locks the newest accelerometer direction as the vertical axis for a turntable run.
+     *
+     * The normal walk/lap path deliberately waits for a still pose before locking gravity.
+     * A continuously moving turntable never provides that pose, even though its acceleration
+     * vector is still dominated by gravity.  RotationSession calls this explicitly, keeping the
+     * relaxed policy isolated from every existing experiment mode.
+     */
+    fun lockProvisionalGravityForRotation(): Boolean {
+        if (isReferenceGravitySet) return true
+        val x = referenceGravity[0]
+        val y = referenceGravity[1]
+        val z = referenceGravity[2]
+        val norm = sqrt((x * x + y * y + z * z).toDouble())
+        if (norm !in 7.0..12.0) return false
+        isReferenceGravitySet = true
+        Log.d(TAG, "Reference Gravity Locked from moving turntable (${norm}m/s^2)")
+        return true
+    }
 
     /** The locked gravity reading in device axes (x to the right, y up the screen, z out of
      *  it; the axis pointing up reads +g), or null before it has locked. */
@@ -240,6 +265,7 @@ class SensorDataManager(
     }
 
     private fun processGyroscope(values: FloatArray, timestamp: Long) {
+        lastGyroTimestampNs = timestamp
         val x = values[0]
         val y = values[1]
         val z = values[2]

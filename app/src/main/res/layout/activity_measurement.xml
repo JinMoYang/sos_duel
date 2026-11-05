@@ -494,6 +494,17 @@ dark"
                 android:text="Lap session"
                 android:textSize="13sp" />
 
+            <!-- Oscillating-turntable collection. Kept separate from LapSession and WalkSession:
+                 it learns one gyro phase, waits for each method to be ready, then records exactly
+                 one reference-to-reference round trip. -->
+            <Button android:id="@+id/btnRotationSession"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Rotation experiment"
+                android:textAllCaps="false"
+                android:textSize="13sp" />
+
 
 
 
