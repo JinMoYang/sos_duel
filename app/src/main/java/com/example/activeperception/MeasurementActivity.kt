@@ -39,6 +39,7 @@ import com.example.activeperception.acquire.Grid
 import com.example.activeperception.acquire.HowToSense
 import com.example.activeperception.acquire.RAYNEO_X3_PRO_3x3
 import com.example.activeperception.acquire.REAL_3x3_INDOOR
+import com.example.activeperception.acquire.NeuralAeNet
 import com.example.activeperception.acquire.TfliteYoloDetector
 import org.json.JSONObject
 import java.io.File
@@ -400,14 +401,39 @@ class MeasurementActivity : AppCompatActivity() {
         else -> 2.0
     }
 
-    /** nae-bin-v1 weights: a file in the app files dir (trained on the PC by
-     *  NaeTrainSosCf and pushed there) wins over the bundled asset. */
-    private fun loadNaeWeights(): ByteArray? =
-        runCatching {
-            java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").readBytes()
-        }.recoverCatching {
-            assets.open("nae_hist_scalar_3x3.bin").use { it.readBytes() }
-        }.getOrNull()
+    /**
+     * Loads the Neural-AE weights and validates the complete nae-bin-v1 structure before a run.
+     * A pushed file remains the override, but a truncated/corrupt override no longer masks the
+     * known-good bundled model. This prevents a multi-method session from hanging while it waits
+     * for a Neural-AE run that could never start.
+     */
+    private fun loadNaeWeights(): ByteArray? {
+        val external = java.io.File(getExternalFilesDir(null), NAE_WEIGHTS_FILE)
+        val candidates = listOf<Pair<String, () -> ByteArray>>(
+            "external" to { external.readBytes() },
+            "asset" to { assets.open(NAE_WEIGHTS_FILE).use { it.readBytes() } }
+        )
+        for ((source, read) in candidates) {
+            val bytes = runCatching { read() }.getOrNull() ?: continue
+            val valid = runCatching { NeuralAeNet(bytes) }.isSuccess
+            if (valid) return bytes
+            android.util.Log.e("MeasurementActivity",
+                "Ignoring invalid Neural-AE $source weights (${bytes.size} bytes)")
+        }
+        return null
+    }
+
+    private fun needsNaeWeights(method: String): Boolean =
+        method.removePrefix("par_") == "nae"
+
+    /** Returns false with an operator-visible reason instead of entering a stuck session. */
+    private fun validateNaePlan(methods: Iterable<String>, sessionName: String): Boolean {
+        if (methods.none(::needsNaeWeights) || loadNaeWeights() != null) return true
+        val why = "Neural-AE 모델이 없거나 손상됨 — $NAE_WEIGHTS_FILE 확인"
+        post("$why; $sessionName not started")
+        showWalk("시작 불가", "Neural-AE 모델 오류", NAE_WEIGHTS_FILE)
+        return false
+    }
 
     private fun sessionTag(): String = when (sessionSpinner.selectedItemPosition) {
         1 -> "outdoor_day"; 2 -> "dim"; 3 -> "outdoor_night"; else -> "indoor"
@@ -435,43 +461,47 @@ class MeasurementActivity : AppCompatActivity() {
         // one of the two groups has a checked id.
         when (findViewById<RadioGroup>(R.id.methodGroup2).checkedRadioButtonId) {
             R.id.methodContinuous -> {
+                val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
                 val period = when (periodGroup.checkedRadioButtonId) {
                     R.id.period10 -> 10
                     R.id.period20 -> 20
                     else -> 5
                 }
                 start("proposed_v2_p$period") {
-                    mc!!.runContinuousProposed(period, NO_FRAME_CAP, ::post, ::showFrame)
+                    mc!!.runContinuousProposed(period, cap, ::post, ::showFrame)
                 }
                 return
             }
             R.id.methodPhysSweep -> {
+                val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
                 // Every device searches the v2 lattice — the same 5x5 space Prop-C and the
                 // proposed method live on — so the comparison isolates the method, not the
                 // search space (the glass too since 2026-10-30).
                 val v2 = true
                 val n = if (v2) 25 else grid.nGain * grid.nShutter
                 start(if (v2) "physsweep_v2_full_h$n" else "physsweep_full_h$n") {
-                    mc!!.runPhysSweep(true, n, NO_FRAME_CAP, ::post, v2 = v2,
+                    mc!!.runPhysSweep(true, n, cap, ::post, v2 = v2,
                         onFrame = ::showFrame)
                 }
                 return
             }
             R.id.methodShinNM -> {
+                val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
                 val v2 = true
                 start(if (v2) "shin_nm_v2" else "shin_nm") {
-                    mc!!.runShinNM("restart_int", NO_FRAME_CAP, ::post, v2 = v2,
+                    mc!!.runShinNM("restart_int", cap, ::post, v2 = v2,
                         onFrame = ::showFrame)
                 }
                 return
             }
             R.id.methodNeuralAe -> {
+                val cap = launchCollectFrames ?: presetRunCap ?: NO_FRAME_CAP
                 val w = loadNaeWeights()
-                if (w == null) post("NAE weights missing — push nae_hist_scalar_3x3.bin to the app files dir")
+                if (w == null) post("Neural-AE unavailable — bundled/external $NAE_WEIGHTS_FILE is missing or invalid")
                 else {
                     val v2 = true
                     start(if (v2) "nae_v2" else "nae") {
-                        mc!!.runNeuralAe(w, NO_FRAME_CAP, ::post, v2 = v2,
+                        mc!!.runNeuralAe(w, cap, ::post, v2 = v2,
                             onFrame = ::showFrame)
                     }
                 }
@@ -619,6 +649,7 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** The proposed method's tolerance curve (gyro + translation speeds), in assets. */
     private val CURVE_FILE = "tolerance_curve_gyro.txt"
+    private val NAE_WEIGHTS_FILE = "nae_hist_scalar_3x3.bin"
     /** The glass's own curve in the app's files dir, preferred over [CURVE_FILE] when present. */
     private val RAYNEO_CURVE_FILE = "tolerance_curve_rayneo.txt"
 
@@ -1264,12 +1295,13 @@ class MeasurementActivity : AppCompatActivity() {
     private fun toggleWalkSession() {
         if (lapSession != null) { stopMeasurement(); return }
         if (runActive) { post("busy — stop first"); return }
+        val plan = walkPlan()
+        if (!validateNaePlan(plan, "walk")) return
         if (runCatching {
                 HowToSense.Curve.parse(curveText())
             }.isFailure) {
             post("the proposed method needs assets/$CURVE_FILE — walk not started"); return
         }
-        val plan = walkPlan()
         presetRunCap = null
         ExperimentSession.lighting = intent.getStringExtra("lighting").orEmpty()
         // A check walk's runs carry walk_check_<ms>, so they never mix into the experiment's.
@@ -1321,11 +1353,16 @@ class MeasurementActivity : AppCompatActivity() {
     /** Starts the oscillating-turntable experiment without changing any existing walk/lap path. */
     private fun toggleRotationSession() {
         if (lapSession != null) { stopMeasurement(); return }
-        if (runActive) { post("busy — stop first"); return }
+        if (runActive) { releaseRotationWakeLock(); post("busy — stop first"); return }
+        val plan = rotationPlan()
+        if (!validateNaePlan(plan.map { it.method }, "rotation")) {
+            releaseRotationWakeLock()
+            return
+        }
         if (runCatching { HowToSense.Curve.parse(curveText()) }.isFailure) {
+            releaseRotationWakeLock()
             post("the proposed method needs assets/$CURVE_FILE — rotation not started"); return
         }
-        val plan = rotationPlan()
         presetRunCap = null
         ExperimentSession.lighting = intent.getStringExtra("lighting").orEmpty()
         ExperimentSession.session = "rotation_${System.currentTimeMillis()}"
