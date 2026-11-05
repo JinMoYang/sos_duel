@@ -1505,7 +1505,7 @@ class MeasurementActivity : AppCompatActivity() {
     private fun updateProfileSummary() {
         if (rayNeoTouchpad) return
         val exps = grid.exposuresUs.joinToString("/") { (it / 1000).toString() }
-        status.text = "${Build.MODEL} · veh-V3 {1,2,3,5,7} · ${exps}ms · " +
+        status.text = "${Build.MODEL} · COCO-80 all classes · ${exps}ms · " +
             "ISO ${grid.gains.first()}-${grid.gains.last()} ×${grid.digitalBoost.toInt()}"
     }
 
@@ -1650,10 +1650,9 @@ class MeasurementActivity : AppCompatActivity() {
         }
     }
 
-    /** Device-profiled detector. Both devices now run the vehicle domain — the 80-class
-     *  model with the V3 selection filter (sense/proxy.py classes: bicycle, car,
-     *  motorcycle, bus, truck) — on the same GPU probe mode (AUTO backend, no silent CPU
-     *  fallback). The COCO5 tabletop head the glass finalize shipped is retired.
+    /** Device-profiled detector. Both devices run the full COCO-80 model with no class
+     *  restriction on the same GPU probe mode (AUTO backend, no silent CPU fallback).
+     *  The COCO5 tabletop head the glass finalize shipped is retired.
      *
      *  RayNeo loads B1/B3 only: building the B=9 OpenCL delegate on a clean shader cache
      *  hangs on the glass (the finalize build hit this), so K=9 probes run as exact-slot
@@ -1670,7 +1669,7 @@ class MeasurementActivity : AppCompatActivity() {
                 "yolov8n_640_b9_fp16.tflite" to 9
             ).filter { it.second < 9 || !excludeB9 },
             numClasses = 80,
-            allowed = setOf(1, 2, 3, 5, 7),
+            allowed = null,
             accelerator = TfliteYoloDetector.Accelerator.GPU,
             allowFallback = false,
             gpuBackend = TfliteYoloDetector.GpuBackend.AUTO,

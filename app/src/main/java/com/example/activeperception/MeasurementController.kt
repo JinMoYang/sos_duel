@@ -310,9 +310,9 @@ class MeasurementController(
             put("virtual_window", if (colorPipeline == ColorPipeline.ORIGINAL_GAIN_SRGB)
                 "first_n_original_sos" else "centered_rayneo_legacy")
         })
-        // Reads the loaded detector's actual configuration (device-profiled: COCO5 head on
-        // RayNeo, 80-class + vehicle filter on the S25). Boxes in dets.jsonl are post-NMS,
-        // post-class-filter, post-conf_floor.
+        // Reads the loaded detector's actual configuration. The RayNeo experiment uses the
+        // standard COCO-80 head without a class filter. Boxes in dets.jsonl are post-NMS and
+        // post-conf_floor.
         val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
         m.put("detector", JSONObject().apply {
             put("model", tfl?.modelName ?: "unknown")
@@ -324,16 +324,18 @@ class MeasurementController(
                 put("class_filter", "coco5_head")
                 put("allowed_classes", JSONArray(listOf(41, 40, 46, 5, 60)))
                 put("class_names", JSONArray(listOf("cup", "wine glass", "banana", "bus", "dining table")))
+            } else if (tfl?.configuredAllowed == null) {
+                put("class_filter", "none")
+                put("allowed_classes", JSONArray((0 until 80).toList()))
             } else {
                 put("class_filter", "allowed_set")
                 put("allowed_classes", JSONArray(tfl?.configuredAllowed?.sorted() ?: emptyList<Int>()))
             }
             put("num_classes", tfl?.configuredNumClasses ?: -1)
             put("select_conf_threshold", selectConf)
-            // sense/proxy.py V3 canon: vehicle-class, IoU-deduped sumconf.
-            put("selection_signal", "v3_veh_dedup")
+            put("selection_signal", "all_coco_dedup")
             put("signal_iou_match", Signal.IOU_MATCH)
-            put("signal_classes", JSONArray(Signal.VEH_CLASSES.toTypedArray()))
+            put("signal_classes", JSONArray(Signal.ALL_COCO_CLASSES.toTypedArray()))
             put("backend_by_batch",
                 (detector as? com.example.activeperception.acquire.TfliteYoloDetector)
                     ?.backendSummary ?: "unknown")
@@ -341,11 +343,9 @@ class MeasurementController(
         logger.manifest(m)
     }
 
-    /** V3 selection signal (sense/proxy.py canon): vehicle classes, dedup, then sum.
-     *  Replaces the raw over-threshold sum used before 2026-08-27; recorded in the
-     *  manifest as selection_signal so runs are attributable to their signal version. */
+    /** All-COCO selection signal: threshold, class-agnostic dedup, then sum. */
     private fun sumConf(dets: List<Detection>, sel: Float = selectConf) =
-        Signal.sumConfV3(dets, sel)
+        Signal.sumConfAllCoco(dets, sel)
 
     // ---------- shared optimized pipeline ----------
 
@@ -924,7 +924,7 @@ class MeasurementController(
             val runMs = tfl.lastRunMs; val decMs = tfl.lastDecodeMs
             // The union: every lane's cars >= 0.25, score order, IoU 0.3 NMS.
             val tu = now()
-            val union = V.nms(dets.flatten().filter { it.classId in V.VEH && it.confidence >= V.OUT_THR }
+            val union = V.nms(dets.flatten().filter { it.classId in V.ALL_COCO && it.confidence >= V.OUT_THR }
                 .map { d -> V.D(d.confidence.toDouble(), DoubleArray(4) { d.xyxy[it].toDouble() }, d.classId) })
             val unionMs = ms(tu)
             // The next setting from the key lane, as runAddl's step 5 (its picture stats run there
@@ -1259,7 +1259,7 @@ class MeasurementController(
                 .put("iso", Duel.ISOS[g0]).put("shutter_us", Duel.SHUTTERS_US[s0]))
             .put("isos", JSONArray(Duel.ISOS.toList())).put("shutters_us", JSONArray(Duel.SHUTTERS_US.toList()))
             .put("analog_ceiling", ceil).put("out_conf", V.OUT_THR).put("weak_conf", V.WEAK_LO)
-            .put("detector", "yolov8n tflite, conf >= 0.05 kept, vehicles for decisions").put("input_size", 640))
+            .put("detector", "yolov8n tflite, conf >= 0.05 kept, all COCO classes for decisions").put("input_size", 640))
         logger.csv("addl_frames", listOf("idx", "kind", "n_reads", "n_images", "iso", "shutter_us",
             "key_ts", "last_end_ts", "t_output", "wait_ms", "align_ms", "form_ms", "infer_ms", "shift_ms",
             "fusion_ms", "choose_ms", "total_ms", "clock_late_ms", "latency_ms", "max_gap_ms", "skipped_reads",
@@ -1720,7 +1720,7 @@ class MeasurementController(
             .put("analog_ceiling", ceil)
             .put("pictures", "detector input (640 px, letterboxed), JPEG 95: frame_*_key, and frame_*_sum2 / _sum4 " +
                 "when used")
-            .put("detector", "yolov8n tflite (vehicle classes), every box >= 0.01 recorded").put("input_size", 640)
+            .put("detector", "yolov8n tflite (all COCO classes), every box >= 0.01 recorded").put("input_size", 640)
             .put("align_motion", "sense_frames align_motion: per alignment step (read to the read before it, " +
                 "~33 ms), the median over the 16 x 12 tiles of (dx, dy) in BurstAlign's half-quad px of the decoded " +
                 "RAW (${raw.captureWidth} x ${raw.captureHeight} sensor, decode block ${if (raw.decodeMode == 2) 6 else 4})"))
@@ -1899,7 +1899,7 @@ class MeasurementController(
                 val laneD = (0 until n).map { a ->
                     dets[a].map { d -> V.D(d.confidence.toDouble(), DoubleArray(4) { d.xyxy[it].toDouble() }, d.classId) }
                 }
-                val union = V.nms(laneD.flatten().filter { it.cls in V.VEH && it.conf >= V.OUT_THR })
+                val union = V.nms(laneD.flatten().filter { it.cls in V.ALL_COCO && it.conf >= V.OUT_THR })
                 val hes = V.nms(laneD.flatMap { V.perImage(it).weak }
                     .filter { w -> union.all { V.iou(w.box, it.box) < V.PLACE_IOU } })
                 val unionMs = ms(tU)
@@ -2024,7 +2024,7 @@ class MeasurementController(
             .put("synthetic", "sum2 / sum4: newest ref + 1 / 3 earlier refs moved onto it (BurstAlign, every tile), " +
                 "summed; iso400x2: ISO 400 read x digital 2; cf800_120: sum2 x digital 0.5")
             .put("pictures", "detector input (640 px, letterboxed), JPEG 95: g<group>_<role>")
-            .put("detector", "yolov8n tflite (vehicle classes), boxes >= 0.01")
+            .put("detector", "yolov8n tflite (all COCO classes), boxes >= 0.01")
             .put("analog_ceiling", ceil)
             .put("align_motion", "collect_groups align_motion: per step (ref read to the one before it), median " +
                 "over tiles of (dx, dy) in BurstAlign's half-quad px of the decoded RAW (${raw.captureWidth} x " +
@@ -3428,7 +3428,7 @@ class MeasurementController(
         logger.csv("collect_cells", listOf("frame", "pipeline", "kind", "cell", "gi", "sj",
             "nominal_iso", "exposure_us", "base_gi", "burst_sj", "source_iso_captured",
             "n_frames", "gapped", "digital_ratio", "shot", "sensor_ts_ns", "mean_luma",
-            "clip_frac", "n_det", "n_det_sel", "sum_conf_vehicle", "sum_conf_all", "img_path",
+            "clip_frac", "n_det", "n_det_sel", "sum_conf_signal", "sum_conf_all", "img_path",
             "use"))
 
         val detsWriter = java.util.concurrent.Executors.newSingleThreadExecutor()
